@@ -25,65 +25,22 @@
 
 namespace fst {
 
-/*
-struct ExtPrintOptions {
-  float table_ratio;  // we construct the table if it would be at least this full.
-  int min_table_size;
-  ExtPrintOptions(): table_ratio(0.25), min_table_size(4) { }
-};
-*/
-
 template <class Arc>
-class ExtPrint : public FstPrinter {
- public:
-
- private:
+class ExtPrint : public FstPrinter<Arc> {
+public:
+ ExtPrint(const Fst<Arc> &fst, const SymbolTable *isyms,
+             const SymbolTable *osyms, const SymbolTable *ssyms, bool accep,
+             bool show_weight_one, const string &field_separator,
+             const string &missing_symbol = "") : 
+          FstPrinter<Arc>(fst, isyms, osyms, ssyms, accep, show_weight_one, field_separator, missing_symbol) {}
 
  void Print(std::ostream *ostrm, const string &dest) {
-    *ostrm_ << "UNFINI\n";
+    *ostrm << "from inherited class\n";
+    FstPrinter<Arc>::Print(ostrm, dest);
+    *ostrm << "end of from inherited class\n";
  }
 
 };
-
-/*
-struct TableComposeOptions: public ExtPrintOptions {
-  bool connect;  // Connect output
-  ComposeFilter filter_type;  // Which pre-defined filter to use
-  MatchType table_match_type;
-
-  explicit TableComposeOptions(const ExtPrintOptions &mo,
-                               bool c = true, ComposeFilter ft = SEQUENCE_FILTER,
-                               MatchType tms = MATCH_OUTPUT)
-      : ExtPrintOptions(mo), connect(c), filter_type(ft), table_match_type(tms) { }
-  TableComposeOptions() : connect(true), filter_type(SEQUENCE_FILTER),
-                          table_match_type(MATCH_OUTPUT) { }
-};
-
-
-template<class Arc>
-void TableCompose(const Fst<Arc> &ifst1, const Fst<Arc> &ifst2,
-                  MutableFst<Arc> *ofst,
-                  const TableComposeOptions &opts = TableComposeOptions()) {
-  typedef Fst<Arc> F;
-  CacheOptions nopts;
-  nopts.gc_limit = 0;  // Cache only the last state for fastest copy.
-  if (opts.table_match_type == MATCH_OUTPUT) {
-    // ComposeFstImplOptions templated on matcher for fst1, matcher for fst2.
-    ComposeFstImplOptions<ExtPrint<F>, SortedMatcher<F> > impl_opts(nopts);
-    impl_opts.matcher1 = new ExtPrint<F>(ifst1, MATCH_OUTPUT, opts);
-    *ofst = ComposeFst<Arc>(ifst1, ifst2, impl_opts);
-  } else {
-    assert(opts.table_match_type == MATCH_INPUT) ;
-    // ComposeFstImplOptions templated on matcher for fst1, matcher for fst2.
-    ComposeFstImplOptions<SortedMatcher<F>, ExtPrint<F> > impl_opts(nopts);
-    impl_opts.matcher2 = new ExtPrint<F>(ifst2, MATCH_INPUT, opts);
-    *ofst = ComposeFst<Arc>(ifst1, ifst2, impl_opts);
-  }
-  if (opts.connect) Connect(ofst);
-}
-
-*/
-
 
 } // end namespace fst
 #endif

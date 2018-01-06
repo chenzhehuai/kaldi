@@ -31,12 +31,12 @@ template<class Arc>  void TestPrint() {
 
   std::cout <<"print FST\n";
   {
-    FstPrinter<Arc> fstprinter(fst1, NULL, NULL, NULL, false, true, "\t");
+    FstPrinter<Arc> fstprinter(*fst1, NULL, NULL, NULL, false, true, "\t");
     fstprinter.Print(&std::cout, "standard output");
   }
   std::cout <<"ext-print FST\n";
   {
-    ExtPrint<Arc> fstprinter(fst1, NULL, NULL, NULL, false, true, "\t");
+    ExtPrint<Arc> fstprinter(*fst1, NULL, NULL, NULL, false, true, "\t");
     fstprinter.Print(&std::cout, "standard output");
   }  
   
