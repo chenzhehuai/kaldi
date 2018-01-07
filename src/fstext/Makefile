@@ -16,7 +16,7 @@ TESTFILES = determinize-star-test \
       remove-eps-local-test lattice-weight-test  \
       determinize-lattice-test lattice-utils-test deterministic-fst-test \
       push-special-test epsilon-property-test prune-special-test \
-	  ext-print-test
+	  ext-print-test toy-fst-test
 
 OBJFILES = push-special.o kaldi-fst-io.o
 

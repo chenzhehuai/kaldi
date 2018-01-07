@@ -43,7 +43,6 @@
 #ifndef KALDI_FSTEXT_TOY_FST_H_
 #define KALDI_FSTEXT_TOY_FST_H_
 
-
 #include <fst/vector-fst.h>
 
 namespace fst {
@@ -128,9 +127,15 @@ class ToyFst :
  public:
     using Arc = A;     
     using State = S;
+    using Impl = internal::VectorFstImpl<State>;
 
   ToyFst(const Fst<A> &fst)
       : VectorFst<A, S>(fst) {}
+
+  //ToyFst(const ToyFst<Arc, State> &fst, bool safe = false) 
+  //    : VectorFst<A, S>(fst, safe) {}
+  //ToyFst(std::shared_ptr<Impl> impl):VectorFst<A, S>(impl) {}
+  //ToyFst() : VectorFst<A, S>() {}
 
  private:
 };

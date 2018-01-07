@@ -29,21 +29,32 @@ namespace fst{
 template<class Arc>  void TestPrint() {
 
   VectorFst<Arc> *fst1 = RandFst<Arc>();
+  ILabelCompare<Arc> ilabel_comp;
+  ArcSort(fst1, ilabel_comp);
 
-  ToyFst< Arc, VectorFst<Arc> > toyfst1(*fst1);
+  ToyFst< Arc, VectorState<Arc> > toyfst1(*fst1);
 
-  std::cout <<"fst1 ext FST\n";
+  std::cout <<"fst1 FST\n";
   {
     ExtPrint<Arc> fstprinter(*fst1, NULL, NULL, NULL, false, true, "\t");
     fstprinter.Print(&std::cout, "standard output");
-  }  
+  } 
 
-  std::cout <<"toy-fst ext FST\n";
+  std::cout <<"toy-fst FST\n";
   {
     ExtPrint<Arc> fstprinter(toyfst1, NULL, NULL, NULL, false, true, "\t");
     fstprinter.Print(&std::cout, "standard output");
   }  
-  
+
+  if (RandEquivalent(*fst1, toyfst1, 3/*paths*/, 0.01/*delta*/, kaldi::Rand()/*seed*/, 20/*path length-- max?*/))
+  {
+    std::cout <<"same\n";
+  }
+  else
+  {
+    std::cout <<"diff\n";
+  }
+
   delete fst1;
 }
 
