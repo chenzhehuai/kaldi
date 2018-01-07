@@ -44,7 +44,6 @@
 #define KALDI_FSTEXT_TOY_FST_H_
 
 #include <fst/vector-fst.h>
-#include "fstext/fst-test-utils.h"
 
 namespace fst {
 
@@ -67,23 +66,32 @@ class ToyFst :
 
  private:
 };
-
+/*
 namespace internal {
 
 template <class S>
 class ToyFst2Impl : public VectorFstImpl<S> {
-}
+public:
+    using State = S;
+    using Arc = typename State::Arc;
+    //using VectorFstImpl<Arc>::Properties;
+
+    ToyFst2Impl() : VectorFstImpl<S>() {}
+    explicit ToyFst2Impl(const Fst<Arc> &fst) : VectorFstImpl<S>(fst) {}
+};
 
 }
-
+*/
 template <class A, class S /* = VectorState<A> */>
-class ToyFst2 : public ImplToMutableFst<internal::ToyFst2Impl<S>> {
+class ToyFst2 : public ImplToMutableFst<internal::VectorFstImpl<S>> {
+//class ToyFst2 : public ImplToMutableFst<internal::ToyFst2Impl<S>> {
  public:
   using Arc = A;
   using StateId = typename Arc::StateId;
 
   using State = S;
-  using Impl = internal::ToyFst2Impl<State>;
+  //using Impl = internal::ToyFst2Impl<State>;
+  using Impl = internal::VectorFstImpl<State>;
 
   friend class StateIterator<ToyFst2<Arc, State>>;
   friend class ArcIterator<ToyFst2<Arc, State>>;
@@ -290,7 +298,7 @@ class MutableArcIterator<ToyFst2<Arc, State>>
   MutableArcIterator(ToyFst2<Arc, State> *fst, StateId s) : i_(0) {
     fst->MutateCheck();
     state_ = fst->GetMutableImpl()->GetState(s);
-    properties_ = &fst->GetImpl()->properties_;
+    properties_ = &(fst->GetImpl()->properties_);
   }
 
   bool Done() const final { return i_ >= state_->NumArcs(); }
@@ -358,10 +366,6 @@ inline void ToyFst2<Arc, State>::InitMutableArcIterator(
     StateId s, MutableArcIteratorData<Arc> *data) {
   data->base = new MutableArcIterator<ToyFst2<Arc, State>>(this, s);
 }
-
-// A useful alias when using StdArc.
-using StdToyFst2 = ToyFst2<StdArc>;
-
 
 }  // namespace fst
 
