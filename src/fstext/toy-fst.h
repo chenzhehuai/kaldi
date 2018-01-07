@@ -44,6 +44,7 @@
 #define KALDI_FSTEXT_TOY_FST_H_
 
 #include <fst/vector-fst.h>
+#include "fstext/fst-test-utils.h"
 
 namespace fst {
 
@@ -129,11 +130,6 @@ class ToyFst :
     using State = S;
     using Impl = internal::VectorFstImpl<State>;
 
-  ToyFst() {
-      VectorFst<Arc> *fst1 = RandFst<Arc>();
-      VectorFst<A, S>::VectorFst(*fst1);
-    }
-
   ToyFst(const Fst<A> &fst)
       : VectorFst<A, S>(fst) {}
 
@@ -147,18 +143,11 @@ class ToyFst :
 
 template <class A, class S>
 class ToyFst2 :
-    public VectorFst<A, S> : 
-    public ImplToMutableFst<internal::VectorFstImpl<S>> {
+    public VectorFst<A, S> {
  public:
     using Arc = A;     
     using State = S;
-    using ImplToMutableFst<internal::VectorFstImpl<S>>::impl_;
     //using Impl = internal::VectorFstImpl<State>;
-
-  ToyFst2() {
-      VectorFst<Arc> *fst1 = RandFst<Arc>();
-      VectorFst<A, S>::VectorFst(*fst1);
-    }
 
   ToyFst2(const Fst<A> &fst)
       : VectorFst<A, S>(fst) {}
@@ -169,6 +158,7 @@ class ToyFst2 :
   //ToyFst() : VectorFst<A, S>() {}
 
  private:
+    //using ImplToMutableFst<internal::VectorFstImpl<S>>::impl_;
 };
 
 

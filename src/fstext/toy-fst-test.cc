@@ -55,14 +55,7 @@ template<class Arc>  void TestPrint() {
     std::cout <<"diff\n";
   }
 
-  ToyFst< Arc, VectorState<Arc> > toyfst1b();
-  std::cout <<"toy-fst FST\n";
-  {
-    ExtPrint<Arc> fstprinter(toyfst1b, NULL, NULL, NULL, false, true, "\t");
-    fstprinter.Print(&std::cout, "standard output");
-  }  
-
-  ToyFst2< Arc, VectorState<Arc> > toyfst2();
+  ToyFst2< Arc, VectorState<Arc> > toyfst2(*fst1);
   std::cout <<"toy-fst FST\n";
   {
     ExtPrint<Arc> fstprinter(toyfst2, NULL, NULL, NULL, false, true, "\t");
