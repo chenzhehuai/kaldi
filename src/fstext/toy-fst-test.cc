@@ -56,7 +56,7 @@ template<class Arc>  void TestPrint() {
   }
 
   ToyFst2< Arc, VectorState<Arc> > toyfst2(*fst1);
-  std::cout <<"toy-fst FST\n";
+  std::cout <<"toy-fst2 FST\n";
   {
     ExtPrint<Arc> fstprinter(toyfst2, NULL, NULL, NULL, false, true, "\t");
     fstprinter.Print(&std::cout, "standard output");

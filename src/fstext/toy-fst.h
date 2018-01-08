@@ -1,51 +1,29 @@
-// fstext/toy-fst.h
+// See www.openfst.org for extensive documentation on this weighted
+// finite-state transducer library.
+//
+// Simple concrete, mutable FST whose states and arcs are stored in STL vectors.
 
-// Copyright 2009-2011  Microsoft Corporation
+#ifndef FST_TOY_FST_H_
+#define FST_TOY_FST_H_
 
-// See ../../COPYING for clarification regarding multiple authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//  http://www.apache.org/licenses/LICENSE-2.0
-//
-// THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
-// WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
-// MERCHANTABLITY OR NON-INFRINGEMENT.
-// See the Apache 2 License for the specific language governing permissions and
-// limitations under the License.
-//
-//
-// This is a modified file from the OpenFST Library v1.2.7 available at
-// http://www.openfst.org and released under the Apache License Version 2.0.
-//
-//
-// See ../../COPYING for clarification regarding multiple authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-//
-// Copyright 2005-2010 Google, Inc.
-// Author: allauzen@google.com (Cyril Allauzen)
+#include <string>
+#include <utility>
+#include <vector>
 
+#include <fst/log.h>
 
-#ifndef KALDI_FSTEXT_TOY_FST_H_
-#define KALDI_FSTEXT_TOY_FST_H_
-
+#include <fst/fst-decl.h>  // For optional argument declarations
+#include <fst/mutable-fst.h>
+#include <fst/test-properties.h>
 #include <fst/vector-fst.h>
 
 namespace fst {
+
+template <class Arc, class State = VectorState<Arc>>
+class ToyFst2;
+
+template <class F, class G>
+void Cast(const F &, G *);
 
 
 template <class A, class S>
@@ -59,39 +37,48 @@ class ToyFst :
   ToyFst(const Fst<A> &fst)
       : VectorFst<A, S>(fst) {}
 
-  //ToyFst(const ToyFst<Arc, State> &fst, bool safe = false) 
-  //    : VectorFst<A, S>(fst, safe) {}
-  //ToyFst(std::shared_ptr<Impl> impl):VectorFst<A, S>(impl) {}
-  //ToyFst() : VectorFst<A, S>() {}
-
  private:
 };
-/*
+
+
 namespace internal {
 
+// This is a ToyFst2BaseImpl container that holds ToyStates and manages FST
+// properties.
 template <class S>
 class ToyFst2Impl : public VectorFstImpl<S> {
-public:
-    using State = S;
-    using Arc = typename State::Arc;
-    //using VectorFstImpl<Arc>::Properties;
+ public:
+  using State = S;
+  using Arc = typename State::Arc;
+  using Label = typename Arc::Label;
+  using StateId = typename Arc::StateId;
+  using Weight = typename Arc::Weight;
 
-    ToyFst2Impl() : VectorFstImpl<S>() {}
-    explicit ToyFst2Impl(const Fst<Arc> &fst) : VectorFstImpl<S>(fst) {}
+  friend class MutableArcIterator<ToyFst2<Arc, State>>;
+
+  ToyFst2Impl() : VectorFstImpl<S>() {
+  }
+
+  explicit ToyFst2Impl(const Fst<Arc> &fst) : VectorFstImpl<S>(fst) {}
+
 };
 
-}
-*/
-template <class A, class S /* = VectorState<A> */>
-class ToyFst2 : public ImplToMutableFst<internal::VectorFstImpl<S>> {
-//class ToyFst2 : public ImplToMutableFst<internal::ToyFst2Impl<S>> {
+}  // namespace internal
+
+// Simple concrete, mutable FST. This class attaches interface to implementation
+// and handles reference counting, delegating most methods to ImplToMutableFst.
+// Also supports ReserveStates and ReserveArcs methods (cf. STL vector methods).
+// The second optional template argument gives the State definition.
+template <class A, class S /* = ToyState<A> */>
+//class ToyFst2 : public ImplToMutableFst<internal::VectorFstImpl<S>> {
+class ToyFst2 : public ImplToMutableFst<internal::ToyFst2Impl<S>> {
  public:
   using Arc = A;
   using StateId = typename Arc::StateId;
 
   using State = S;
-  //using Impl = internal::ToyFst2Impl<State>;
-  using Impl = internal::VectorFstImpl<State>;
+  //using Impl = internal::VectorFstImpl<State>;
+  using Impl = internal::ToyFst2Impl<State>;
 
   friend class StateIterator<ToyFst2<Arc, State>>;
   friend class ArcIterator<ToyFst2<Arc, State>>;
@@ -174,7 +161,7 @@ class ToyFst2 : public ImplToMutableFst<internal::VectorFstImpl<S>> {
       : ImplToMutableFst<Impl>(impl) {}
 };
 
-// Writes FST to file in Vector format, potentially with a pass over the machine
+// Writes FST to file in Toy format, potentially with a pass over the machine
 // before writing to compute number of states.
 template <class Arc, class State>
 template <class FST>
@@ -298,7 +285,7 @@ class MutableArcIterator<ToyFst2<Arc, State>>
   MutableArcIterator(ToyFst2<Arc, State> *fst, StateId s) : i_(0) {
     fst->MutateCheck();
     state_ = fst->GetMutableImpl()->GetState(s);
-    properties_ = &(fst->GetImpl()->properties_);
+    properties_ = &fst->GetImpl()->properties_;
   }
 
   bool Done() const final { return i_ >= state_->NumArcs(); }
@@ -367,7 +354,10 @@ inline void ToyFst2<Arc, State>::InitMutableArcIterator(
   data->base = new MutableArcIterator<ToyFst2<Arc, State>>(this, s);
 }
 
+// A useful alias when using StdArc.
+using StdToyFst2 = ToyFst2<StdArc>;
+
 }  // namespace fst
 
-#endif
+#endif  // FST_VECTOR_FST_H_
 
