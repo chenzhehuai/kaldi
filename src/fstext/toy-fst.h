@@ -59,8 +59,27 @@ class ToyFst2Impl : public VectorFstImpl<S> {
   ToyFst2Impl() : VectorFstImpl<S>() {
   }
 
-  explicit ToyFst2Impl(const Fst<Arc> &fst) : VectorFstImpl<S>(fst) {}
-
+  explicit ToyFst2Impl(const Fst<Arc> &fst) {  
+      SetType("vector");
+      SetInputSymbols(fst.InputSymbols());
+      SetOutputSymbols(fst.OutputSymbols());
+      BaseImpl::SetStart(fst.Start());
+      if (fst.Properties(kExpanded, false)) {
+        BaseImpl::ReserveStates(CountStates(fst));
+      }
+      for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
+        const auto state = siter.Value();
+        BaseImpl::AddState();
+        BaseImpl::SetFinal(state, fst.Final(state));
+        ReserveArcs(state, fst.NumArcs(state));
+        for (ArcIterator<Fst<Arc>> aiter(fst, state); !aiter.Done(); aiter.Next()) {
+          const auto &arc = aiter.Value();
+          Arc arc2(arc.ilabel, arc.olabel, arc.weight*0.1, arc.nextstate);
+          BaseImpl::AddArc(state, arc2);
+        }
+      }
+      SetProperties(fst.Properties(kCopyProperties, false) | kStaticProperties);
+  }
 };
 
 }  // namespace internal
