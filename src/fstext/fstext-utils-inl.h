@@ -1214,7 +1214,7 @@ bool IsStochasticFstInLog(const Fst<StdArc> &fst,
                           StdArc::Weight *max_sum) {
   bool ans = false;
   LogArc::Weight log_min, log_max;
-  if (fst.Type() == "const") {
+  if (fst.Type() == "const" || fst.Type() == "olabel_lookahead") {
     ConstFst<LogArc> logfst;
     Cast(dynamic_cast<const ConstFst<StdArc>&>(fst), &logfst);
     ans = IsStochasticFst(logfst, delta, &log_min, &log_max);

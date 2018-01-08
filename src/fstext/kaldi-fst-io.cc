@@ -19,6 +19,7 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include <fst/script/fst-class.h>
 #include "fstext/kaldi-fst-io.h"
 #include "base/kaldi-error.h"
 #include "base/kaldi-math.h"
@@ -59,6 +60,17 @@ Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err) {
       return NULL;
     }
   }
+
+  //std::unique_ptr<script::FstClass> cfst(script::FstClass::Read(rxfilename));
+  //Fst<StdArc> *fst=const_cast<Fst<StdArc> *>((*cfst).script::FstClass::GetFst<StdArc>());
+
+  script::FstClass* cfst = new script::FstClass(*script::FstClass::Read(rxfilename)); //where to delete?
+  Fst<StdArc> *fst=const_cast<Fst<StdArc> *>((cfst)->script::FstClass::GetFst<StdArc>());
+  //
+  //
+  //
+  //dynamic_cast<Fst<StdArc> *>(rfst.get());
+  /*
   // Check the type of Arc
   if (hdr.ArcType() != fst::StdArc::Type()) {
     if(throw_on_err) {
@@ -72,11 +84,12 @@ Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err) {
   // Read the FST
   FstReadOptions ropts("<unspecified>", &hdr);
   Fst<StdArc> *fst = NULL;
-  if (hdr.FstType() == "const") {
+  if (hdr.FstType() == "const" || hdr.FstType() == "olabel_lookahead") {
     fst = ConstFst<StdArc>::Read(ki.Stream(), ropts);
   } else if (hdr.FstType() == "vector") {
     fst = VectorFst<StdArc>::Read(ki.Stream(), ropts);
   }
+  */
   if (!fst) {
     if(throw_on_err) {
      KALDI_ERR << "Could not read fst from "
