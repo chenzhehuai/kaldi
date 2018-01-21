@@ -24,21 +24,21 @@
 // after committing the changes to this file, using the command
 // svn merge ^/sandbox/online/src/decoder/lattice-faster-const-decoder.cc lattice-faster-online-decoder.cc
 
-#include "decoder/lattice-faster-const-decoder.h"
+#include "decoder/lattice-faster-constfst-decoder.h"
 #include "lat/lattice-functions.h"
 
 namespace kaldi {
 
 // instantiate this class once for each thing you have to decode.
-LatticeConstFasterDecoder::LatticeConstFasterDecoder(const fst::ConstFst<fst::StdArc> &fst,
-                                           const LatticeConstFasterDecoderConfig &config):
+LatticeConstFstFasterDecoder::LatticeConstFstFasterDecoder(const fst::ConstFst<fst::StdArc> &fst,
+                                           const LatticeConstFstFasterDecoderConfig &config):
     fst_(fst), delete_fst_(false), config_(config), num_toks_(0) {
   config.Check();
   toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
 }
 
 
-LatticeConstFasterDecoder::LatticeConstFasterDecoder(const LatticeConstFasterDecoderConfig &config,
+LatticeConstFstFasterDecoder::LatticeConstFstFasterDecoder(const LatticeConstFstFasterDecoderConfig &config,
                                            fst::ConstFst<fst::StdArc> *fst):
     fst_(*fst), delete_fst_(true), config_(config), num_toks_(0) {
   config.Check();
@@ -46,13 +46,13 @@ LatticeConstFasterDecoder::LatticeConstFasterDecoder(const LatticeConstFasterDec
 }
 
 
-LatticeConstFasterDecoder::~LatticeConstFasterDecoder() {
+LatticeConstFstFasterDecoder::~LatticeConstFstFasterDecoder() {
   DeleteElems(toks_.Clear());
   ClearActiveTokens();
   if (delete_fst_) delete &(fst_);
 }
 
-void LatticeConstFasterDecoder::InitDecoding() {
+void LatticeConstFstFasterDecoder::InitDecoding() {
   // clean up from last time:
   DeleteElems(toks_.Clear());
   cost_offsets_.clear();
@@ -74,7 +74,7 @@ void LatticeConstFasterDecoder::InitDecoding() {
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
 // an unusual search error.
-bool LatticeConstFasterDecoder::Decode(DecodableInterface *decodable) {
+bool LatticeConstFstFasterDecoder::Decode(DecodableInterface *decodable) {
   InitDecoding();
 
   // We use 1-based indexing for frames in this decoder (if you view it in
@@ -96,7 +96,7 @@ bool LatticeConstFasterDecoder::Decode(DecodableInterface *decodable) {
 
 
 // Outputs an FST corresponding to the single best path through the lattice.
-bool LatticeConstFasterDecoder::GetBestPath(Lattice *olat,
+bool LatticeConstFstFasterDecoder::GetBestPath(Lattice *olat,
                                        bool use_final_probs) const {
   Lattice raw_lat;
   GetRawLattice(&raw_lat, use_final_probs);
@@ -106,7 +106,7 @@ bool LatticeConstFasterDecoder::GetBestPath(Lattice *olat,
 
 // Outputs an FST corresponding to the raw, state-level
 // tracebacks.
-bool LatticeConstFasterDecoder::GetRawLattice(Lattice *ofst,
+bool LatticeConstFstFasterDecoder::GetRawLattice(Lattice *ofst,
                                          bool use_final_probs) const {
   typedef LatticeArc Arc;
   typedef Arc::StateId StateId;
@@ -192,9 +192,9 @@ bool LatticeConstFasterDecoder::GetRawLattice(Lattice *ofst,
 
 
 // This function is now deprecated, since now we do determinization from outside
-// the LatticeConstFasterDecoder class.  Outputs an FST corresponding to the
+// the LatticeConstFstFasterDecoder class.  Outputs an FST corresponding to the
 // lattice-determinized lattice (one path per word sequence).
-bool LatticeConstFasterDecoder::GetLattice(CompactLattice *ofst,
+bool LatticeConstFstFasterDecoder::GetLattice(CompactLattice *ofst,
                                       bool use_final_probs) const {
   Lattice raw_fst;
   GetRawLattice(&raw_fst, use_final_probs);
@@ -216,7 +216,7 @@ bool LatticeConstFasterDecoder::GetLattice(CompactLattice *ofst,
   return (ofst->NumStates() != 0);
 }
 
-void LatticeConstFasterDecoder::PossiblyResizeHash(size_t num_toks) {
+void LatticeConstFstFasterDecoder::PossiblyResizeHash(size_t num_toks) {
   size_t new_sz = static_cast<size_t>(static_cast<BaseFloat>(num_toks)
                                       * config_.hash_ratio);
   if (new_sz > toks_.Size()) {
@@ -255,7 +255,7 @@ void LatticeConstFasterDecoder::PossiblyResizeHash(size_t num_toks) {
 // for the current frame.  [note: it's inserted if necessary into hash toks_
 // and also into the singly linked list of tokens active on this frame
 // (whose head is at active_toks_[frame]).
-inline LatticeConstFasterDecoder::Token *LatticeConstFasterDecoder::FindOrAddToken(
+inline LatticeConstFstFasterDecoder::Token *LatticeConstFstFasterDecoder::FindOrAddToken(
     StateId state, int32 frame_plus_one, BaseFloat tot_cost, bool *changed) {
   // Returns the Token pointer.  Sets "changed" (if non-NULL) to true
   // if the token was newly created or the cost changed.
@@ -296,7 +296,7 @@ inline LatticeConstFasterDecoder::Token *LatticeConstFasterDecoder::FindOrAddTok
 // prunes outgoing links for all tokens in active_toks_[frame]
 // it's called by PruneActiveTokens
 // all links, that have link_extra_cost > lattice_beam are pruned
-void LatticeConstFasterDecoder::PruneForwardLinks(
+void LatticeConstFstFasterDecoder::PruneForwardLinks(
     int32 frame_plus_one, bool *extra_costs_changed,
     bool *links_pruned, BaseFloat delta) {
   // delta is the amount by which the extra_costs must change
@@ -372,7 +372,7 @@ void LatticeConstFasterDecoder::PruneForwardLinks(
 // PruneForwardLinksFinal is a version of PruneForwardLinks that we call
 // on the final frame.  If there are final tokens active, it uses
 // the final-probs for pruning, otherwise it treats all tokens as final.
-void LatticeConstFasterDecoder::PruneForwardLinksFinal() {
+void LatticeConstFstFasterDecoder::PruneForwardLinksFinal() {
   KALDI_ASSERT(!active_toks_.empty());
   int32 frame_plus_one = active_toks_.size() - 1;
 
@@ -456,7 +456,7 @@ void LatticeConstFasterDecoder::PruneForwardLinksFinal() {
   } // while changed
 }
 
-BaseFloat LatticeConstFasterDecoder::FinalRelativeCost() const {
+BaseFloat LatticeConstFstFasterDecoder::FinalRelativeCost() const {
   if (!decoding_finalized_) {
     BaseFloat relative_cost;
     ComputeFinalCosts(NULL, &relative_cost, NULL);
@@ -473,7 +473,7 @@ BaseFloat LatticeConstFasterDecoder::FinalRelativeCost() const {
 // [we don't do this in PruneForwardLinks because it would give us
 // a problem with dangling pointers].
 // It's called by PruneActiveTokens if any forward links have been pruned
-void LatticeConstFasterDecoder::PruneTokensForFrame(int32 frame_plus_one) {
+void LatticeConstFstFasterDecoder::PruneTokensForFrame(int32 frame_plus_one) {
   KALDI_ASSERT(frame_plus_one >= 0 && frame_plus_one < active_toks_.size());
   Token *&toks = active_toks_[frame_plus_one].toks;
   if (toks == NULL)
@@ -499,7 +499,7 @@ void LatticeConstFasterDecoder::PruneTokensForFrame(int32 frame_plus_one) {
 // that.  We go backwards through the frames and stop when we reach a point
 // where the delta-costs are not changing (and the delta controls when we consider
 // a cost to have "not changed").
-void LatticeConstFasterDecoder::PruneActiveTokens(BaseFloat delta) {
+void LatticeConstFstFasterDecoder::PruneActiveTokens(BaseFloat delta) {
   int32 cur_frame_plus_one = NumFramesDecoded();
   int32 num_toks_begin = num_toks_;
   // The index "f" below represents a "frame plus one", i.e. you'd have to subtract
@@ -528,7 +528,7 @@ void LatticeConstFasterDecoder::PruneActiveTokens(BaseFloat delta) {
                 << " to " << num_toks_;
 }
 
-void LatticeConstFasterDecoder::ComputeFinalCosts(
+void LatticeConstFstFasterDecoder::ComputeFinalCosts(
     unordered_map<Token*, BaseFloat> *final_costs,
     BaseFloat *final_relative_cost,
     BaseFloat *final_best_cost) const {
@@ -570,7 +570,7 @@ void LatticeConstFasterDecoder::ComputeFinalCosts(
   }
 }
 
-void LatticeConstFasterDecoder::AdvanceDecoding(DecodableInterface *decodable,
+void LatticeConstFstFasterDecoder::AdvanceDecoding(DecodableInterface *decodable,
                                              int32 max_num_frames) {
   KALDI_ASSERT(!active_toks_.empty() && !decoding_finalized_ &&
                "You must call InitDecoding() before AdvanceDecoding");
@@ -596,7 +596,7 @@ void LatticeConstFasterDecoder::AdvanceDecoding(DecodableInterface *decodable,
 // FinalizeDecoding() is a version of PruneActiveTokens that we call
 // (optionally) on the final frame.  Takes into account the final-prob of
 // tokens.  This function used to be called PruneActiveTokensFinal().
-void LatticeConstFasterDecoder::FinalizeDecoding() {
+void LatticeConstFstFasterDecoder::FinalizeDecoding() {
   int32 final_frame_plus_one = NumFramesDecoded();
   int32 num_toks_begin = num_toks_;
   // PruneForwardLinksFinal() prunes final frame (with final-probs), and
@@ -614,7 +614,7 @@ void LatticeConstFasterDecoder::FinalizeDecoding() {
 }
 
 /// Gets the weight cutoff.  Also counts the active tokens.
-BaseFloat LatticeConstFasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
+BaseFloat LatticeConstFstFasterDecoder::GetCutoff(Elem *list_head, size_t *tok_count,
                                           BaseFloat *adaptive_beam, Elem **best_elem) {
   BaseFloat best_weight = std::numeric_limits<BaseFloat>::infinity();
   // positive == high cost == bad.
@@ -683,7 +683,7 @@ BaseFloat LatticeConstFasterDecoder::GetCutoff(Elem *list_head, size_t *tok_coun
   }
 }
 
-BaseFloat LatticeConstFasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
+BaseFloat LatticeConstFstFasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
   KALDI_ASSERT(active_toks_.size() > 0);
   int32 frame = active_toks_.size() - 1; // frame is the frame-index
                                          // (zero-based) used to get likelihoods
@@ -775,7 +775,7 @@ BaseFloat LatticeConstFasterDecoder::ProcessEmitting(DecodableInterface *decodab
   return next_cutoff;
 }
 
-void LatticeConstFasterDecoder::ProcessNonemitting(BaseFloat cutoff) {
+void LatticeConstFstFasterDecoder::ProcessNonemitting(BaseFloat cutoff) {
   KALDI_ASSERT(!active_toks_.empty());
   int32 frame = static_cast<int32>(active_toks_.size()) - 2;
   // Note: "frame" is the time-index we just processed, or -1 if
@@ -838,14 +838,14 @@ void LatticeConstFasterDecoder::ProcessNonemitting(BaseFloat cutoff) {
 }
 
 
-void LatticeConstFasterDecoder::DeleteElems(Elem *list) {
+void LatticeConstFstFasterDecoder::DeleteElems(Elem *list) {
   for (Elem *e = list, *e_tail; e != NULL; e = e_tail) {
     e_tail = e->tail;
     toks_.Delete(e);
   }
 }
 
-void LatticeConstFasterDecoder::ClearActiveTokens() { // a cleanup routine, at utt end/begin
+void LatticeConstFstFasterDecoder::ClearActiveTokens() { // a cleanup routine, at utt end/begin
   for (size_t i = 0; i < active_toks_.size(); i++) {
     // Delete all tokens alive on this frame, and any forward
     // links they may have.
@@ -862,7 +862,7 @@ void LatticeConstFasterDecoder::ClearActiveTokens() { // a cleanup routine, at u
 }
 
 // static
-void LatticeConstFasterDecoder::TopSortTokens(Token *tok_list,
+void LatticeConstFstFasterDecoder::TopSortTokens(Token *tok_list,
                                          std::vector<Token*> *topsorted_list) {
   unordered_map<Token*, int32> token2pos;
   typedef unordered_map<Token*, int32>::iterator IterType;

@@ -37,6 +37,7 @@ int main(int argc, char *argv[]) {
     using fst::SymbolTable;
     using fst::Fst;
     using fst::StdArc;
+    using fst::ConstFst;
 
     const char *usage =
         "Generate lattices, reading log-likelihoods as matrices\n"
@@ -47,7 +48,7 @@ int main(int argc, char *argv[]) {
     Timer timer;
     bool allow_partial = false;
     BaseFloat acoustic_scale = 0.1;
-    LatticeFasterDecoderConfig config;
+    LatticeConstFstFasterDecoderConfig config;
 
     std::string word_syms_filename;
     config.Register(&po);
@@ -98,12 +99,12 @@ int main(int argc, char *argv[]) {
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
-      ConstFst<StdArc> *decode_fst=const_cast<ConstFst<StdArc> *>fst::ReadFstKaldiGeneric(fst_in_str);
+      ConstFst<StdArc> *decode_fst=dynamic_cast<ConstFst<StdArc> *>(fst::ReadFstKaldiGeneric(fst_in_str));
       
       timer.Reset();
 
       {
-        LatticeFasterConstFstDecoder decoder(*decode_fst, config);
+        LatticeConstFstFasterDecoder decoder(*decode_fst, config);
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
           std::string utt = loglike_reader.Key();
@@ -118,7 +119,7 @@ int main(int argc, char *argv[]) {
           DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
 
           double like;
-          if (DecodeUtteranceLatticeFaster(
+          if (DecodeUtteranceConstFstLatticeFaster(
                   decoder, decodable, trans_model, word_syms, utt,
                   acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
@@ -131,6 +132,7 @@ int main(int argc, char *argv[]) {
       }
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
+#if 0
       SequentialTableReader<fst::VectorFstHolder> fst_reader(fst_in_str);
       RandomAccessBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       for (; !fst_reader.Done(); fst_reader.Next()) {
@@ -159,6 +161,7 @@ int main(int argc, char *argv[]) {
           num_success++;
         } else num_fail++;
       }
+#endif
     }
 
     double elapsed = timer.Elapsed();

@@ -22,6 +22,7 @@
 
 #include "itf/options-itf.h"
 #include "decoder/lattice-faster-decoder.h"
+#include "decoder/lattice-faster-constfst-decoder.h"
 #include "decoder/lattice-simple-decoder.h"
 
 // This header contains declarations from various convenience functions that are called
@@ -111,7 +112,7 @@ bool DecodeUtteranceLatticeFaster(
     double *like_ptr);  // puts utterance's likelihood in like_ptr on success.
 
 bool DecodeUtteranceConstFstLatticeFaster(
-    LatticeFasterConstFstDecoder &decoder, // not const but is really an input.
+    LatticeConstFstFasterDecoder &decoder, // not const but is really an input.
     DecodableInterface &decodable, // not const but is really an input.
     const TransitionModel &trans_model,
     const fst::SymbolTable *word_syms,

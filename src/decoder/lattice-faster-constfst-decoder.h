@@ -37,7 +37,7 @@
 
 namespace kaldi {
 
-struct LatticeConstFasterDecoderConfig {
+struct LatticeConstFstFasterDecoderConfig {
   BaseFloat beam;
   int32 max_active;
   int32 min_active;
@@ -51,11 +51,11 @@ struct LatticeConstFasterDecoderConfig {
                            // it's not a very important parameter.  It affects the
                            // algorithm that prunes the tokens as we go.
   // Most of the options inside det_opts are not actually queried by the
-  // LatticeConstFasterDecoder class itself, but by the code that calls it, for
-  // example in the function DecodeUtteranceLatticeConstFaster.
+  // LatticeConstFstFasterDecoder class itself, but by the code that calls it, for
+  // example in the function DecodeUtteranceLatticeConstFstFaster.
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
 
-  LatticeConstFasterDecoderConfig(): beam(16.0),
+  LatticeConstFstFasterDecoderConfig(): beam(16.0),
                                 max_active(std::numeric_limits<int32>::max()),
                                 min_active(200),
                                 lattice_beam(10.0),
@@ -95,7 +95,7 @@ struct LatticeConstFasterDecoderConfig {
    See \ref lattices_generation \ref decoders_faster and \ref decoders_simple
     for more information.
  */
-class LatticeConstFasterDecoder {
+class LatticeConstFstFasterDecoder {
  public:
   typedef fst::StdArc Arc;
   typedef Arc::Label Label;
@@ -103,24 +103,24 @@ class LatticeConstFasterDecoder {
   typedef Arc::Weight Weight;
 
   // instantiate this class once for each thing you have to decode.
-  LatticeConstFasterDecoder(const fst::ConstFst<fst::StdArc> &fst,
-                       const LatticeConstFasterDecoderConfig &config);
+  LatticeConstFstFasterDecoder(const fst::ConstFst<fst::StdArc> &fst,
+                       const LatticeConstFstFasterDecoderConfig &config);
 
   // This version of the initializer "takes ownership" of the fst,
   // and will delete it when this object is destroyed.
-  LatticeConstFasterDecoder(const LatticeConstFasterDecoderConfig &config,
+  LatticeConstFstFasterDecoder(const LatticeConstFstFasterDecoderConfig &config,
                        fst::ConstFst<fst::StdArc> *fst);
 
 
-  void SetOptions(const LatticeConstFasterDecoderConfig &config) {
+  void SetOptions(const LatticeConstFstFasterDecoderConfig &config) {
     config_ = config;
   }
 
-  const LatticeConstFasterDecoderConfig &GetOptions() const {
+  const LatticeConstFstFasterDecoderConfig &GetOptions() const {
     return config_;
   }
 
-  ~LatticeConstFasterDecoder();
+  ~LatticeConstFstFasterDecoder();
 
   /// Decodes until there are no more frames left in the "decodable" object..
   /// note, this may block waiting for input if the "decodable" object blocks.
@@ -367,7 +367,7 @@ class LatticeConstFasterDecoder {
   // frame, an offset that was added to the acoustic log-likelihoods on that
   // frame in order to keep everything in a nice dynamic range i.e.  close to
   // zero, to reduce roundoff errors.
-  LatticeConstFasterDecoderConfig config_;
+  LatticeConstFstFasterDecoderConfig config_;
   int32 num_toks_; // current total #toks allocated...
   bool warned_;
 
@@ -409,7 +409,7 @@ class LatticeConstFasterDecoder {
 
   void ClearActiveTokens();
 
-  KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeConstFasterDecoder);
+  KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeConstFstFasterDecoder);
 };
 
 
