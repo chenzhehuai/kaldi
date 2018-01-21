@@ -110,6 +110,21 @@ bool DecodeUtteranceLatticeFaster(
     LatticeWriter *lattice_writer,
     double *like_ptr);  // puts utterance's likelihood in like_ptr on success.
 
+bool DecodeUtteranceConstFstLatticeFaster(
+    LatticeFasterConstFstDecoder &decoder, // not const but is really an input.
+    DecodableInterface &decodable, // not const but is really an input.
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignments_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr);  // puts utterance's likelihood in like_ptr on success.
+
 /// This class basically does the same job as the function
 /// DecodeUtteranceLatticeFaster, but in a way that allows us
 /// to build a multi-threaded command line program more easily.

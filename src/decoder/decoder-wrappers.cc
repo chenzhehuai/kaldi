@@ -195,8 +195,8 @@ DecodeUtteranceLatticeFasterClass::~DecodeUtteranceLatticeFasterClass() {
 
 
 // Takes care of output.  Returns true on success.
-bool DecodeUtteranceLatticeFaster(
-    LatticeFasterDecoder &decoder, // not const but is really an input.
+bool DecodeUtteranceConstFstLatticeFaster(
+    LatticeFasterConstFstDecoder &decoder, // not const but is really an input.
     DecodableInterface &decodable, // not const but is really an input.
     const TransitionModel &trans_model,
     const fst::SymbolTable *word_syms,
