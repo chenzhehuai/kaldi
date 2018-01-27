@@ -298,14 +298,22 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
 
     // phoneseq is used to index ilabel, 
     // map dis-ambiguous symbol to corresponding phones
+    // BUT if the current olabel is in #PHN
+    // don't need to change and don't need context
     vector<LabelT> phoneseq(N_-1);
-    for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map[seq[i]];
+    if (dis2phone_map_[olabel] == olabel) {
+        for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map_[seq[i]];
+    }
     // possibly changes the address.
     StateId nextstate = FindState(newseq);
 
-    // BUT if the current olabel is in #PHN
-    // don't need to change
-    phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
+    if (dis2phone_map_[olabel] == olabel) {
+        phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
+    } else {
+        phoneseq.push_back(-dis2phone_map_[olabel]);  // olabel is a disambiguation symbol.  
+        //Use its negative, so we can easily distinguish them. compare with
+        //phone disambig_syms: ilabels[i].size() != 1
+    }
     for (int i = 1; i < N_ ; i++)
       if (phoneseq[i] == subsequential_symbol_) phoneseq[i] = 0;  // don't put subseq. symbol on
     // the output arcs, just 0.
@@ -512,7 +520,7 @@ inline void ComposeContext(const vector<int32> &disambig_syms_in,
   // if P == N-1, it's left-context, and no subsequential symbol needed.
   if (P != N-1)
     AddSubsequentialLoop(subseq_sym, ifst);
-  ContextFst<StdArc, int32> cfst(subseq_sym, phones, disambig_syms, N, P);
+  ContextFst<StdArc, int32> cfst(subseq_sym, phones, disambig_syms, dis2phone_map, N, P);
   ComposeContextFst(cfst, *ifst, ofst);
   *ilabels_out = cfst.ILabelInfo();
 }

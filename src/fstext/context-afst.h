@@ -477,6 +477,6 @@ void AddSubsequentialLoop(typename Arc::Label subseq_symbol,
 /// @}
 }  // namespace fst
 
-#include "context-fst-inl.h"
+#include "context-afst-inl.h"
 
 #endif  // KALDI_FSTEXT_CONTEXT_AFST_H_

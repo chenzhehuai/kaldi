@@ -85,21 +85,19 @@ int main(int argc, char *argv[]) {
     const char *usage =
         "Composes on the left with a dynamically created context FST\n"
         "\n"
-        "Usage:  afstcomposecontextafst <ilabels-output-file>  [<in.fst> [<out.fst>] ]\n"
-        "E.g:  afstcomposecontextafst ilabels.sym < LG.fst > CLG.fst\n";
+        "Usage:  afstcomposecontextafst <disambig_afst_rxfilename> <ilabels-output-file>  [<in.fst> [<out.fst>] ]\n"
+        "E.g:  afstcomposecontextafst dis.map ilabels.sym < LG.fst > CLG.fst\n";
     
 
     ParseOptions po(usage);
     bool binary = true;
     std::string disambig_rxfilename,
-        disambig_wxfilename;
+        disambig_wxfilename, disambig_afst_wxfilename;
     int32 N = 3, P = 1;
     po.Register("binary", &binary,
                 "If true, output ilabels-output-file in binary format");
     po.Register("read-disambig-syms", &disambig_rxfilename,
                 "List of disambiguation symbols on input of in.fst");
-    po.Register("read-disambig-afst-syms", &disambig_afst_rxfilename,
-                "List of disambiguation symbols on input of in.fst, including begin & end.");
     po.Register("write-disambig-syms", &disambig_wxfilename,
                 "List of disambiguation symbols on input of out.fst");
     po.Register("write-disambig-afst-syms", &disambig_afst_wxfilename,
@@ -110,14 +108,15 @@ int main(int argc, char *argv[]) {
 
     po.Read(argc, argv);
 
-    if (po.NumArgs() < 1 || po.NumArgs() > 3) {
+    if (po.NumArgs() < 1 || po.NumArgs() > 4) {
       po.PrintUsage();
       exit(1);
     }
 
-    std::string ilabels_out_filename = po.GetArg(1),
-        fst_in_filename = po.GetOptArg(2),
-        fst_out_filename = po.GetOptArg(3);
+    std::string disambig_afst_rxfilename = po.GetOptArg(1),
+        ilabels_out_filename = po.GetArg(2),
+        fst_in_filename = po.GetOptArg(3),
+        fst_out_filename = po.GetOptArg(4);
 
     VectorFst<StdArc> *fst = ReadFstKaldi(fst_in_filename);
 
@@ -137,10 +136,8 @@ int main(int argc, char *argv[]) {
     }
 
     std::vector<int32> dis2phone_map;
-    if (disambig_afst_rxfilename != "") {  // read phone map.
-      ReadPhoneMap(disambig_afst_rxfilename,
-                   &dis2phone_map);
-    }
+    ReadPhoneMap(disambig_afst_rxfilename,
+                 &dis2phone_map);
     
     std::vector<std::vector<int32> > ilabels;
     VectorFst<StdArc> composed_fst;
@@ -162,6 +159,19 @@ int main(int argc, char *argv[]) {
         return 1;
       }
     }
+
+    if (disambig_afst_wxfilename != "") {
+      std::vector<int32> disambig_afst_out;
+      for (size_t i = 0; i < ilabels.size(); i++)
+        if (ilabels[i].size() > 1 && ilabels[i][P] <= 0)
+          disambig_afst_out.push_back(static_cast<int32>(i));
+      if (!WriteIntegerVectorSimple(disambig_afst_wxfilename, disambig_afst_out)) {
+        std::cerr << "afstcomposecontextafst: Could not write disambiguation symbols to "
+                  << PrintableWxfilename(disambig_afst_wxfilename) << '\n';
+        return 1;
+      }
+    }
+
 
     WriteFstKaldi(composed_fst, fst_out_filename);
     delete fst;
