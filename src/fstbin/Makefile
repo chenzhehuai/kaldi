@@ -13,7 +13,8 @@ include ../kaldi.mk
 BINFILES = fstdeterminizestar  \
            fstrmsymbols fstisstochastic fstminimizeencoded fstmakecontextfst \
            fstmakecontextsyms fstaddsubsequentialloop fstaddselfloops  \
-           fstrmepslocal afstcomposecontext fstcomposecontext fsttablecompose fstrand \
+           fstrmepslocal fstcomposecontext fsttablecompose fstrand \
+		   afstconcat afstcomposecontext \
            fstdeterminizelog fstphicompose fstcopy \
            fstpushspecial fsts-to-transcripts fsts-project fsts-union
 

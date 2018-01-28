@@ -24,6 +24,7 @@
 #include "fst/fstlib.h"
 #include "fstext/fstext-utils.h"
 #include "fstext/kaldi-fst-io.h"
+#include "fstext/concat-afst.h"
 
 
 
@@ -47,10 +48,12 @@ int main(int argc, char *argv[]) {
     std::vector<int32>& disambig_in = opts.disambig_in;
 
     po.Register("connect", &opts.connect, "If true, trim FST before output.");
+    po.Register("del-disambig-sym", &opts.del_disambig_sym, "If true, delete disambig symbols after concatenation.");
+
     po.Read(argc, argv);
 
 
-    if (po.NumArgs() != 4) {
+    if (po.NumArgs() < 3 || po.NumArgs() > 4) {
       po.PrintUsage();
       exit(1);
     }
@@ -98,7 +101,7 @@ int main(int argc, char *argv[]) {
       
       //VectorFst<StdArc> composed_fst;
       //TableCompose(*fst1, *fst2, &composed_fst, opts);
-      Concat<StdArc>(*fst1, *fst2, opts);
+      ConcatAfst<StdArc>(fst1, *fst2, opts);
       WriteFstKaldi(*fst1, fst_out_str);
 
       delete fst1;

@@ -14,11 +14,12 @@
 
 namespace fst {
 
-struct AfstConcatOptions: public AfstConcatOptions {
+struct AfstConcatOptions {
   bool connect;  // Connect output
+  bool del_disambig_sym;  // after concatenation 
   std::vector<int32> disambig_in;
 
-  AfstConcatOptions() : connect(true) { disambig_in.resize(0); }
+  AfstConcatOptions() : connect(true), del_disambig_sym(true) { disambig_in.resize(0); }
 };
 
 
@@ -36,7 +37,7 @@ struct AfstConcatOptions: public AfstConcatOptions {
 // where Vi is the number of states, and Ei is the number of arcs, of the ith
 // FST.
 template <class Arc>
-void Concat(MutableFst<Arc> *fst1, const Fst<Arc> &fst2, 
+void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2, 
   const AfstConcatOptions &opts = AfstConcatOptions()) {
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
@@ -52,6 +53,7 @@ void Concat(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   const auto props1 = fst1->Properties(kFstProperties, false);
   const auto props2 = fst2.Properties(kFstProperties, false);
   const auto start1 = fst1->Start();
+  const auto start2 = fst2.Start();
   if (start1 == kNoStateId) {
     if (props2 & kError) fst1->SetProperties(kError, kError);
     return;
@@ -65,12 +67,10 @@ void Concat(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   {
     soa_of_new_fst2[val]=kNoStateId; //default state
   }
-  const auto start1 = fst1.Start();
-  const auto start2 = fst2.Start();
   if (start2 != kNoStateId) {
     fst1->SetProperties(ConcatProperties(props1, props2), kFstProperties);
   } else {
-    KALDI_ERROR << "fst2 has no Start()";
+    KALDI_ERR << "fst2 has no Start()";
   }
   //get whole fst2
   for (StateIterator<Fst<Arc>> siter2(fst2); !siter2.Done(); siter2.Next()) {
@@ -90,7 +90,7 @@ void Concat(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   //check #SOA in fst2
   for (auto val : opts.disambig_in)
   {
-    if (! soa_of_new_fst2[val].count(val)) {
+    if (soa_of_new_fst2[val] == kNoStateId) {
       KALDI_WARN << "SOA symbol " << val << " not found in fst2;"
       << "for this symbol, we can't concat it from fst1 to fst2";
     }
@@ -98,12 +98,15 @@ void Concat(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   
   //connect fst1 & fst2
   for (StateId s1 = 0; s1 < numstates1; ++s1) {
-    //fst1->SetFinal(s1, Weight::Zero());
-    for (ArcIterator<Fst<Arc>> aiter(fst1, s1); !aiter.Done(); aiter.Next()) {
+    //disconnect previous fst1 final state
+    fst1->SetFinal(s1, Weight::Zero());
+    for (ArcIterator<Fst<Arc>> aiter(*fst1, s1); !aiter.Done(); aiter.Next()) {
       auto arc = aiter.Value();
       if (s1 != start1 && soa_of_new_fst2.count(arc.ilabel) > 0
         && arc.nextstate != soa_of_new_fst2[arc.ilabel]) {
         arc.nextstate = soa_of_new_fst2[arc.ilabel];
+        arc.ilabel = 0; //after concatenation, delete disambig_syms_ 
+        fst1->AddArc(s1, arc);
       }
     }
   }
