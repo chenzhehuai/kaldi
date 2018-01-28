@@ -20,11 +20,11 @@
 
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
+#include "util/simple-io-funcs.h"
 #include "fst/fstlib.h"
 #include "fstext/context-afst.h"
 #include "fstext/fstext-utils.h"
 #include "fstext/kaldi-fst-io.h"
-#include "hmm/tree-accu.h"
 
 /*
   A couple of test examples:
@@ -58,6 +58,37 @@
 #  5
 
 */
+
+static void ReadSymMap(std::string phone_map_rxfilename,
+                  std::vector<int32> *phone_map) {
+  phone_map->clear();
+  // phone map file has format e.g.:
+  // 1 1
+  // 2 1
+  // 3 2
+  // 4 2
+  std::vector<std::vector<int32> > vec;  // vector of vectors, each with two elements
+  // (if file has right format). first is old phone, second is new phone
+  if (!kaldi::ReadIntegerVectorVectorSimple(phone_map_rxfilename, &vec))
+    KALDI_ERR << "Error reading phone map from " <<
+        phone_map_rxfilename;
+  for (size_t i = 0; i < vec.size(); i++) {
+    if (vec[i].size() != 2 || vec[i][0]<=0  ||
+       (vec[i][0]<static_cast<int32>(phone_map->size()) &&
+        (*phone_map)[vec[i][0]] != -1))
+      KALDI_ERR << "Error reading phone map from "
+                <<   phone_map_rxfilename
+                << " (bad line " << i << ")";
+    if (vec[i][0]>=static_cast<int32>(phone_map->size()))
+      phone_map->resize(vec[i][0]+1, -1);
+    KALDI_ASSERT((*phone_map)[vec[i][0]] == -1);
+    (*phone_map)[vec[i][0]] = vec[i][1];
+  }
+  if (phone_map->empty()) {
+    KALDI_ERR << "Read empty phone map from "
+              << phone_map_rxfilename;
+  }
+}
 
 int main(int argc, char *argv[]) {
   try {
@@ -136,7 +167,7 @@ int main(int argc, char *argv[]) {
     }
 
     std::vector<int32> dis2phone_map;
-    ReadPhoneMap(disambig_afst_rxfilename,
+    ReadSymMap(disambig_afst_rxfilename,
                  &dis2phone_map);
     
     std::vector<std::vector<int32> > ilabels;

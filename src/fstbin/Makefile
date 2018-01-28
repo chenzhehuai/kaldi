@@ -25,7 +25,6 @@ TESTFILES =
 LIBFILE =
 
 ADDLIBS = ../fstext/kaldi-fstext.a ../util/kaldi-util.a \
-          ../matrix/kaldi-matrix.a ../base/kaldi-base.a \
-		  ../hmm/kaldi-hmm.a
+          ../matrix/kaldi-matrix.a ../base/kaldi-base.a 
 
 include ../makefiles/default_rules.mk

@@ -301,15 +301,18 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
     // BUT if the current olabel is in #PHN
     // don't need to change and don't need context
     vector<LabelT> phoneseq(N_-1);
+    // it's not AFST disambig symbols
     if (dis2phone_map_[olabel] == olabel) {
         for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map_[seq[i]];
     }
     // possibly changes the address.
     StateId nextstate = FindState(newseq);
 
-    if (dis2phone_map_[olabel] == olabel) {
+    if (dis2phone_map_[olabel] == olabel) { 
         phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
-    } else {
+    } else if (dis2phone_map_[olabel] == -2) { //common suffix symbol #EOA
+        phoneseq.push_back(-seq[P_-1]); // use the left context
+    } else { //prefix symbols #SOA
         phoneseq.push_back(-dis2phone_map_[olabel]);  // olabel is a disambiguation symbol.  
         //Use its negative, so we can easily distinguish them. compare with
         //phone disambig_syms: ilabels[i].size() != 1
