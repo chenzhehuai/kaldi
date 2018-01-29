@@ -182,7 +182,7 @@ int main(int argc, char *argv[]) {
     if (disambig_wxfilename != "") {
       std::vector<int32> disambig_out;
       for (size_t i = 0; i < ilabels.size(); i++)
-        if (ilabels[i].size() == 1 && ilabels[i][0] <= 0)
+        if (ilabels[i].size() == 1 && ilabels[i][0] <= 0) //including #PHN
           disambig_out.push_back(static_cast<int32>(i));
       if (!WriteIntegerVectorSimple(disambig_wxfilename, disambig_out)) {
         std::cerr << "afstcomposecontextafst: Could not write disambiguation symbols to "
@@ -194,7 +194,7 @@ int main(int argc, char *argv[]) {
     if (disambig_afst_wxfilename != "") {
       std::vector<int32> disambig_afst_out;
       for (size_t i = 0; i < ilabels.size(); i++)
-        if (ilabels[i].size() > 1 && ilabels[i][P] <= 0)
+        if (ilabels[i].size() == 1 && ilabels[i][0] <= disambig_in[0])
           disambig_afst_out.push_back(static_cast<int32>(i));
       if (!WriteIntegerVectorSimple(disambig_afst_wxfilename, disambig_afst_out)) {
         std::cerr << "afstcomposecontextafst: Could not write disambiguation symbols to "

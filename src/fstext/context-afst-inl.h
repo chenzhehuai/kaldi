@@ -242,7 +242,7 @@ bool ContextFstImpl<Arc, LabelT>::CreatePhoneOrEpsArc(StateId src,
 
   assert(phone_seq[P_] != subsequential_symbol_);  // would be coding error.
 
-  if (phone_seq[P_] == 0) {  // this can happen at the beginning of the graph.
+  if (0 && phone_seq[P_] == 0) {  // this can happen at the beginning of the graph.
     // we don't output a real phone.  Epsilon arc (but sometimes we need to
     // use a special disambiguation symbol instead of epsilon).
     *oarc = Arc(pseudo_eps_symbol_, olabel, Weight::One(), dst);
@@ -311,8 +311,10 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
     if (dis2phone_map_[olabel] == olabel) { 
         phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
     } else if (dis2phone_map_[olabel] == -2) { //common suffix symbol #EOA
+        phoneseq.resize(0);
         phoneseq.push_back(-dis2phone_map_[seq[P_-1]]); // use the left context
     } else { //prefix symbols #SOA
+        phoneseq.resize(0);
         phoneseq.push_back(-dis2phone_map_[olabel]);  // olabel is a disambiguation symbol.  
         //Use its negative, so we can easily distinguish them. compare with
         //phone disambig_syms: ilabels[i].size() != 1

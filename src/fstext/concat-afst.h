@@ -91,8 +91,10 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   for (auto val : opts.disambig_in)
   {
     if (soa_of_new_fst2[val] == kNoStateId) {
-      KALDI_WARN << "SOA symbol " << val << " not found in fst2;"
-      << "for this symbol, we can't concat it from fst1 to fst2";
+      KALDI_LOG << "symbol " << val << " not found in the start of fst2;"
+      << "this symbol should be normal disambig symbol from LG.fst," <<
+      " thus we won't concat it from fst1 to fst2";
+      soa_of_new_fst2.erase(val);
     }
   }  
   
