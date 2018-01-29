@@ -311,7 +311,7 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
     if (dis2phone_map_[olabel] == olabel) { 
         phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
     } else if (dis2phone_map_[olabel] == -2) { //common suffix symbol #EOA
-        phoneseq.push_back(-seq[P_-1]); // use the left context
+        phoneseq.push_back(-dis2phone_map_[seq[P_-1]]); // use the left context
     } else { //prefix symbols #SOA
         phoneseq.push_back(-dis2phone_map_[olabel]);  // olabel is a disambiguation symbol.  
         //Use its negative, so we can easily distinguish them. compare with
