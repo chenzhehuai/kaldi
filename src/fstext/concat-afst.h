@@ -42,6 +42,7 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
   using Weight = typename Arc::Weight;
+  using SoaPair = pair<StateId, Weight>;
   // Checks that the symbol table are compatible.
   if (!CompatSymbols(fst1->InputSymbols(), fst2.InputSymbols()) ||
       !CompatSymbols(fst1->OutputSymbols(), fst2.OutputSymbols())) {
@@ -62,10 +63,13 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   if (fst2.Properties(kExpanded, false)) {
     fst1->ReserveStates(numstates1 + CountStates(fst2));
   }
-  unordered_map<int32, StateId> soa_of_new_fst2;
+  unordered_map<int32, SoaPair> soa_of_new_fst2;
+  SoaPair default_pair;
+  default_pair.first = kNoStateId;
+  default_pair.second = 0;
   for (auto val : opts.disambig_in)
   {
-    soa_of_new_fst2[val]=kNoStateId; //default state
+    soa_of_new_fst2[val]=default_pair; //default state
   }
   if (start2 != kNoStateId) {
     fst1->SetProperties(ConcatProperties(props1, props2), kFstProperties);
@@ -82,7 +86,8 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
       auto arc = aiter.Value();
       arc.nextstate += numstates1;
       if (s2 == start2 && soa_of_new_fst2.count(arc.ilabel) > 0) {
-        soa_of_new_fst2[arc.ilabel] = arc.nextstate;
+        soa_of_new_fst2[arc.ilabel].first = arc.nextstate;
+        soa_of_new_fst2[arc.ilabel].second = arc.weight;
       }
       fst1->AddArc(s1, arc);
     }
@@ -90,7 +95,7 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   //check #SOA in fst2
   for (auto val : opts.disambig_in)
   {
-    if (soa_of_new_fst2[val] == kNoStateId) {
+    if (soa_of_new_fst2[val].first == kNoStateId) {
       KALDI_LOG << "symbol " << val << " not found in the start of fst2;"
       << "this symbol should be normal disambig symbol from LG.fst," <<
       " thus we won't concat it from fst1 to fst2";
@@ -101,16 +106,24 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
   //connect fst1 & fst2
   for (StateId s1 = 0; s1 < numstates1; ++s1) {
     //disconnect previous fst1 final state
-    fst1->SetFinal(s1, Weight::Zero());
+    //fst1->SetFinal(s1, Weight::Zero());
     for (ArcIterator<Fst<Arc>> aiter(*fst1, s1); !aiter.Done(); aiter.Next()) {
       auto arc = aiter.Value();
       if (s1 != start1 && soa_of_new_fst2.count(arc.ilabel) > 0
-        && arc.nextstate != soa_of_new_fst2[arc.ilabel]) {
-        arc.nextstate = soa_of_new_fst2[arc.ilabel];
-        arc.ilabel = 0; //after concatenation, delete disambig_syms_ 
+        && arc.nextstate != soa_of_new_fst2[arc.ilabel].first) {
+        Weight final_weight = fst1->Final(arc.nextstate);
+        arc.nextstate = soa_of_new_fst2[arc.ilabel].first;
+        arc.weight = arc.weight.Value()+soa_of_new_fst2[arc.ilabel].second.Value()+final_weight.Value();
+        if (opts.del_disambig_sym)
+        {
+            arc.ilabel = 0; //after concatenation, delete disambig_syms_ 
+        }
         fst1->AddArc(s1, arc);
       }
     }
+  }
+  for (StateId s1 = 0; s1 < numstates1; ++s1) {
+      fst1->SetFinal(s1, Weight::Zero());
   }
 
   if (opts.connect) Connect(fst1);
