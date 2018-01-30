@@ -123,10 +123,13 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
     bool binary = true;
     std::string disambig_rxfilename,
-        disambig_wxfilename, disambig_afst_wxfilename;
+        disambig_wxfilename, disambig_afst_wxfilename,
+        ilabels_in_filename;
     int32 N = 3, P = 1;
     po.Register("binary", &binary,
                 "If true, output ilabels-output-file in binary format");
+    po.Register("read-ilabel-info", &ilabels_in_filename,
+                "List of disambiguation symbols on input of in.fst");
     po.Register("read-disambig-syms", &disambig_rxfilename,
                 "List of disambiguation symbols on input of in.fst");
     po.Register("write-disambig-syms", &disambig_wxfilename,
@@ -172,6 +175,11 @@ int main(int argc, char *argv[]) {
     
     std::vector<std::vector<int32> > ilabels;
     VectorFst<StdArc> composed_fst;
+
+    if (ilabels_in_filename != "") {    //initialize of ilabels
+        ReadILabelInfo(Input(ilabels_in_filename, &binary).Stream(),
+                    binary, &ilabels);
+    }
 
     // Work gets done here (see context-fst.h)
     ComposeContext(disambig_in, dis2phone_map, N, P, fst, &composed_fst, &ilabels);

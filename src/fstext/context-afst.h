@@ -102,7 +102,8 @@ class ContextFstImpl : public CacheImpl<Arc> {
                  const vector<LabelT> &disambig_syms,
                  const vector<LabelT> &dis2phone_map,
                  int32 N,  // size of ctx window
-                 int32 P);
+                 int32 P,
+                 std::vector<std::vector<int32> >& ilabels_in);
 
   ContextFstImpl(const ContextFstImpl &other);
 
@@ -224,9 +225,10 @@ class ContextFst : public ImplToFst<internal::ContextFstImpl<Arc, LabelT>> {
              const vector<LabelT>& disambig_syms,  // symbols on output side of fst.
              const vector<LabelT>& dis2phone_map,
              int32 N,  // Size of context window
-             int32 P)  // Pos of "central" phone in ctx window, from 0..N-1.
+             int32 P,  // Pos of "central" phone in ctx window, from 0..N-1.
+             vector<vector<int32> >& ilabels_in)
       : ImplToFst<Impl>(std::make_shared<Impl>(
-            subsequential_symbol, phones, disambig_syms, dis2phone_map, N, P)) {
+            subsequential_symbol, phones, disambig_syms, dis2phone_map, N, P, ilabels_in)) {
     assert(std::numeric_limits<LabelT>::is_signed);
   }
 

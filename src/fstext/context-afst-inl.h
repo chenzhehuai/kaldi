@@ -94,9 +94,10 @@ ContextFstImpl<Arc, LabelT>::ContextFstImpl(Label subsequential_symbol,  // epsi
                                             const vector<LabelT> &disambig_syms,  // on output
                                             const vector<LabelT> &dis2phone_map,
                                             int N,
-                                            int P):
+                                            int P,
+                            vector<vector<int32> >& ilabels_in):
     phone_syms_(phone_syms),  disambig_syms_(disambig_syms),  dis2phone_map_(dis2phone_map), subsequential_symbol_(subsequential_symbol) ,
-    N_(N), P_(P) {
+    N_(N), P_(P){
 
   {  // This block checks the inputs.
     assert(subsequential_symbol != 0
@@ -109,6 +110,10 @@ ContextFstImpl<Arc, LabelT>::ContextFstImpl(Label subsequential_symbol,  // epsi
     for (size_t i = 0; i < phone_syms.size(); i++)
       assert(disambig_syms_.count(phone_syms[i]) == 0);
     assert(N>0 && P>=0 && P<N);
+    //init of ilabel_info_
+    for (auto val : ilabels_in) {
+        FindLabel(val);
+    }
   }
   SetType("context");
   assert(subsequential_symbol_ != 0);  // it's OK to be kNoLabel though, if it never appears in ifst.
@@ -527,7 +532,7 @@ inline void ComposeContext(const vector<int32> &disambig_syms_in,
   // if P == N-1, it's left-context, and no subsequential symbol needed.
   if (P != N-1)
     AddSubsequentialLoop(subseq_sym, ifst);
-  ContextFst<StdArc, int32> cfst(subseq_sym, phones, disambig_syms, dis2phone_map, N, P);
+  ContextFst<StdArc, int32> cfst(subseq_sym, phones, disambig_syms, dis2phone_map, N, P, *ilabels_out);
   ComposeContextFst(cfst, *ifst, ofst);
   *ilabels_out = cfst.ILabelInfo();
 }
