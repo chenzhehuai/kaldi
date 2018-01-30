@@ -136,6 +136,8 @@ ContextFstImpl<Arc, LabelT>::ContextFstImpl(Label subsequential_symbol,  // epsi
     // symbol table, if necessary.
     assert(pseudo_eps_symbol_ == 1);
   } else pseudo_eps_symbol_ = 0;  // use actual epsilon.
+
+  dis2phone_map_[0]=0; // support normal WFST start node
 }
 
 
@@ -242,7 +244,7 @@ bool ContextFstImpl<Arc, LabelT>::CreatePhoneOrEpsArc(StateId src,
 
   assert(phone_seq[P_] != subsequential_symbol_);  // would be coding error.
 
-  if (0 && phone_seq[P_] == 0) {  // this can happen at the beginning of the graph.
+  if (phone_seq.size()>P_ && phone_seq[P_] == 0) {  // this can happen at the beginning of the graph.
     // we don't output a real phone.  Epsilon arc (but sometimes we need to
     // use a special disambiguation symbol instead of epsilon).
     *oarc = Arc(pseudo_eps_symbol_, olabel, Weight::One(), dst);
@@ -308,7 +310,7 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
     // possibly changes the address.
     StateId nextstate = FindState(newseq);
 
-    if (dis2phone_map_[olabel] == olabel) { 
+    if (olabel==0 || dis2phone_map_[olabel] == olabel) { 
         phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
     } else if (dis2phone_map_[olabel] == -2) { //common suffix symbol #EOA
         phoneseq.resize(0);

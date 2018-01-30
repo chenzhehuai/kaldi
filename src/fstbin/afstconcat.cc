@@ -38,6 +38,7 @@ int main(int argc, char *argv[]) {
 
     const char *usage =
         "TODO\n"
+        "need to do eps removal\n"
         "Usage:  afstconcat (fst1-rxfilename|fst1-rspecifier) "
         "(fst2-rxfilename|fst2-rspecifier) [(out-rxfilename|out-rspecifier)]\n";
 

@@ -114,6 +114,7 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
         Weight final_weight = fst1->Final(arc.nextstate);
         if (final_weight == Weight::Zero()) {
             final_weight = 0;
+            KALDI_WARN << "call eps removal before this function ";
         }
         arc.nextstate = soa_of_new_fst2[arc.ilabel].first;
         arc.weight = arc.weight.Value()+soa_of_new_fst2[arc.ilabel].second.Value()+final_weight.Value();
