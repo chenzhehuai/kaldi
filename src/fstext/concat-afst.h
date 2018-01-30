@@ -112,6 +112,9 @@ void ConcatAfst(MutableFst<Arc> *fst1, const Fst<Arc> &fst2,
       if (s1 != start1 && soa_of_new_fst2.count(arc.ilabel) > 0
         && arc.nextstate != soa_of_new_fst2[arc.ilabel].first) {
         Weight final_weight = fst1->Final(arc.nextstate);
+        if (final_weight == Weight::Zero()) {
+            final_weight = 0;
+        }
         arc.nextstate = soa_of_new_fst2[arc.ilabel].first;
         arc.weight = arc.weight.Value()+soa_of_new_fst2[arc.ilabel].second.Value()+final_weight.Value();
         if (opts.del_disambig_sym)
