@@ -1,0 +1,1 @@
+get_afst.exp_1b.sh
