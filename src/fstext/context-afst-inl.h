@@ -20,6 +20,7 @@
 #ifndef KALDI_FSTEXT_CONTEXT_AFST_INL_H_
 #define KALDI_FSTEXT_CONTEXT_AFST_INL_H_
 #include "base/kaldi-common.h"
+#include "fstext/afst.h"
 #include "fstext/fstext-utils.h"
 
 // Do not include this file directly.  It is included by context-fst.h.
@@ -277,6 +278,7 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
                                             Arc *oarc) {
   // Returns true to indicate the arc exists.
 
+  uint64 dec_olabel = GetDecodedIlabel(olabel);
   if (olabel == 0) return false;  // No epsilon-output arcs in this FST.
 
   const vector<LabelT> &seq = state_seqs_[s];
@@ -309,20 +311,20 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
     // don't need to change and don't need context
     vector<LabelT> phoneseq(N_-1);
     // it's not AFST disambig symbols
-    if (dis2phone_map_[olabel] == olabel) {
+    if (dis2phone_map_[dec_olabel] == dec_olabel) {
         for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map_[seq[i]];
     }
     // possibly changes the address.
     StateId nextstate = FindState(newseq);
 
-    if (olabel==0 || dis2phone_map_[olabel] == olabel) { 
-        phoneseq.push_back(olabel);  // Now it's the full context window of size N_.
-    } else if (dis2phone_map_[olabel] == -2) { //common suffix symbol #EOA
+    if (dec_olabel==0 || dis2phone_map_[dec_olabel] == dec_olabel) { 
+        phoneseq.push_back(dec_olabel);  // Now it's the full context window of size N_.
+    } else if (dis2phone_map_[dec_olabel] == -2) { //common suffix symbol #EOA
         phoneseq.resize(0);
         phoneseq.push_back(-dis2phone_map_[seq[P_-1]]); // use the left context
     } else { //prefix symbols #SOA
         phoneseq.resize(0);
-        phoneseq.push_back(-dis2phone_map_[olabel]);  // olabel is a disambiguation symbol.  
+        phoneseq.push_back(-dis2phone_map_[dec_olabel]);  // olabel is a disambiguation symbol.  
         //Use its negative, so we can easily distinguish them. compare with
         //phone disambig_syms: ilabels[i].size() != 1
     }

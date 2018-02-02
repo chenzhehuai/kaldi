@@ -19,6 +19,7 @@
 #include <fst/expanded-fst.h>
 #include <fst/fst-decl.h>  // For optional argument declarations.
 #include <fst/matcher.h>
+#include <fstext/afst.h>
 #include <fst/replace-util.h>
 #include <fst/state-table.h>
 #include <fst/test-properties.h>
@@ -789,27 +790,18 @@ class AFSTReplaceFstImpl
   // Computes an arc in the FST corresponding to one in the underlying machine.
   // Returns false if the underlying arc corresponds to no arc in the resulting
   // FST.
-  Label EncodeIlabel(const StateTuple &tuple, const Arc &arc) {
+  Label IlabelEncode(const StateTuple &tuple, const Arc &arc) {
       if (tuple.prefix_id) {
         const auto &top = state_table_->GetStackPrefix(tuple.prefix_id).Top(); 
-        uint32 hfst_id = top.nextstate;
-        uint16 afst_id = top.fst_id;
-        uint16 disambig_sym = arc.ilabel;
-        uint64 ilabel = hfst_id;
-        ilabel=(ilabel<<16)+afst_id;
-        ilabel=(ilabel<<16)+disambig_sym;
+        uint64 ilabel;
+        EncodeIlabel(ilabel, top.nextstate, top.fst_id, arc.ilabel);
         ilabel_disambig_out_set_.emplace(ilabel);
         return ilabel;
       } else {
         return arc.ilabel;
       }
   }
-  void DecodeIlabel(const Label &ilabel, uint32 &hfst_id, uint16 &afst_id, uint16 &disambig_sym) {
-      disambig_sym = (uint16)ilabel;
-      afst_id = (uint16)(ilabel>>16);
-      hfst_id = (uint32)(ilabel>>32);
-      return;
-  }
+
   bool ComputeArc(const StateTuple &tuple, const Arc &arc, Arc *arcp,
                   uint32 flags = kArcValueFlags) {
     if (!EpsilonOnInput(call_label_type_) &&
@@ -824,7 +816,7 @@ class AFSTReplaceFstImpl
               ? state_table_->FindState(
                     StateTuple(tuple.prefix_id, tuple.fst_id, arc.nextstate))
               : kNoStateId;
-      Label ilabel = EncodeIlabel(tuple, arc);
+      Label ilabel = IlabelEncode(tuple, arc);
       *arcp = Arc(ilabel, arc.olabel, arc.weight, nextstate);
     } else {
       // Checks for non-terminal.
@@ -859,7 +851,7 @@ class AFSTReplaceFstImpl
                 ? state_table_->FindState(
                       StateTuple(tuple.prefix_id, tuple.fst_id, arc.nextstate))
                 : kNoStateId;
-        Label ilabel = EncodeIlabel(tuple, arc);
+        Label ilabel = IlabelEncode(tuple, arc);
         *arcp = Arc(ilabel, arc.olabel, arc.weight, nextstate);
       }
     }
