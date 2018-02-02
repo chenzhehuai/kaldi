@@ -8,17 +8,16 @@
 
 #include <string>
 #include <vector>
-
 #include <fst/flags.h>
-
+#include "base/kaldi-common.h"
+#include "util/common-utils.h"
+#include "fstext/kaldi-fst-io.h"
 #include "fst/replace-util.h"
-#include "fst/replace-afst.h"
+#include "fstext/replace-afst.h"
 
-DECLARE_string(call_arc_labeling);
-DECLARE_string(return_arc_labeling);
-DECLARE_bool(epsilon_on_replace);
+using LabelFstPair = std::pair<int, const fst::Fst<fst::StdArc> *>;
 
-void Cleanup(std::vector<fst::script::LabelFstClassPair> *pairs) {
+static void Cleanup(std::vector<LabelFstPair> *pairs) {
   for (const auto &pair : *pairs) {
     delete pair.second;
   }
@@ -26,7 +25,8 @@ void Cleanup(std::vector<fst::script::LabelFstClassPair> *pairs) {
 }
 
 static bool GetReplaceLabelType(const string &str, bool epsilon_on_replace,
-                         ReplaceLabelType *rlt) {
+                         fst::ReplaceLabelType *rlt) {
+  using namespace fst;
   if (epsilon_on_replace || str == "neither") {
     *rlt = REPLACE_LABEL_NEITHER;
   } else if (str == "input") {
@@ -41,6 +41,15 @@ static bool GetReplaceLabelType(const string &str, bool epsilon_on_replace,
   return true;
 }
 
+template <class Int>
+static bool WriteIntVectorSimple(std::string wxfilename,
+                              const std::vector<Int> &list) {
+  kaldi::Output ko;
+  // false, false is: text-mode, no Kaldi header.
+  if (!ko.Open(wxfilename, false, false)) return false;
+  for (size_t i = 0; i < list.size(); i++) ko.Stream() << list[i] << '\n';
+  return ko.Close();
+}
 
 int main(int argc, char **argv) {
   try {
@@ -50,10 +59,9 @@ int main(int argc, char **argv) {
 
     std::string call_arc_labeling = "input", disambig_wxfilename;
     std::string return_arc_labeling = "neither";
-    int64 return_label = 0;
+    int32 return_label = 0;
     bool epsilon_on_replace = true;
 
-    string usage = 
     const char *usage = "Recursively replaces FST arcs with other FST(s).\n\n"
                    "  Usage: "
                    "afstreplace root.fst rootlabel [rule1.fst label1 ...] [out.fst]\n";
@@ -75,14 +83,14 @@ int main(int argc, char **argv) {
     
 
     const string in_name = po.GetArg(1);
-    const string out_name = po.NumArgs() % 2 == 1 ? po.GetArg(po.NumArgs()) : "";
+    const string fst_out_str = po.NumArgs() % 2 == 1 ? po.GetArg(po.NumArgs()) : "";
 
     //auto *ifst = FstClass::Read(in_name);
     VectorFst<StdArc> *ifst = ReadFstKaldi(in_name);
     
     if (!ifst) return 1;
 
-    std::vector<std::pair<int64, const Fst *>> pairs;
+    std::vector<LabelFstPair> pairs;
     // Note that if the root label is beyond the range of the underlying FST's
     // labels, truncation will occur.
     const auto root = atoll(argv[2]);
@@ -96,7 +104,7 @@ int main(int argc, char **argv) {
       }
       // Note that if the root label is beyond the range of the underlying FST's
       // labels, truncation will occur.
-      const auto label = atoll(po.GetArg(i+1));
+      const auto label = atoll(po.GetArg(i+1).c_str());
       pairs.emplace_back(label, ifst);
     }
 
@@ -112,21 +120,26 @@ int main(int argc, char **argv) {
       KALDI_ERR << argv[0] << ": Unknown or unsupported return arc replace "
                  << "label type: " << return_arc_labeling;
     }
-    ReplaceFstOptions opts(root, call_label_type, return_label_type, 
+    AFSTReplaceFstOptions<StdArc> opts(root, call_label_type, return_label_type, 
                            return_label);
     VectorFst<StdArc> ofst;
-    Replace(pairs, &ofst, opts);
-    WriteFstKaldi(ofst, fst_out_str);
-    std::std::vector<uint64> ilabel_disambig_out_vec;
+
     if (disambig_wxfilename != "") {
-      GetIlabelDisambigOut(ofst, ilabel_disambig_out_vec);
-      if (!WriteIntegerVectorSimple(disambig_wxfilename, ilabel_disambig_out_vec)) {
+      std::vector<uint64> ilabel_disambig_out_vec;
+      AFSTReplace(pairs, &ofst, ilabel_disambig_out_vec, opts);
+      if (!WriteIntVectorSimple(disambig_wxfilename, ilabel_disambig_out_vec)) {
           KALDI_ERR << "Could not write disambiguation symbols to "
                     << PrintableWxfilename(disambig_wxfilename) << '\n';
           return 1;
       }
+    } else {
+      AFSTReplace(pairs, &ofst, opts);
     }
+    WriteFstKaldi(ofst, fst_out_str);
     Cleanup(&pairs);
     return 0;
+  } catch(const std::exception &e) {
+    std::cerr << e.what();
+    return -1;
   }
 }

@@ -14,7 +14,7 @@ BINFILES = fstdeterminizestar  \
            fstrmsymbols fstisstochastic fstminimizeencoded fstmakecontextfst \
            fstmakecontextsyms fstaddsubsequentialloop fstaddselfloops  \
            fstrmepslocal fstcomposecontext fsttablecompose fstrand \
-		   afstconcat afstcomposecontext \
+		   afstconcat afstcomposecontext afstreplace \
            fstdeterminizelog fstphicompose fstcopy \
            fstpushspecial fsts-to-transcripts fsts-project fsts-union
 
