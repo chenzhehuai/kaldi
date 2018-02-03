@@ -1,7 +1,7 @@
 #!/bin/bash
 
 dir=data_afst/toy.3a
-stage=3
+stage=4
 tree_dir=exp/chain${nnet3_affix}/tree_sp${tree_affix:+_$tree_affix}
 LANG=data/lang_nosp/
 #LANG=data/lang_chain
@@ -73,9 +73,39 @@ fi
 if [ $stage -le 3 ]; then
 tdir=$dir/hfst
 bash script/get_hfst_1a.sh $tdir $LANG $tree_dir "$AFST_names"
+fi
+
+if [ $stage -le 4 ]; then
+
+for na in $AFST_names
+do
+  tdir=$dir/$na
+  cp $dir/hfst/{phones.afst.txt,LG.fst.dis.map,SOA.int,EOA.fst} $tdir/
+bash script/get_afst_1c.sh $tdir $LANG $tree_dir
+  bash script/get_afst_1c.sh  --nohead false $tdir  $LANG $tree_dir 
+done
+fi
+
+exit
+
+if [ $stage -le 5 ]; then
+fstarcsort --sort_type=olabel $dir/proposed2/oovh/hclga.fst \
+| afstconcat $tdir/disambig_tid.int - $dir/proposed2/oovadd/hclga.fst \
+| fstarcsort --sort_type=olabel  \
+    | afstconcat $tdir/disambig_tid.int  - $dir/proposed2/oov/hclga.fst \
+    > $tdir/hclga.fst
+#normal procedure
+cat $tdir/hclga.fst \
+| fstdeterminize \
+|  fstrmsymbols $tdir/disambig_tid.int - | \
+ fstrmepslocal | \
+     fstminimizeencoded > $tdir/HCLGa.fst || exit 1;
+  fstisstochastic $tdir/HCLGa.fst || echo "HCLGa is not stochastic"
+  add-self-loops --self-loop-scale=1.0 --reorder=true \
+    $tree_dir/final.mdl< $tdir/HCLGa.fst | fstconvert --fst_type=const > $tdir/HCLG.fst || exit 1;
+cp $dir/proposed2/oov/words.txt $tdir/
 
 fi
-exit
 
 #baseline 0
 if [ $stage -le 3 ]; then
@@ -180,46 +210,6 @@ cp $dir/proposed1/oov/words.txt $tdir/
 
 fi
 }
-
-#proposed method 
-if [ $stage -le 7 ]; then
-
-mkdir -p $dir/proposed2
-cp -a $dir/{oov,oovadd} $dir/proposed2/
-cp -a $dir/oov $dir/proposed2/oovh
-
-for tdir in $dir/proposed2/oovadd $dir/proposed2/oov
-do
-#false && \
-    {
-bash script/get_afst_1b.sh $tdir $LANG $tree_dir
-}
-#process ilabel to make two afst consistent
-#because diff ilabels, first compose H; after that, we can concat AFSTs; make Ha.fst respectively
-done
-bash script/get_afst_1b.sh --composeaddin "--read-ilabel-info=$dir/proposed2/oov/ilabels.2 " --nohead true $dir/proposed2/oovh  $LANG $tree_dir 
-
-tdir=$dir/proposed2/
-#use the larger disambig_tid.int for removal
-cp $dir/proposed2/oov/disambig_tid.int $tdir/disambig_tid.int
-fstarcsort --sort_type=olabel $dir/proposed2/oovh/hclga.fst \
-| afstconcat $tdir/disambig_tid.int - $dir/proposed2/oovadd/hclga.fst \
-| fstarcsort --sort_type=olabel  \
-    | afstconcat $tdir/disambig_tid.int  - $dir/proposed2/oov/hclga.fst \
-    > $tdir/hclga.fst
-#normal procedure
-cat $tdir/hclga.fst \
-| fstdeterminize \
-|  fstrmsymbols $tdir/disambig_tid.int - | \
- fstrmepslocal | \
-     fstminimizeencoded > $tdir/HCLGa.fst || exit 1;
-  fstisstochastic $tdir/HCLGa.fst || echo "HCLGa is not stochastic"
-  add-self-loops --self-loop-scale=1.0 --reorder=true \
-    $tree_dir/final.mdl< $tdir/HCLGa.fst | fstconvert --fst_type=const > $tdir/HCLG.fst || exit 1;
-cp $dir/proposed2/oov/words.txt $tdir/
-
-fi
-
 
 #concat 2 AFSTs to get the decodable search space
 if [ $stage -le 8 ]; then

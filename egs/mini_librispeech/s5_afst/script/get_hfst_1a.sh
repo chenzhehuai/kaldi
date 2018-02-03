@@ -1,6 +1,7 @@
 
 nohead=false
 composeaddin=""
+stage=3
 
 . path.sh
 . ./utils/parse_options.sh
@@ -12,10 +13,11 @@ lang=$2
 tree_dir=$3
 AFST_names="$4"
 
+if [ $stage -le 1 ];then
 #new phones.txt including EOA & SOA symbols
 #the last one is always the common #EOA
-awk -v nas="$AFST_names" '$0!~"#"{d[$2]=$1;f=$2}{print $1,$2,$2;fa=$2}END{split(nas,naa," ");c=fa+1;for (na in naa){for (i=1;i<=f;i++){print "#"d[i]"#"naa[na],c,i;c++}};print "#EOA",c,-2}' $lang/phones.txt \
-    | awk -v tdir=$tdir 'BEGIN{printf"">tdir"/phones.afst.txt";printf"">tdir"/dis.map"}{print $1,$2 >>tdir"/phones.afst.txt";print $2,$3>>tdir"/dis.map" }' 
+awk  '$0!~"#"{d[$2]=$1;f=$2}$0!~"<eps>"{print $1,$2,$2;fa=$2}END{c=fa+1;{for (i=1;i<=f;i++){print "#"d[i],c,i;c++}};print "#EOA",c,-2}' $lang/phones.txt \
+    | awk -v tdir=$tdir 'BEGIN{printf"">tdir"/phones.afst.txt";printf"">tdir"/LG.fst.dis.map"}{print $1,$2 >>tdir"/phones.afst.txt";print $2,$3>>tdir"/LG.fst.dis.map" }' 
 
 
 for i in end singleton nonword begin 
@@ -31,29 +33,38 @@ echo "#EOA" | sym2int.pl $tdir/phones.afst.txt -  | awk '{print 0,1,$1,0;print 1
 
 #| afstcomposecontext $composeaddin --binary=false --context-size=2 --central-position=1 --read-disambig-syms=$lang/phones/disambig.int --write-disambig-syms=$tdir/disambig_ilabels.int --write-disambig-afst-syms=$tdir/disambig_ilabels_afst.int $tdir/dis.map $tdir/ilabels.int - \
 
-cp $tdir/LG.fst $tdir/LG.afst
-for i in  $AFST_names; do
 #e.g. only word_end symbols can be connected to the start of AFST
 unused_id=`awk 'END{print $2+1}' $tdir/words.txt`
 cat $tdir/SOA.int \
-    | awk -v na=$i 'NR==FNR{d[$1]=$2}NR!=FNR{print 0,1,d["#"$1"#"na],0}END{print 1}' $tdir/phones.afst.txt -  | fstcompile - \
+    | awk  'NR==FNR{d[$1]=$2}NR!=FNR{print 0,1,d["#"$1],0}END{print 1}' $tdir/phones.afst.txt -  | fstcompile - \
 |fstconcat - $tdir/EOA.fst \
  > $tdir/SOAEOA.fst
+fi
 
-afst_id=`echo $i | sym2int.pl $tdir/words.txt - `
-fstreplace  --epsilon_on_replace $tdir/LG.afst $unused_id $tdir/SOAEOA.fst $afst_id  $tdir/LG.afst.$$
-mv $tdir/LG.afst.$$ $tdir/LG.afst
+if [ $stage -le 2 ];then
+afst_cmds=""
+for i in $AFST_names; do
+afst_id=`echo $i | sym2int.pl $tdir/words.txt - | awk '{print $1}'`
+afst_cmds=$afst_cmds" $tdir/SOAEOA.fst $afst_id " 
 done
 
-exit
+afstreplace  --write-disambig-syms=$tdir/LG.afst.disam.int --epsilon_on_replace $tdir/LG.fst $unused_id $afst_cmds  $tdir/LG.afst.$$
+mv $tdir/LG.afst.$$ $tdir/LG.afst
+
+#gen dis.map.LG.afst
+#awk 'NR==FNR{d[$1]=$2;print}NR!=FNR{did=$1%65536;if (d[did]==""){print "ERROR in "did; exit}print $1,d[did]}' $tdir/LG.fst.dis.map $tdir/LG.afst.disam.int > $tdir/LG.afst.dis.map
 
 #call new fstcomposecontext; process left-context correctly; #EOA & #SOA are consistent
 cat $tdir/LG.afst \
-| afstcomposecontext $composeaddin --binary=false --context-size=2 --central-position=1 --read-disambig-syms=$lang/phones/disambig.int --write-disambig-syms=$tdir/disambig_ilabels_2_1.int.2 --write-disambig-afst-syms=$tdir/disambig_ilabels_afst.int $tdir/dis.map $tdir/ilabels.2 - \
+| afstcomposecontext $composeaddin --binary=false --context-size=2 --central-position=1 --read-disambig-syms=$lang/phones/disambig.int --write-disambig-syms=$tdir/CLG.afst.disambig_ilabels_2_1.int --write-disambig-afst-syms=$tdir/CLG.afst.disambig_ilabels_afst.int $tdir/LG.fst.dis.map $tdir/CLG.afst.ilabels - \
 > $tdir/CLG.afst
+fi
+
+if [ $stage -le 3 ];then
 
 make-h-transducer --disambig-syms-out=$tdir/disambig_tid.int \
-    --transition-scale=1.0 $tdir/ilabels.2 $tree_dir/tree $tree_dir/final.mdl \
+    --disambig-syms-map-out=$tdir/hclga.fst.disam.map \
+    --transition-scale=1.0 $tdir/CLG.afst.ilabels $tree_dir/tree $tree_dir/final.mdl \
     | fstarcsort --sort_type=olabel - \
      > $tdir/Ha.fst
 #NOTICE: weight pushing is important becuase afstconcat will ignore the weight after EOA symbols
@@ -61,6 +72,8 @@ cat $tdir/CLG.afst \
 | fstarcsort --sort_type=ilabel -  \
 |  fsttablecompose $tdir/Ha.fst - \
 | fstdeterminizestar --use-log=true \
+|    fstminimizeencoded \
+|    fstarcsort --sort_type=ilabel  \
     > $tdir/hclga.fst
 
-
+fi
