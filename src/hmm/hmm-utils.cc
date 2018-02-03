@@ -300,7 +300,10 @@ fst::VectorFst<fst::StdArc> *GetHTransducer (const std::vector<std::vector<int32
   DeletePointers(&fsts);
 
   for( const auto& n : disambig_syms_map ) {
-    disambig_syms_map_out->emplace_back(n.first, n.second);
+    std::vector<int32> t;
+    t.push_back(n.first);
+    t.push_back(n.second);
+    disambig_syms_map_out->emplace_back(t);
   }
   return ans;
 }

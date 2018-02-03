@@ -121,7 +121,7 @@ GetHTransducer (const std::vector<std::vector<int32> > &ilabel_info,
                 const TransitionModel &trans_model,
                 const HTransducerConfig &config,
                 std::vector<int32> *disambig_syms_left,
-                std::vector<std::vector<int32> > *disambig_syms_map_out);
+                std::vector<std::vector<int32> > *disambig_syms_map_out = NULL);
 
 /**
   * GetIlabelMapping produces a mapping that's similar to HTK's logical-to-physical

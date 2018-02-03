@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
 
     HTransducerConfig hcfg;
-    std::string disambig_out_filename;
+    std::string disambig_out_filename, disambig_out_map_filename;
     hcfg.Register(&po);
     po.Register("disambig-syms-out", &disambig_out_filename, "List of disambiguation symbols on input of H [to be output from this program]");
     po.Register("disambig-syms-map-out", &disambig_out_map_filename, "List of disambiguation symbols map between input and output of H ");
@@ -99,7 +99,7 @@ int main(int argc, char *argv[]) {
                        "standard output" : disambig_out_filename);
     }
     if (disambig_out_map_filename != "") {
-      if (! WriteIntegerVectorVectorSimple(disambig_out_filename, disambig_syms_map_out))
+      if (! WriteIntegerVectorVectorSimple(disambig_out_map_filename, disambig_syms_map_out))
         KALDI_ERR << "Could not write disambiguation symbols to "
                    << (disambig_out_map_filename == "" ?
                        "standard output" : disambig_out_map_filename);
