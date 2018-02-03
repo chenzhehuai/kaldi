@@ -11,11 +11,24 @@
 #include <fst/flags.h>
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
+
+#include <fst/fstlib.h>
+#include <fst/fst-decl.h>
+#include <fst/script/print-impl.h>
 #include "fstext/kaldi-fst-io.h"
+
 #include "fst/replace-util.h"
 #include "fstext/replace-afst.h"
 
-using LabelFstPair = std::pair<int, const fst::Fst<fst::StdArc> *>;
+//namespace fst {
+//fst::VectorFst<afst::StdArc> *ReadFstKaldi(std::string rxfilename);
+//
+//
+//void WriteFstKaldi(const fst::VectorFst<afst::StdArc> &fst,
+//                   std::string wxfilename);
+//}
+
+using LabelFstPair = std::pair<typename afst::StdArc::Label, const fst::Fst<afst::StdArc> *>;
 
 static void Cleanup(std::vector<LabelFstPair> *pairs) {
   for (const auto &pair : *pairs) {
@@ -86,9 +99,9 @@ int main(int argc, char **argv) {
     const string fst_out_str = po.NumArgs() % 2 == 1 ? po.GetArg(po.NumArgs()) : "";
 
     //auto *ifst = FstClass::Read(in_name);
-    VectorFst<StdArc> *ifst = ReadFstKaldi(in_name);
-    
-    if (!ifst) return 1;
+    VectorFst<afst::StdArc>* ifst=new VectorFst<afst::StdArc>();
+    kaldi::Input ki(in_name);
+    ReadFstKaldi(ki.Stream(), false, ifst); //because of format problem, use text
 
     std::vector<LabelFstPair> pairs;
     // Note that if the root label is beyond the range of the underlying FST's
@@ -97,7 +110,9 @@ int main(int argc, char **argv) {
     pairs.emplace_back(root, ifst);
 
     for (auto i = 3; i < po.NumArgs(); i += 2) {
-      VectorFst<StdArc> *ifst = ReadFstKaldi(po.GetArg(i));
+    VectorFst<afst::StdArc>* ifst=new VectorFst<afst::StdArc>();
+    kaldi::Input ki(po.GetArg(i));
+    ReadFstKaldi(ki.Stream(), false, ifst);
       if (!ifst) {
         Cleanup(&pairs);
         return 1;
@@ -120,9 +135,9 @@ int main(int argc, char **argv) {
       KALDI_ERR << argv[0] << ": Unknown or unsupported return arc replace "
                  << "label type: " << return_arc_labeling;
     }
-    AFSTReplaceFstOptions<StdArc> opts(root, call_label_type, return_label_type, 
+    AFSTReplaceFstOptions<afst::StdArc> opts(root, call_label_type, return_label_type, 
                            return_label);
-    VectorFst<StdArc> ofst;
+    VectorFst<afst::StdArc> ofst;
 
     if (disambig_wxfilename != "") {
       std::vector<uint64> ilabel_disambig_out_vec;
@@ -135,7 +150,8 @@ int main(int argc, char **argv) {
     } else {
       AFSTReplace(pairs, &ofst, opts);
     }
-    WriteFstKaldi(ofst, fst_out_str);
+    kaldi::Output ko(fst_out_str, false, false);
+    WriteFstKaldi(ko.Stream(), false, ofst);
     Cleanup(&pairs);
     return 0;
   } catch(const std::exception &e) {

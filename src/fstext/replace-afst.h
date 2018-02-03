@@ -794,7 +794,7 @@ class AFSTReplaceFstImpl
       if (tuple.prefix_id) {
         const auto &top = state_table_->GetStackPrefix(tuple.prefix_id).Top(); 
         uint64 ilabel;
-        EncodeIlabel(ilabel, top.nextstate, top.fst_id, arc.ilabel);
+        afst::EncodeIlabel(ilabel, top.nextstate, top.fst_id, arc.ilabel);
         ilabel_disambig_out_set_.emplace(ilabel);
         return ilabel;
       } else {
@@ -1445,8 +1445,6 @@ inline void AFSTReplaceFst<Arc, StateTable, CacheStore>::InitStateIterator(
       new StateIterator<AFSTReplaceFst<Arc, StateTable, CacheStore>>(*this);
 }
 
-using StdAFSTReplaceFst = AFSTReplaceFst<StdArc>;
-
 // Recursively replaces arcs in the root FSTs with other FSTs.
 // This version writes the result of replacement to an output MutableFst.
 //
@@ -1506,9 +1504,10 @@ void AFSTReplace(const std::vector<std::pair<typename Arc::Label, const Fst<Arc>
   AFSTReplace(ifst_array, ofst, AFSTReplaceFstOptions<Arc>(root));
 }
 
-void GetIlabelDisambigOut(Fst<StdArc>* ifst, 
+template <class Arc>
+void GetIlabelDisambigOut(Fst<Arc>* ifst, 
   std::vector<uint64>& ilabel_disambig_out_vec) {
-  AFSTReplaceFst<StdArc>* fst = dynamic_cast<AFSTReplaceFst <StdArc>*>(ifst); 
+  AFSTReplaceFst<Arc>* fst = dynamic_cast<AFSTReplaceFst <Arc>*>(ifst); 
   if (!fst) {
     KALDI_ERR << "Could not get disambiguation symbols";
     return;
