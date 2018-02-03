@@ -793,8 +793,8 @@ class AFSTReplaceFstImpl
   Label IlabelEncode(const StateTuple &tuple, const Arc &arc) {
       if (tuple.prefix_id) {
         const auto &top = state_table_->GetStackPrefix(tuple.prefix_id).Top(); 
-        uint64 ilabel;
-        EncodeIlabel(ilabel, top.nextstate, top.fst_id, arc.ilabel);
+        uint32 ilabel;
+        afst::EncodeIlabel(ilabel, tuple.prefix_id, top.fst_id, arc.ilabel);
         ilabel_disambig_out_set_.emplace(ilabel);
         return ilabel;
       } else {
@@ -883,7 +883,7 @@ class AFSTReplaceFstImpl
   // Returns true if label type on call arc results in epsilon input label.
   bool EpsilonOnCallInput() { return EpsilonOnInput(call_label_type_); }
 
-  const void GetIlabelDisambigOutSet(std::vector<uint64>& ilabel_disambig_out_vec) const {
+  const void GetIlabelDisambigOutSet(std::vector<uint32>& ilabel_disambig_out_vec) const {
     for ( auto it = ilabel_disambig_out_set_.begin(); 
       it != ilabel_disambig_out_set_.end(); ++it ) {
       ilabel_disambig_out_vec.push_back(*it);
@@ -919,7 +919,7 @@ class AFSTReplaceFstImpl
   std::unique_ptr<StateTable> state_table_;
 
   // for AFST
-  std::unordered_set<uint64> ilabel_disambig_out_set_;
+  std::unordered_set<uint32> ilabel_disambig_out_set_;
 
   // Replace components.
   std::set<Label> nonterminal_set_;
@@ -1035,7 +1035,7 @@ class AFSTReplaceFst
   const Fst<Arc> &GetFst(Label nonterminal) const {
     return *GetImpl()->GetFst(GetImpl()->GetFstId(nonterminal));
   }
-  const void GetIlabelDisambigOutSet(std::vector<uint64>& ilabel_disambig_out_vec) const {
+  const void GetIlabelDisambigOutSet(std::vector<uint32>& ilabel_disambig_out_vec) const {
     return GetImpl()->GetIlabelDisambigOutSet(ilabel_disambig_out_vec);
   }
 
@@ -1474,7 +1474,7 @@ template <class Arc>
 void AFSTReplace(const std::vector<std::pair<typename Arc::Label, const Fst<Arc> *>>
                  &ifst_array,
              MutableFst<Arc> *ofst,
-             std::vector<uint64>& ilabel_disambig_out_vec,
+             std::vector<uint32>& ilabel_disambig_out_vec,
              AFSTReplaceFstOptions<Arc> opts = AFSTReplaceFstOptions<Arc>()) {
   opts.gc = true;
   opts.gc_limit = 0;  // Caches only the last state for fastest copy.
@@ -1507,7 +1507,7 @@ void AFSTReplace(const std::vector<std::pair<typename Arc::Label, const Fst<Arc>
 }
 
 void GetIlabelDisambigOut(Fst<StdArc>* ifst, 
-  std::vector<uint64>& ilabel_disambig_out_vec) {
+  std::vector<uint32>& ilabel_disambig_out_vec) {
   AFSTReplaceFst<StdArc>* fst = dynamic_cast<AFSTReplaceFst <StdArc>*>(ifst); 
   if (!fst) {
     KALDI_ERR << "Could not get disambiguation symbols";

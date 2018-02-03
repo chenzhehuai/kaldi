@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
     VectorFst<StdArc> ofst;
 
     if (disambig_wxfilename != "") {
-      std::vector<uint64> ilabel_disambig_out_vec;
+      std::vector<uint32> ilabel_disambig_out_vec;
       AFSTReplace(pairs, &ofst, ilabel_disambig_out_vec, opts);
       if (!WriteIntVectorSimple(disambig_wxfilename, ilabel_disambig_out_vec)) {
           KALDI_ERR << "Could not write disambiguation symbols to "

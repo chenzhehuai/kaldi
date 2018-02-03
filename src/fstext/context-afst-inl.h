@@ -278,7 +278,7 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
                                             Arc *oarc) {
   // Returns true to indicate the arc exists.
 
-  uint64 dec_olabel = GetDecodedIlabel(olabel);
+  uint32 dec_olabel = afst::GetDecodedIlabel(olabel);
   if (olabel == 0) return false;  // No epsilon-output arcs in this FST.
 
   const vector<LabelT> &seq = state_seqs_[s];
@@ -312,7 +312,7 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
     vector<LabelT> phoneseq(N_-1);
     // it's not AFST disambig symbols
     if (dis2phone_map_[dec_olabel] == dec_olabel) {
-        for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map_[seq[i]];
+        for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map_[afst::GetDecodedIlabel(seq[i])];
     }
     // possibly changes the address.
     StateId nextstate = FindState(newseq);
@@ -324,7 +324,7 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
         phoneseq.push_back(-dis2phone_map_[seq[P_-1]]); // use the left context
     } else { //prefix symbols #SOA
         phoneseq.resize(0);
-        phoneseq.push_back(-dis2phone_map_[dec_olabel]);  // olabel is a disambiguation symbol.  
+        phoneseq.push_back(-olabel);  // olabel is a disambiguation symbol.  
         //Use its negative, so we can easily distinguish them. compare with
         //phone disambig_syms: ilabels[i].size() != 1
     }
