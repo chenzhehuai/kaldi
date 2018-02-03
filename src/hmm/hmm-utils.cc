@@ -239,7 +239,8 @@ fst::VectorFst<fst::StdArc> *GetHTransducer (const std::vector<std::vector<int32
                                              const ContextDependencyInterface &ctx_dep,
                                              const TransitionModel &trans_model,
                                              const HTransducerConfig &config,
-                                             std::vector<int32> *disambig_syms_left) {
+                                             std::vector<int32> *disambig_syms_left,
+                      std::vector<std::vector<int32> > *disambig_syms_map_out) {
   KALDI_ASSERT(ilabel_info.size() >= 1 && ilabel_info[0].size() == 0);  // make sure that eps == eps.
   HmmCacheType cache;
   // "cache" is an optimization that prevents GetHmmAsFst repeating work
@@ -258,6 +259,8 @@ fst::VectorFst<fst::StdArc> *GetHTransducer (const std::vector<std::vector<int32
 
   int32 first_disambig_sym = trans_model.NumTransitionIds() + 1;  // First disambig symbol we can have on the input side.
   int32 next_disambig_sym = first_disambig_sym;
+  
+  unordered_map<int32, int32> disambig_syms_map;
 
   if (ilabel_info.size() > 0)
     KALDI_ASSERT(ilabel_info[0].size() == 0);  // make sure epsilon is epsilon...
@@ -278,6 +281,7 @@ fst::VectorFst<fst::StdArc> *GetHTransducer (const std::vector<std::vector<int32
       fst->SetFinal(1, Weight::One());
       fst->AddArc(0, Arc(disambig_sym_left, disambig_sym_left, Weight::One(), 1));
       fsts[j] = fst;
+      disambig_syms_map[disambig_sym_left] = -ilabel_info[j][0];
     } else {  // Real phone-in-context.
       std::vector<int32> phone_window = ilabel_info[j];
 
@@ -294,6 +298,10 @@ fst::VectorFst<fst::StdArc> *GetHTransducer (const std::vector<std::vector<int32
   SortAndUniq(&fsts); // remove duplicate pointers, which we will have
   // in general, since we used the cache.
   DeletePointers(&fsts);
+
+  for( const auto& n : disambig_syms_map ) {
+    disambig_syms_map_out->emplace_back(n.first, n.second);
+  }
   return ans;
 }
 
