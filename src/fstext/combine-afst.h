@@ -34,7 +34,7 @@ public:
   using DisamSymMap = unordered_map<Label, Label>;
 
 
-  AFSTCombine(AfstCombineOptions opts) : opts_(opts), afst_num_(0), 
+  AFSTCombine(AfstCombineOptions opts) : opts_(opts), afst_num_(0), hfstid_num_(0),
               disambig_sym_start_(std::INT_MAX), disambig_sym_end_(0) {}
 
   CombineAfst() {
@@ -47,7 +47,32 @@ public:
   }
 
   int CombineMain() {
-
+    const auto numstates1 = hfst_.NumStates();
+    for (StateId s1 = 0; s1 < numstates1; ++s1) {
+      for (ArcIterator<Fst<Arc>> aiter(fst, s1); !aiter.Done(); aiter.Next()) {
+        auto arc = aiter.Value();
+        uint16 hfst_id, afst_id, disam_id;
+        DecodeIlabel(arc.ilabel, hfst_id, afst_id, disam_id);
+        assert(hfst_disam_map_.count(disam_id) > 0) //it's disambig
+        if (hfst_id) { //disam_id arc, to be connected to AFSTs
+          if (hfstid2vecid_map_.count(hfst_id) == 0) {
+            hfstid_soa_eoa_pair_vec_vec_.emplace_back();
+            SoaEoaPairVec.resize(disambig_sym_end_ - disambig_sym_start_ + 1);
+            hfstid2vecid_map_[hfst_id] = hfstid_num_;
+            hfstid_num_++;
+          }
+          SoaEoaPairVec& pair_vec = hfstid_soa_eoa_pair_vec_vec_[
+                                    hfstid2vecid_map_[hfst_id]];
+          //according to SOA or EOA, modify the pair.first or pair.second
+          SoaEoaPair& pair = pair_vec[disam_id - disambig_sym_start_];
+          if (disam_id%2 == 0) { // SOA HFST-right-E
+            pair.first = arc.nextstate;
+          } else { //EOA HFST-left-S
+            pair.second = s1;
+          }
+        }
+      }
+    }
 
     if (opts_.del_disambig_sym || opts_.connect) {
       assert(0);
@@ -71,8 +96,14 @@ public:
     afst_vec_.emplace_back();
     LoadFstWithSymMap(fst_name, map_name, afst_vec_[afst_num_], 
                       afst_disam_map_vec_[afst_num_]);
+
+    afst_soa_eoa_pair_vec_vec_.emplace_back();
+    InitAfstSoaEoaPair(afst_vec_[afst_num_], afst_disam_map_vec_[afst_num_],
+                        afst_soa_eoa_pair_vec_vec_[afst_num_])
     afst_num_++;
   }
+
+private:
 
   // NOTICE: actually, this information can be saved in previous processing
   void InitAfstSoaEoaPair(Fst& fst, DisamSymMap& map, SoaEoaPairVec& info_pair_vec) {
@@ -84,11 +115,11 @@ public:
         if (map.count(arc.ilabel) > 0) {//it's disambig
           //get which pair from map[arc.ilabel];
           //according to SOA or EOA, modify the pair.first or pair.second
-          Label disam_id = map[arc.ilabel];
+          Label disam_id = afst::GetDecodedIlabel(map[arc.ilabel]);
           SoaEoaPair& pair = info_pair_vec[disam_id - disambig_sym_start_];
-          if it is SOA {
+          if (disam_id%2 == 0) { // SOA AFST-left-E
             pair.first = arc.nextstate;
-          } else {
+          } else { //EOA AFST-right-S
             pair.second = s1;
           }
         }
@@ -96,8 +127,6 @@ public:
     }
   }
 
-
-private:
   int LoadFstWithSymMap(const std::string& fst_name, const std::string& map_name,
                         Fst*& fst, DisamSymMap& map) {
     fst = ReadFstKaldi(fst_name);
@@ -126,15 +155,20 @@ private:
 
   std::unordered_map<int32, int32> afstid2vecid_map_;
   std::vector<DisamSymMap> afst_disam_map_vec_;
+  //each afst needs a vec of pairs
   std::vector<SoaEoaPairVec> afst_soa_eoa_pair_vec_vec_;
   std::vector<Fst*> afst_vec_;
   int32 afst_num_;
   int32 disambig_sym_start_;
   int32 disambig_sym_end_;
 
-  SoaEoaPairVec hfst_soa_eoa_pair_vec_;
+  std::unordered_map<int32, int32> hfstid2vecid_map_;
+  //each hfstid needs a vec of pairs
+  std::vector<SoaEoaPairVec> hfstid_soa_eoa_pair_vec_vec_; 
   DisamSymMap hfst_disam_map_;
   MutableFst<Arc>* hfst_;
+  int32 hfstid_num_;
+
   AfstCombineOptions opts_;
 }
 
