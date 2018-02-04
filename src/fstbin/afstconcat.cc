@@ -42,6 +42,7 @@ int main(int argc, char *argv[]) {
         "Usage:  afstconcat (fst1-rxfilename|fst1-rspecifier) "
         "(fst2-rxfilename|fst2-rspecifier) [(out-rxfilename|out-rspecifier)]\n";
 
+    KALDI_ERR << "this tool is out of date after e15fdc81f2601e740dd373ca50ad8b2f2044a601";
     ParseOptions po(usage);
 
     AfstConcatOptions opts;

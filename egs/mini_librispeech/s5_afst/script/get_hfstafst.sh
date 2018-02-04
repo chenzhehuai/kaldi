@@ -1,7 +1,7 @@
 #!/bin/bash
 
 dir=data_afst/toy.3a
-stage=4
+stage=3
 tree_dir=exp/chain${nnet3_affix}/tree_sp${tree_affix:+_$tree_affix}
 LANG=data/lang_nosp/
 #LANG=data/lang_chain
@@ -72,7 +72,7 @@ fi
 
 if [ $stage -le 3 ]; then
 tdir=$dir/hfst
-bash script/get_hfst_1a.sh $tdir $LANG $tree_dir "$AFST_names"
+bash script/get_hfst_1c.sh $tdir $LANG $tree_dir "$AFST_names"
 fi
 
 if [ $stage -le 4 ]; then
@@ -82,7 +82,7 @@ do
   tdir=$dir/$na
   cp $dir/hfst/{phones.afst.txt,LG.fst.dis.map,SOA.int,EOA.fst} $tdir/
 bash script/get_afst_1c.sh $tdir $LANG $tree_dir
-  bash script/get_afst_1c.sh  --nohead false $tdir  $LANG $tree_dir 
+  bash script/get_afst_1d.sh  --nohead false $tdir  $LANG $tree_dir 
 done
 fi
 
