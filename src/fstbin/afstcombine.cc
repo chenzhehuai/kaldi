@@ -24,7 +24,8 @@ int main(int argc, char **argv) {
     string disambig_wxfilename;
     const char *usage = "Recursively replaces FST arcs with other FST(s).\n\n"
                    "  Usage: "
-                   "afstcombine root.fst labelmap [rule1.fst label1 labelmap  ...] [out.fst]\n";
+                   "afstcombine root.fst labelmap 364 713 \
+                    [rule1.fst label1 labelmap  ...] [out.fst]\n";
 
     ParseOptions po(usage);
     AfstCombineOptions opts;
@@ -34,7 +35,7 @@ int main(int argc, char **argv) {
     po.Register("write-disambig-syms", &disambig_wxfilename,
                 "List of disambiguation symbols on input of out.fst");
     po.Read(argc, argv);
-    if (po.NumArgs() < 6) {
+    if (po.NumArgs() < 8) {
       po.PrintUsage();
       exit(1);
     }
@@ -43,6 +44,8 @@ int main(int argc, char **argv) {
 
     const string fst_name = po.GetArg(1);
     const string disam_map_name = po.GetArg(2);
+    const int32 disambig_sym_start_ = atoi(po.GetArg(3).c_str());
+    const int32 disambig_sym_end_ = atoi(po.GetArg(4).c_str());
     const string fst_out_str =  po.GetArg(po.NumArgs());
     if (afst_combine_data.InitHfst(fst_name, disam_map_name)) return 1;
     for (auto i = 3; i < po.NumArgs(); i += 3) {
@@ -51,11 +54,13 @@ int main(int argc, char **argv) {
       const string disam_map_name = po.GetArg(i+2);
       if (afst_combine_data.InitSingleAfst(fst_name, label, disam_map_name)) return 1;
     }
+
     if (afst_combine_data.CombineMain()) return 1;
     afst_combine_data.WriteCombineResult(fst_out_str);
 
     if (disambig_wxfilename != "") {
-      if (afst_combine_data.WriteDisamSym(disambig_wxfilename)) return 1;
+      assert(0);
+      //if (afst_combine_data.WriteDisamSym(disambig_wxfilename)) return 1;
     }
     return 0;
   } catch(const std::exception &e) {
