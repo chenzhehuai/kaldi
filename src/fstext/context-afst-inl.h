@@ -300,19 +300,22 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
       // accept any more, or we'd be making the subsequential symbol the central phone.
       return false;
     }
-
     vector<LabelT> newseq(N_-1);  // seq shifted left by 1.
-    for (int i = 0;i < N_-2;i++) newseq[i] = seq[i+1];
-    if (N_ > 1) newseq[N_-2] = olabel;
+    if (dis2phone_map_[dec_olabel] == -3) { 
+      ; //init state, leave it zero
+    } else {
+      for (int i = 0;i < N_-2;i++) newseq[i] = seq[i+1];
+      if (N_ > 1) newseq[N_-2] = olabel;
+    }
 
     // phoneseq is used to index ilabel, 
     // map dis-ambiguous symbol to corresponding phones
     // BUT if the current olabel is in #PHN
     // don't need to change and don't need context
     vector<LabelT> phoneseq(N_-1);
-    // it's not AFST disambig symbols
-    if (dis2phone_map_[dec_olabel] == dec_olabel) {
-        for (int i = 0;i < N_-1;i++) phoneseq[i] = dis2phone_map_[afst::GetDecodedIlabel(seq[i])];
+    // all kinds of label should do this, because in HFST, we have EOA-SOA link
+    for (int i = 0;i < N_-1;i++) {
+      phoneseq[i] = dis2phone_map_[afst::GetDecodedIlabel(seq[i])];
     }
     // possibly changes the address.
     StateId nextstate = FindState(newseq);
@@ -321,7 +324,11 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
         phoneseq.push_back(dec_olabel);  // Now it's the full context window of size N_.
     } else if (dis2phone_map_[dec_olabel] == -2) { //common suffix symbol #EOA
         phoneseq.resize(0);
-        phoneseq.push_back(-dis2phone_map_[seq[P_-1]]); // use the left context
+        phoneseq.push_back(-dis2phone_map_[afst::GetDecodedIlabel(seq[P_-1])]); // use the left context
+    } else if (dis2phone_map_[dec_olabel] == -3) { //init state
+      phoneseq[0]=0;//it's UNUSED here, we use a impossible label
+      phoneseq.push_back(3); //we will delete these links latter in afstcombine
+      
     } else { //prefix symbols #SOA
         phoneseq.resize(0);
         phoneseq.push_back(-olabel);  // olabel is a disambiguation symbol.  
