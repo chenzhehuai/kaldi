@@ -115,6 +115,13 @@ ContextFstImpl<Arc, LabelT>::ContextFstImpl(Label subsequential_symbol,  // epsi
     for (auto val : ilabels_in) {
         FindLabel(val);
     }
+    size_t i = 1;
+    for ( auto it = dis2phone_map_.begin(); 
+      it != dis2phone_map_.end(); ++it, i++ ) {
+      if (i != *it && i%2==1) { // EOA disambig_syms 
+        phone2dis_map_[*it]=i;
+      }
+    }
   }
   SetType("context");
   assert(subsequential_symbol_ != 0);  // it's OK to be kNoLabel though, if it never appears in ifst.
@@ -324,7 +331,13 @@ bool ContextFstImpl<Arc, LabelT>::CreateArc(StateId s,
         phoneseq.push_back(dec_olabel);  // Now it's the full context window of size N_.
     } else if (dis2phone_map_[dec_olabel] == -2) { //common suffix symbol #EOA
         phoneseq.resize(0);
-        phoneseq.push_back(-dis2phone_map_[afst::GetDecodedIlabel(seq[P_-1])]); // use the left context
+        LabelT pre_id=dis2phone_map_[afst::GetDecodedIlabel(seq[P_-1])];
+#if 0
+        LabelT eoa_id_enc=pre_id
+#else
+        LabelT eoa_id_enc=phone2dis_map_[pre_id]+olabel-dec_olabel;
+#endif
+        phoneseq.push_back(-eoa_id_enc); // use the left context
     } else if (dis2phone_map_[dec_olabel] == -3) { //init state
       phoneseq[0]=0;//it's UNUSED here, we use a impossible label
       phoneseq.push_back(3); //we will delete these links latter in afstcombine

@@ -171,6 +171,7 @@ class ContextFstImpl : public CacheImpl<Arc> {
   kaldi::ConstIntegerSet<Label> phone_syms_;
   kaldi::ConstIntegerSet<Label> disambig_syms_;
   vector<LabelT> dis2phone_map_;
+  unordered_map<LabelT, LabelT> phone2dis_map_; //map from phone to EOA disambig_syms
   Label subsequential_symbol_;
   int N_;
   int P_;
