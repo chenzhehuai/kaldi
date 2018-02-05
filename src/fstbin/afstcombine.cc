@@ -5,33 +5,30 @@
 // allowing for the definition of FSTs analogous to RTNs.
 
 #include <cstring>
-
 #include <string>
 #include <vector>
-#include <fst/flags.h>
+
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
-#include "fstext/kaldi-fst-io.h"
+#include "fstext/combine-afst.h"
 
 using LabelFstPair = std::pair<int, const fst::Fst<fst::StdArc> *>;
 
 int main(int argc, char **argv) {
   try {
-    using namespace kaldi;
     using namespace fst;
     
-    bool del_disambig_sym = true;
     string disambig_wxfilename;
     const char *usage = "Recursively replaces FST arcs with other FST(s).\n\n"
                    "  Usage: "
                    "afstcombine root.fst labelmap 364 713 \
                     [rule1.fst label1 labelmap  ...] [out.fst]\n";
 
-    ParseOptions po(usage);
+    kaldi::ParseOptions po(usage);
     AfstCombineOptions opts;
     po.Register("connect", &opts.connect, "If true, trim FST before output.");
-    po.Register("del-disambig-sym", &opts.del_disambig_sym, "If true, delete 
-                disambig symbols after concatenation.");
+    po.Register("del-disambig-sym", &opts.del_disambig_sym, "If true, delete"
+                "disambig symbols after concatenation.");
     po.Register("write-disambig-syms", &disambig_wxfilename,
                 "List of disambiguation symbols on input of out.fst");
     po.Read(argc, argv);
@@ -44,8 +41,8 @@ int main(int argc, char **argv) {
 
     const string fst_name = po.GetArg(1);
     const string disam_map_name = po.GetArg(2);
-    const int32 disambig_sym_start_ = atoi(po.GetArg(3).c_str());
-    const int32 disambig_sym_end_ = atoi(po.GetArg(4).c_str());
+    opts.disambig_sym_start = atoi(po.GetArg(3).c_str());
+    opts.disambig_sym_end = atoi(po.GetArg(4).c_str());
     const string fst_out_str =  po.GetArg(po.NumArgs());
     if (afst_combine_data.InitHfst(fst_name, disam_map_name)) return 1;
     for (auto i = 3; i < po.NumArgs(); i += 3) {
