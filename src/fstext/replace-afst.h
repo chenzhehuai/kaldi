@@ -792,9 +792,9 @@ class AFSTReplaceFstImpl
   // FST.
   Label IlabelEncode(const StateTuple &tuple, const Arc &arc) {
       if (tuple.prefix_id) {
-        const auto &top = state_table_->GetStackPrefix(tuple.prefix_id).Top(); 
+        //const auto &top = state_table_->GetStackPrefix(tuple.prefix_id).Top(); 
         uint32 ilabel;
-        afst::EncodeIlabel(ilabel, tuple.prefix_id, top.fst_id, arc.ilabel);
+        afst::EncodeIlabel(ilabel, tuple.prefix_id, tuple.fst_id, arc.ilabel);
         ilabel_disambig_out_set_.emplace(ilabel);
         return ilabel;
       } else {

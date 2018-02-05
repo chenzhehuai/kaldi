@@ -36,16 +36,15 @@ int main(int argc, char **argv) {
       po.PrintUsage();
       exit(1);
     }
-
-    AFSTCombine<StdArc> afst_combine_data(opts);
-
     const string fst_name = po.GetArg(1);
     const string disam_map_name = po.GetArg(2);
     opts.disambig_sym_start = atoi(po.GetArg(3).c_str());
     opts.disambig_sym_end = atoi(po.GetArg(4).c_str());
     const string fst_out_str =  po.GetArg(po.NumArgs());
+    
+    AFSTCombine<StdArc> afst_combine_data(opts);
     if (afst_combine_data.InitHfst(fst_name, disam_map_name)) return 1;
-    for (auto i = 3; i < po.NumArgs(); i += 3) {
+    for (auto i = 5; i < po.NumArgs(); i += 3) {
       const string fst_name = po.GetArg(i);
       const auto label = atoll(po.GetArg(i+1).c_str());
       const string disam_map_name = po.GetArg(i+2);

@@ -63,8 +63,12 @@ public:
         StateId hfst_eoa_state_ = hfstid_pair_vec[i].second;
         StateId afst_soa_state_ = afst_pair_vec[i].first + state_offset;
         StateId afst_eoa_state_ = afst_pair_vec[i].second + state_offset;
-        fst1->AddArc(hfst_eoa_state_, Arc(0, 0, Weight::One(), afst_soa_state_));
-        fst1->AddArc(afst_eoa_state_, Arc(0, 0, Weight::One(), hfst_soa_state_));
+        if (hfst_eoa_state_ != -1 && afst_pair_vec[i].first != -1) {
+          fst1->AddArc(hfst_eoa_state_, Arc(0, 0, Weight::One(), afst_soa_state_));
+        }
+        if (hfst_soa_state_ != -1 && afst_pair_vec[i].second != -1) {
+          fst1->AddArc(afst_eoa_state_, Arc(0, 0, Weight::One(), hfst_soa_state_));
+        }
       }
     }
 
@@ -129,8 +133,10 @@ private:
   void InitHfstSoaEoaPair() {
     const auto numstates1 = hfst_->NumStates();
     for (StateId s1 = 0; s1 < numstates1; ++s1) {
+      int n_arcs = 0;
       for (MutableArcIterator<VectorFst<Arc>> aiter(hfst_, s1); !aiter.Done(); aiter.Next()) {
         auto arc = aiter.Value();
+        n_arcs++;
         if (hfst_disam_map_.count(arc.ilabel) == 0) continue;
         //it's disambig
         Label ilabel = hfst_disam_map_[arc.ilabel];
@@ -148,7 +154,8 @@ private:
           hfstid_soa_eoa_pair_vec_vec_.emplace_back();
           hfstid2afstid_vec_.emplace_back(afst_id);
           hfstid_soa_eoa_pair_vec_vec_[hfstid_num_].resize(
-              DISAMID_TO_PAIRID(disambig_sym_end_) + 1);
+              DISAMID_TO_PAIRID(disambig_sym_end_) + 1,
+              std::pair<int32, int32>(-1, -1));
           hfstid2vecid_map_[hfst_id] = hfstid_num_;
           hfstid_num_++;
         }
@@ -160,13 +167,17 @@ private:
           pair.first = arc.nextstate;
         } else { //EOA HFST-left-S
           pair.second = s1;
+          assert(n_arcs == 1);
+          hfst_->DeleteArcs(s1);
         }
+        aiter.SetValue(arc);
       }
     }
   }
   // NOTICE: actually, this information can be saved in previous processing
   void InitAfstSoaEoaPair(MutableFst<Arc>& fst, DisamSymMap& map, SoaEoaPairVec& info_pair_vec) {
-    info_pair_vec.resize(DISAMID_TO_PAIRID(disambig_sym_end_) + 1);
+    info_pair_vec.resize(DISAMID_TO_PAIRID(disambig_sym_end_) + 1, 
+        std::pair<int32, int32>(-1, -1));
     for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
       StateId s1 = siter.Value();
       //get which pair from map[arc.ilabel];
@@ -195,16 +206,13 @@ private:
   int LoadFstWithSymMap(const std::string& fst_name, const std::string& map_name,
                         VectorFst<Arc>** fst, DisamSymMap& map) {
     *fst = ReadFstKaldi(fst_name);
-    if (*fst) {
-      return 0;
-    } else {
+    if (!*fst) {
       KALDI_ERR << "read FST error in: " << fst_name;
       return 1;
     }
     std::vector<std::vector<Label>> vec;
     if (!kaldi::ReadIntegerVectorVectorSimple(map_name, &vec))
       KALDI_ERR << "Error reading label map from " << map_name;
-    return 1;
     for (const auto &n : vec) {
       assert(n.size() == 2);
       map[n[0]] = n[1];
