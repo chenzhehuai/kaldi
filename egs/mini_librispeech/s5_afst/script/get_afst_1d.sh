@@ -14,6 +14,7 @@ tree_dir=$3
 #use hfst results below:
 #cp $dir/hfst/{phones.afst.txt,LG.fst.dis.map,SOA.int,EOA.fst} $tdir/
 
+echo "#EOA " | sym2int.pl $tdir/phones.afst.txt -  | awk '{print 0,1,$1,0;print 1}' | fstcompile - $tdir/EOA.fst 
 if [ $nohead = false ]; then
 cat $tdir/SOA.int \
     | awk  'NR==FNR{d[$1]=$2}NR!=FNR{print 0,1,d["#S."$1],0}END{print 1}' $tdir/phones.afst.txt -  | fstcompile - \

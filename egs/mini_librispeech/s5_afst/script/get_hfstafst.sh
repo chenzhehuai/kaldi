@@ -1,7 +1,7 @@
 #!/bin/bash
 
 dir=data_afst/toy.3a
-stage=7
+stage=2
 tree_dir=exp/chain${nnet3_affix}/tree_sp${tree_affix:+_$tree_affix}
 LANG=data/lang_nosp/
 #LANG=data/lang_chain
@@ -41,8 +41,11 @@ if [ $stage -le 2 ]; then
     disam_st=`awk '$0~"#"{print $2;exit}' $LANG/phones.txt`
     dis_num=`awk '$0~"#"{c++}END{print c}' $LANG/phones.txt`
     #6 is SPN, need to add disambig symbols
-    echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;st=1;for (i=1;i<=NF;i++){print 0,st,6,$i;print st,0,dis,0;st++;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}{print 0}}' | fstcompile - \
-        | fstunion $LANG/L_disambig.fst - $dir/L_disambig.fst
+lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
+    echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v st=$lanum -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;for (i=1;i<=NF;i++){st++;print 1,st,6,$i;print st,1,dis,0;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}}' > $dir/tmp.fst.txt
+#    echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v st=$lanum -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;st++;for (i=1;i<=NF;i++){print 1,st,6,$i;print st,1,dis,0;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}}' > $dir/tmp.fst.txt
+    fstprint $LANG/L_disambig.fst | awk '{print}' - $dir/tmp.fst.txt | fstcompile | fstarcsort --sort_type=olabel - $dir/L_disambig.fst 
+    rm $dir/tmp.fst.txt
 
   for i in $AFST_names hfst
   do
@@ -53,22 +56,25 @@ if [ $stage -le 2 ]; then
     arpa2fst --disambig-symbol=#0 \
              --read-symbol-table=$dir/words.txt - $dir/$i/G.fst
   else
-  awk -v weight=5 '{print 0,1,$1,$1}END{print 0,1,"<eps>","<eps>";print 1, weight}' $dir/words.$i \
+  awk -v weight=5 '{print 0,1,$1,$1}END{print 1, weight}' $dir/words.$i \
       | fstcompile --isymbols=$dir/words.txt --osymbols=$dir/words.txt  - \
       | fstarcsort --sort_type=ilabel - \
       >$dir/$i/G.fst
   fi
   utils/validate_lang.pl --skip-determinization-check $dir/$i/ || exit 1;
 
+  echo 6 > $dir/$i/rm.sym
   fsttablecompose $dir/L_disambig.fst $dir/$i/G.fst \
+|    fstarcsort --sort_type=ilabel  \
 | fstdeterminizestar --use-log=true  \
 |    fstminimizeencoded \
 | fstpushspecial \
-|    fstarcsort --sort_type=ilabel  \
+| fstrmsymbols $dir/$i/rm.sym - \
 > $dir/$i/LG.fst
+
+
  done
 fi
-
 
 if [ $stage -le 3 ]; then
 tdir=$dir/hfst
@@ -80,7 +86,7 @@ if [ $stage -le 4 ]; then
 for na in $AFST_names
 do
   tdir=$dir/$na
-  cp $dir/hfst/{phones.afst.txt,LG.fst.dis.map,SOA.int,EOA.fst} $tdir/
+  cp $dir/hfst/{phones.afst.txt,LG.fst.dis.map,SOA.int} $tdir/
   bash script/get_afst_1d.sh $tdir $LANG $tree_dir
 done
 fi
@@ -108,10 +114,14 @@ if [ $stage -le 6 ]; then
 
 fi
 
-tdir=$dir/baseline3
+false && \
+  {
+
+
 if [ $stage -le 7 ]; then
     echo compile our LM ref: ../s5_otf/local/format_lms.sh
 
+    tdir=$dir/baseline3
     mkdir -p $tdir
     awk '{$1="";print }' data/dev_clean_2/text  > $tdir/text
     ngram-count   -lm $tdir/lm  -text $tdir/text -order  3 #-vocab $dir/words.txt 
@@ -120,19 +130,41 @@ if [ $stage -le 7 ]; then
              --read-symbol-table=$dir/words.txt - $tdir/G.fst
   cp -a -n $LANG/* $tdir/
   utils/validate_lang.pl --skip-determinization-check $tdir  || exit 1;
-fi
-
-#baseline 0
-if [ $stage -le 8 ]; then
 utils/mkgraph.sh \
     --self-loop-scale 1.0 $tdir \
     $tree_dir $tdir #|| exit 1;
 
 fi
 
+#baseline 1
+if [ $stage -le 8 ]; then
+    tdir=$dir/baseline1/
+    rm -rf $tdir
+    mkdir $tdir
+    cp $dir/hfst/words.txt $tdir
+  afst_cmds=""
+  for i in $AFST_names; do
+  afst_id=`echo $i | sym2int.pl $tdir/words.txt - | awk '{print $1}'`
+  afst_cmds=$afst_cmds" $dir/$i/G.fst $afst_id " 
+  done
+  unused_id=`awk 'END{print $2+1}' $tdir/words.txt`
+    fstreplace  --epsilon_on_replace $dir/hfst/G.fst $unused_id $afst_cmds  \
+      | fstarcsort --sort_type=ilabel - \
+      $tdir/G.fst.$$
+    mv $tdir/G.fst.$$ $tdir/G.fst
+
+    cp -a -n $LANG/* $tdir/
+  utils/validate_lang.pl --skip-determinization-check $tdir  || exit 1;
+utils/mkgraph.sh \
+    --self-loop-scale 1.0 $tdir \
+    $tree_dir $tdir #|| exit 1;
+
+fi
+
+}
 
 #concat 2 AFSTs to get the decodable search space
-if [ $stage -le 8 ]; then
+if [ $stage -le 20 ]; then
 
 chunk_left_context=0
 chunk_right_context=0
@@ -146,7 +178,7 @@ nspk=$(wc -l <data/${data}_hires/spk2utt)
 affix=1e   # affix for the TDNN directory name
 dir=exp/chain${nnet3_affix}/tdnn${affix}_sp
 
-for graphdir in  $afstdir/baseline3 #$afstdir/. #$afstdir/{proposed2,proposed1,baseline0.1,baseline0.2,baseline1,baseline2} #baseline1 #$afstdir/proposed2  #$afstdir/baseline1 $afstdir/proposed2  $afstdir/proposed1 #  #{baseline1,proposed1}
+for graphdir in  $afstdir/ #$afstdir/baseline2 #baseline3 #. #$afstdir/{proposed2,proposed1,baseline0.1,baseline0.2,baseline1,baseline2} #baseline1 #$afstdir/proposed2  #$afstdir/baseline1 $afstdir/proposed2  $afstdir/proposed1 #  #{baseline1,proposed1}
 do
 #false && \
     {

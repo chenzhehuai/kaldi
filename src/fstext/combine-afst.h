@@ -64,10 +64,10 @@ public:
         StateId afst_soa_state_ = afst_pair_vec[i].first + state_offset;
         StateId afst_eoa_state_ = afst_pair_vec[i].second + state_offset;
         if (hfst_eoa_state_ != -1 && afst_pair_vec[i].first != -1) {
-          fst1->AddArc(hfst_eoa_state_, Arc(0, 0, Weight::One(), afst_soa_state_));
+          fst1->AddArc(hfst_eoa_state_, Arc(0, 0, Weight::One(), afst_soa_state_)); 
         }
         if (hfst_soa_state_ != -1 && afst_pair_vec[i].second != -1) {
-          fst1->AddArc(afst_eoa_state_, Arc(0, 0, Weight::One(), hfst_soa_state_));
+          fst1->AddArc(afst_eoa_state_, Arc(0, 0, Weight::One(), hfst_soa_state_)); 
         }
       }
     }
@@ -133,10 +133,8 @@ private:
   void InitHfstSoaEoaPair() {
     const auto numstates1 = hfst_->NumStates();
     for (StateId s1 = 0; s1 < numstates1; ++s1) {
-      int n_arcs = 0;
       for (MutableArcIterator<VectorFst<Arc>> aiter(hfst_, s1); !aiter.Done(); aiter.Next()) {
         auto arc = aiter.Value();
-        n_arcs++;
         if (hfst_disam_map_.count(arc.ilabel) == 0) continue;
         //it's disambig
         Label ilabel = hfst_disam_map_[arc.ilabel];
@@ -166,11 +164,10 @@ private:
         if (disam_id%2 == 0) { // SOA HFST-right-E
           pair.first = arc.nextstate;
         } else { //EOA HFST-left-S
-          pair.second = s1;
-          assert(n_arcs == 1);
-          hfst_->DeleteArcs(s1);
+          pair.second = arc.nextstate;
+          arc.weight=Weight::Zero();
+          aiter.SetValue(arc);
         }
-        aiter.SetValue(arc);
       }
     }
   }
