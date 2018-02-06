@@ -70,8 +70,8 @@ lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
 |    fstminimizeencoded \
 | fstrmsymbols $dir/$i/rm.sym - \
 |    fstarcsort --sort_type=ilabel  \
+| fstpushspecial \
 > $dir/$i/LG.fst
-#| fstpushspecial \
 
 
  done
