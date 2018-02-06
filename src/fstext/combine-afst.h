@@ -32,7 +32,8 @@ public:
   using Label = typename Arc::Label;
   using Weight = typename Arc::Weight;
   using StateId = typename Arc::StateId;
-  using SoaEoaPair = std::pair<StateId, StateId>;
+  using DisamPair = std::pair<StateId, Weight>;
+  using SoaEoaPair = std::pair<DisamPair, DisamPair>;
   using SoaEoaPairVec = std::vector<SoaEoaPair>;
   using DisamSymMap = unordered_map<Label, Label>;
   #define DISAMID_TO_PAIRID(d) ((d - disambig_sym_start_)/2) //disambig_sym_start_ is a even
@@ -59,15 +60,21 @@ public:
       SoaEoaPairVec& afst_pair_vec = afst_soa_eoa_pair_vec_vec_[afst_vec_id];
       SoaEoaPairVec& hfstid_pair_vec = hfstid_soa_eoa_pair_vec_vec_[vec_id];
       for (int i = 0; i < afst_pair_vec.size(); i++) {
-        StateId hfst_soa_state_ = hfstid_pair_vec[i].first;
-        StateId hfst_eoa_state_ = hfstid_pair_vec[i].second;
-        StateId afst_soa_state_ = afst_pair_vec[i].first + state_offset;
-        StateId afst_eoa_state_ = afst_pair_vec[i].second + state_offset;
-        if (hfst_eoa_state_ != -1 && afst_pair_vec[i].first != -1) {
-          fst1->AddArc(hfst_eoa_state_, Arc(0, 0, Weight::One(), afst_soa_state_)); 
+        StateId hfst_soa_state = hfstid_pair_vec[i].first.first;
+        Weight hfst_soa_weight = hfstid_pair_vec[i].first.second;
+        StateId hfst_eoa_state = hfstid_pair_vec[i].second.first;
+        Weight hfst_eoa_weight = hfstid_pair_vec[i].second.second;
+        StateId afst_soa_state = afst_pair_vec[i].first.first;
+        Weight afst_soa_weight = afst_pair_vec[i].first.second;
+        StateId afst_eoa_state = afst_pair_vec[i].second.first;
+        Weight afst_eoa_weight = afst_pair_vec[i].second.second;
+        if (hfst_eoa_state != -1 && afst_soa_state != -1) {
+          fst1->AddArc(hfst_eoa_state, Arc(0, 0, afst_soa_weight.Value()+
+                hfst_eoa_weight.Value(), afst_soa_state + state_offset)); 
         }
-        if (hfst_soa_state_ != -1 && afst_pair_vec[i].second != -1) {
-          fst1->AddArc(afst_eoa_state_, Arc(0, 0, Weight::One(), hfst_soa_state_)); 
+        if (hfst_soa_state != -1 && afst_eoa_state != -1) {
+          fst1->AddArc(afst_eoa_state + state_offset, Arc(0, 0, 
+                hfst_soa_weight.Value()+afst_eoa_weight.Value(), hfst_soa_state)); 
         }
       }
     }
@@ -151,9 +158,10 @@ private:
         if (hfstid2vecid_map_.count(hfst_id) == 0) {
           hfstid_soa_eoa_pair_vec_vec_.emplace_back();
           hfstid2afstid_vec_.emplace_back(afst_id);
+          DisamPair defaultpair(-1, 0);
           hfstid_soa_eoa_pair_vec_vec_[hfstid_num_].resize(
               DISAMID_TO_PAIRID(disambig_sym_end_) + 1,
-              std::pair<int32, int32>(-1, -1));
+              std::pair<DisamPair, DisamPair>(defaultpair, defaultpair));
           hfstid2vecid_map_[hfst_id] = hfstid_num_;
           hfstid_num_++;
         }
@@ -162,19 +170,22 @@ private:
         //according to SOA or EOA, modify the pair.first or pair.second
         SoaEoaPair& pair = pair_vec[DISAMID_TO_PAIRID(disam_id)];
         if (disam_id%2 == 0) { // SOA HFST-right-E
-          pair.first = arc.nextstate;
-        } else { //EOA HFST-left-S
-          pair.second = s1; //arc.nextstate;
+          pair.first.first = arc.nextstate;
+          pair.first.second = arc.weight;
           arc.weight=Weight::Zero();
           aiter.SetValue(arc);
+        } else { //EOA HFST-left-S
+          pair.second.first = arc.nextstate;
+          pair.second.second = 0; //arc.weight;
         }
       }
     }
   }
   // NOTICE: actually, this information can be saved in previous processing
   void InitAfstSoaEoaPair(MutableFst<Arc>& fst, DisamSymMap& map, SoaEoaPairVec& info_pair_vec) {
+    DisamPair defaultpair(-1, 0);
     info_pair_vec.resize(DISAMID_TO_PAIRID(disambig_sym_end_) + 1, 
-        std::pair<int32, int32>(-1, -1));
+        std::pair<DisamPair, DisamPair>(defaultpair, defaultpair));
     for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
       StateId s1 = siter.Value();
       //get which pair from map[arc.ilabel];
@@ -192,9 +203,11 @@ private:
         if (disam_id < disambig_sym_start_ || disam_id > disambig_sym_end_) continue;
         SoaEoaPair& pair = info_pair_vec[DISAMID_TO_PAIRID(disam_id)];
         if (disam_id%2 == 0) { // SOA AFST-left-E
-          pair.first = arc.nextstate;
+          pair.first.first = arc.nextstate;
+          pair.first.second = arc.weight;
         } else { //EOA AFST-right-S
-          pair.second = s1;
+          pair.second.first = s1;
+          pair.second.second = arc.weight;
         }
       }
     }

@@ -42,8 +42,8 @@ if [ $stage -le 2 ]; then
     dis_num=`awk '$0~"#"{c++}END{print c}' $LANG/phones.txt`
     #6 is SPN, need to add disambig symbols
 lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
-    echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v st=$lanum -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;for (i=1;i<=NF;i++){st++;print 1,st,6,$i;print st,1,dis,0;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}}' > $dir/tmp.fst.txt
-#    echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v st=$lanum -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;st++;for (i=1;i<=NF;i++){print 1,st,6,$i;print st,1,dis,0;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}}' > $dir/tmp.fst.txt
+    echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v st=$lanum -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;for (i=1;i<=NF;i++){st++;print 1,st,6,$i;print st,3,dis,0,0.693147182;print st,1,dis,0,0.693147182;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}}' > $dir/tmp.fst.txt
+    #echo $AFST_names | sym2int.pl $dir/words.txt - | awk -v st=$lanum -v dis_num=$dis_num -v dst=$disam_st '{isym=6;dis=dst;for (i=1;i<=NF;i++){st++;print 1,st,6,$i;print st,1,dis,0;if (i%dis_num==0){dis=dst;isym++;if (isym==11){print "FAIL because of TOO many AFSTs; please re-generate disam symbols";exit}}else{dis++}}}' > $dir/tmp.fst.txt
     fstprint $LANG/L_disambig.fst | awk '{print}' - $dir/tmp.fst.txt | fstcompile | fstarcsort --sort_type=olabel - $dir/L_disambig.fst 
     rm $dir/tmp.fst.txt
 
@@ -67,9 +67,9 @@ lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
   fsttablecompose $dir/L_disambig.fst $dir/$i/G.fst \
 | fstdeterminizestar --use-log=true  \
 |    fstminimizeencoded \
-| fstpushspecial \
 | fstrmsymbols $dir/$i/rm.sym - \
 |    fstarcsort --sort_type=ilabel  \
+| fstpushspecial \
 > $dir/$i/LG.fst
 
 
