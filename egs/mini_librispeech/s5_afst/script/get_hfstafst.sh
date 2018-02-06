@@ -1,7 +1,7 @@
 #!/bin/bash
 
 dir=data_afst/toy.3a
-stage=2
+stage=3
 tree_dir=exp/chain${nnet3_affix}/tree_sp${tree_affix:+_$tree_affix}
 LANG=data/lang_nosp/
 #LANG=data/lang_chain
@@ -61,6 +61,7 @@ lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
       | fstarcsort --sort_type=ilabel - \
       >$dir/$i/G.fst
   fi
+  #for speed
   #utils/validate_lang.pl --skip-determinization-check $dir/$i/ || exit 1;
 
   echo "6" > $dir/$i/rm.sym
@@ -69,8 +70,8 @@ lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
 |    fstminimizeencoded \
 | fstrmsymbols $dir/$i/rm.sym - \
 |    fstarcsort --sort_type=ilabel  \
-| fstpushspecial \
 > $dir/$i/LG.fst
+#| fstpushspecial \
 
 
  done
@@ -109,8 +110,9 @@ if [ $stage -le 6 ]; then
   fstarcsort --sort_type=olabel $dir/hclga.afst \
   > $tdir/HCLGa.fst || exit 1;
   fstisstochastic $tdir/HCLGa.fst || echo "HCLGa is not stochastic"
-  add-self-loops --self-loop-scale=1.0 --reorder=true \
-    $tree_dir/final.mdl< $tdir/HCLGa.fst | fstconvert --fst_type=const > $tdir/HCLG.fst || exit 1;
+  cat $tdir/HCLGa.fst \
+  |add-self-loops --self-loop-scale=1.0 --reorder=true $tree_dir/final.mdl \
+    | fstconvert --fst_type=const > $tdir/HCLG.fst || exit 1;
 
 fi
 
