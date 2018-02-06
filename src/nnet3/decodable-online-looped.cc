@@ -237,7 +237,18 @@ BaseFloat DecodableNnetLoopedOnline::LogLikelihood(int32 subsampled_frame,
       subsampled_frame - current_log_post_subsampled_offset_,
       index - 1);
 }
+  
+void DecodableNnetLoopedOnline::ComputeLogLikelihoods(BaseFloat* out, int32 subsampled_frame, int32 count) {
+  EnsureFrameIsComputed(subsampled_frame);
 
+  for(int i=0;i<count;i++) {
+    // note: we index by 'inde
+    BaseFloat val =  current_log_post_(
+                    subsampled_frame - current_log_post_subsampled_offset_,
+                                        i - 1);
+    out[i]=val;
+  }
+}
 
 BaseFloat DecodableAmNnetLoopedOnline::LogLikelihood(int32 subsampled_frame,
                                                     int32 index) {
@@ -247,6 +258,16 @@ BaseFloat DecodableAmNnetLoopedOnline::LogLikelihood(int32 subsampled_frame,
       trans_model_.TransitionIdToPdf(index));
 }
 
+void DecodableAmNnetLoopedOnline::ComputeLogLikelihoods(BaseFloat *out, int32 subsampled_frame,
+                                                    int32 count) {
+  EnsureFrameIsComputed(subsampled_frame);
+  for(int i=0;i<count;i++) {
+    BaseFloat val = current_log_post_(
+      subsampled_frame - current_log_post_subsampled_offset_,
+      trans_model_.TransitionIdToPdf(i));
+    out[i]=val;
+  }
+}
 
 } // namespace nnet3
 } // namespace kaldi

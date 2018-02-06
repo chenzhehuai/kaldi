@@ -150,6 +150,7 @@ class DecodableNnetLoopedOnline: public DecodableNnetLoopedOnlineBase {
   // reduced-rate output frame (e.g. a 't' index divided by 3).  'index'
   // represents the pdf-id (or other output of the network) PLUS ONE.
   virtual BaseFloat LogLikelihood(int32 subsampled_frame, int32 index);
+  virtual void ComputeLogLikelihoods(BaseFloat* out, int32 subsampled_frame, int32 count);
 
  private:
   KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableNnetLoopedOnline);
@@ -182,6 +183,7 @@ class DecodableAmNnetLoopedOnline: public DecodableNnetLoopedOnlineBase {
   // reduced-rate output frame (e.g. a 't' index divided by 3).
   virtual BaseFloat LogLikelihood(int32 subsampled_frame,
                                   int32 transition_id);
+  virtual void ComputeLogLikelihoods(BaseFloat* out, int32 subsampled_frame, int32 count);
 
  private:
   const TransitionModel &trans_model_;
