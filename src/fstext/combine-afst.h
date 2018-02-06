@@ -164,7 +164,7 @@ private:
         if (disam_id%2 == 0) { // SOA HFST-right-E
           pair.first = arc.nextstate;
         } else { //EOA HFST-left-S
-          pair.second = arc.nextstate;
+          pair.second = s1; //arc.nextstate;
           arc.weight=Weight::Zero();
           aiter.SetValue(arc);
         }

@@ -61,15 +61,15 @@ lanum=`fstprint $LANG/L_disambig.fst | awk 'END{print $1}'`
       | fstarcsort --sort_type=ilabel - \
       >$dir/$i/G.fst
   fi
-  utils/validate_lang.pl --skip-determinization-check $dir/$i/ || exit 1;
+  #utils/validate_lang.pl --skip-determinization-check $dir/$i/ || exit 1;
 
-  echo 6 > $dir/$i/rm.sym
+  echo "6" > $dir/$i/rm.sym
   fsttablecompose $dir/L_disambig.fst $dir/$i/G.fst \
-|    fstarcsort --sort_type=ilabel  \
 | fstdeterminizestar --use-log=true  \
 |    fstminimizeencoded \
 | fstpushspecial \
 | fstrmsymbols $dir/$i/rm.sym - \
+|    fstarcsort --sort_type=ilabel  \
 > $dir/$i/LG.fst
 
 
