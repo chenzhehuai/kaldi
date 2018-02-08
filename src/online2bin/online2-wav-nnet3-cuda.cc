@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
     cuInit(0);
     CudaFst cuda_fst;
 
-#pragma omp parallel shared(po, cuda_fst) 
+//#pragma omp parallel shared(po, cuda_fst) 
     {
       printf("Thread %d of %d\n", omp_get_thread_num(), omp_get_num_threads());
 
@@ -157,7 +157,7 @@ int main(int argc, char *argv[]) {
       CuDevice::Instantiate().SelectGpuId("yes");
       CuDevice::Instantiate().AllowMultithreading();
 #endif
-#pragma omp barrier
+//#pragma omp barrier
       
 
 
@@ -196,7 +196,7 @@ int main(int argc, char *argv[]) {
 
         fst::Fst<fst::StdArc> *decode_fst = ReadFstKaldiGeneric(fst_rxfilename);
         if(omp_get_thread_num()==0) cuda_fst.initialize(*decode_fst);
-#pragma omp barrier
+//#pragma omp barrier
 
         fst::SymbolTable *word_syms = NULL;
         if (word_syms_rxfilename != "")
@@ -250,7 +250,7 @@ int main(int argc, char *argv[]) {
                   decoder.Decoder().getCudaMallocManagedBytes()/1024.0/1024/1024*omp_get_num_threads());
             }
 
-#pragma omp barrier
+//#pragma omp barrier
             nvtxRangePushA("Timing Start");
             OnlineTimer decoding_timer(utt);
 
@@ -302,7 +302,7 @@ int main(int argc, char *argv[]) {
             decoder.FinalizeDecoding();
 #endif
 
-#pragma omp barrier
+//#pragma omp barrier
             decoding_timer.OutputStats(&timing_stats);
             nvtxRangePop();
 
@@ -314,7 +314,7 @@ int main(int argc, char *argv[]) {
             //        bool end_of_utterance = true;
             //        decoder.GetLattice(end_of_utterance, &clat);
 
-#pragma omp critical
+//#pragma omp critical
             {
               GetDiagnosticsAndPrintOutput(utt, word_syms, clat,
                   &num_frames, &tot_like);
@@ -333,7 +333,7 @@ int main(int argc, char *argv[]) {
               //KALDI_LOG << "Decoded utterance " << utt;
             }
             num_done++;
-#pragma omp barrier
+//#pragma omp barrier
           }
         }
         timing_stats.Print(online);
@@ -346,7 +346,7 @@ int main(int argc, char *argv[]) {
           << " per frame over " << num_frames << " frames.";
         delete decode_fst;
         delete word_syms; // will delete if non-NULL.
-      #pragma omp barrier
+//#pragma omp barrier
     } //end parallel
     printf("Stopping CUDA\n");
     cuda_fst.finalize();

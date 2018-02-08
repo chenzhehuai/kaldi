@@ -21,7 +21,8 @@ ADDLIBS = ../lat/kaldi-lat.a ../hmm/kaldi-hmm.a \
 
 
 cuda-decoder_prelink.o: cuda-decoder.cu cuda-decoder.h
-	$(CUDATKDIR)/bin/nvcc -g -Xptxas -v -arch=sm_70  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS -I$(ATLASINC) -Xcompiler "-msse -msse2 -pthread -fopenmp" -O3  -Xcompiler -fPIC -DHAVE_CUDA -I${CUDA_HOME}/include -I${CUDA_HOME}/samples/common/inc -I${CUDA_HOME}/include/CL -I${CUDA_HOME}/extras/CUPTI/include -I${CUDA_HOME}/extras/Debugger/include -I${CUDA_HOME}/nvvm/include   -o cuda-decoder_prelink.o cuda-decoder.cu -lcuda
+	$(CUDATKDIR)/bin/nvcc -g -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS -I$(ATLASINC) -Xcompiler "-msse -msse2 -pthread -fopenmp" -O0  -Xcompiler -fPIC -DHAVE_CUDA -I${CUDA_HOME}/include -I${CUDA_HOME}/samples/common/inc -I${CUDA_HOME}/include/CL -I${CUDA_HOME}/extras/CUPTI/include -I${CUDA_HOME}/extras/Debugger/include -I${CUDA_HOME}/nvvm/include   -o cuda-decoder_prelink.o cuda-decoder.cu -lcuda
 cuda-decoder.o: cuda-decoder_prelink.o
-	$(CUDATKDIR)/bin/nvcc cuda-decoder_prelink.o -v -arch=sm_70 -dlink -o cuda-decoder.o -Xcompiler "-pthread -fPIC"
+	$(CUDATKDIR)/bin/nvcc cuda-decoder_prelink.o -v $(CUDA_ARCH)  -dlink -o cuda-decoder.o -Xcompiler "-pthread -fPIC" #-arch=sm_70
+
 include ../makefiles/default_rules.mk

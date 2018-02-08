@@ -548,7 +548,7 @@ CuDevice::CuDevice() :
 
 
 // The instance of the static singleton
-thread_local CuDevice CuDevice::global_device_;
+CuDevice CuDevice::global_device_;
 }
 
 

@@ -27,7 +27,7 @@
 #include <math.h>
 #include <cooperative_groups.h>
 
-#define MEMADVISE
+//#define MEMADVISE only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
 //Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError() {                                          \
@@ -404,11 +404,15 @@ template<typename T>
     if(count>size-front)
       count = size-front;
 
+#ifdef MEMADVISE
     cudaMemPrefetchAsync(tokens_allocation+front,sizeof(Token)*count,device,stream);  
+#endif
   }
 
   void CudaDecoder::TokenAllocator::prefetch_allocated_to_host(cudaStream_t stream) {
+#ifdef MEMADVISE
     cudaMemPrefetchAsync(tokens_allocation,sizeof(Token)* *front_h,cudaCpuDeviceId,stream);  
+#endif
   }
 
   size_t CudaDecoder::TokenAllocator::getCudaMallocManagedBytes() {
