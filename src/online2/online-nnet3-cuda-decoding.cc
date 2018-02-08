@@ -43,6 +43,11 @@ void SingleUtteranceNnet3CudaDecoder::AdvanceDecoding() {
   decoder_.AdvanceDecoding(&decodable_);
 }
 
+void SingleUtteranceNnet3CudaDecoder::Decode() {
+  decoder_.Decode(&decodable_);
+}
+
+
 int32 SingleUtteranceNnet3CudaDecoder::NumFramesDecoded() const {
   return decoder_.NumFramesDecoded();
 }

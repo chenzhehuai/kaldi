@@ -60,6 +60,7 @@ class SingleUtteranceNnet3CudaDecoder {
 
   /// advance the decoding as far as we can.
   void AdvanceDecoding();
+  void Decode();
 
   int32 NumFramesDecoded() const;
 
