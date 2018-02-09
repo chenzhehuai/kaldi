@@ -169,7 +169,7 @@ int main(int argc, char *argv[]) {
           clat_wspecifier = po.GetArg(5);
         OnlineNnet2FeaturePipelineInfo feature_info(feature_opts);
 
-        if (!online) {
+        if (1 || !online) {
           feature_info.ivector_extractor_info.use_most_recent_ivector = true;
           feature_info.ivector_extractor_info.greedy_ivector_extractor = true;
           chunk_length_secs = -1.0;
