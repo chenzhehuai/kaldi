@@ -18,14 +18,16 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cuda_profiler_api.h>
 
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
 #include "tree/context-dep.h"
 #include "hmm/transition-model.h"
 #include "fstext/fstext-lib.h"
-#include "decoder/faster-decoder.h"
+#include "decoder/faster-decoder-cuda.h"
 #include "decoder/decodable-matrix.h"
+#include "nnet3/nnet-utils.h"
 #include "base/timer.h"
 #include "lat/kaldi-lattice.h" // for {Compact}LatticeArc
 
@@ -44,7 +46,15 @@ int main(int argc, char *argv[]) {
         "<loglikes-rspecifier> <words-wspecifier> [<alignments-wspecifier>]\n";
     ParseOptions po(usage);
     CudaDecoderConfig decoder_opts;
-    decoder_opts.Register(&po, true);  
+    BaseFloat acoustic_scale = 0.1;
+    bool allow_partial = true;
+    std::string word_syms_filename;
+    
+    decoder_opts.Register(&po);  
+    po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
+    po.Register("allow-partial", &allow_partial, "Produce output even when final state was not reached");
+    po.Register("word-symbol-table", &word_syms_filename,
+                "Symbol table for words [for debug output]");
 
     po.Read(argc, argv);
 
@@ -73,6 +83,8 @@ int main(int argc, char *argv[]) {
         KALDI_ERR << "Could not read symbol table from file "<<word_syms_filename;
     }
 
+    cuInit(0);
+    CudaFst cuda_fst;
     SequentialBaseFloatMatrixReader loglikes_reader(loglikes_rspecifier);
 
     // It's important that we initialize decode_fst after loglikes_reader, as it
@@ -81,11 +93,12 @@ int main(int argc, char *argv[]) {
     // large process: the page-table entries are duplicated, which requires a
     // lot of virtual memory.
     VectorFst<StdArc> *decode_fst = fst::ReadFstKaldi(fst_in_filename);
+    cuda_fst.initialize(*decode_fst);
 
     BaseFloat tot_like = 0.0;
     kaldi::int64 frame_count = 0;
     int num_success = 0, num_fail = 0;
-    FasterDecoderCuda decoder(*decode_fst, decoder_opts);
+    FasterDecoderCuda decoder(decoder_opts, cuda_fst);
 
     Timer timer;
 
@@ -154,6 +167,12 @@ int main(int argc, char *argv[]) {
 
     delete word_syms;
     delete decode_fst;
+
+    printf("Stopping CUDA\n");
+    cuda_fst.finalize();
+    cudaDeviceSynchronize();
+    cudaProfilerStop();
+
     if (num_success != 0) return 0;
     else return 1;
   } catch(const std::exception &e) {

@@ -23,9 +23,11 @@
 #include "util/stl-utils.h"
 #include "itf/options-itf.h"
 #include "util/hash-list.h"
+#include "cudamatrix/cu-common.h"
 #include "fst/fstlib.h"
 #include "itf/decodable-itf.h"
 #include "lat/kaldi-lattice.h" // for CompactLatticeArc
+#include "decoder/cuda-decoder.h"
 
 namespace kaldi {
 
@@ -37,8 +39,7 @@ class FasterDecoderCuda {
 
   ~FasterDecoderCuda() { }
 
-  // TODO:
-  //void Decode(DecodableInterface *decodable);
+  void Decode(DecodableInterface *decodable);
 
   /// GetBestPath gets the decoding traceback. If "use_final_probs" is true
   /// AND we reached a final state, it limits itself to final states;
@@ -47,8 +48,9 @@ class FasterDecoderCuda {
   /// FST (will only return false in unusual circumstances where
   /// no tokens survived).
   bool GetBestPath(Lattice *best_path,
-                   bool use_final_probs = true);
+                   bool use_final_probs = true) const;
 
+  bool ReachedFinal() const { return decoder_.ReachedFinal(); }
   /// As a new alternative to Decode(), you can call InitDecoding
   /// and then (possibly multiple times) AdvanceDecoding().
   void InitDecoding();
@@ -57,11 +59,12 @@ class FasterDecoderCuda {
   /// This will decode until there are no more frames ready in the decodable
   /// object, but if max_num_frames is >= 0 it will decode no more than
   /// that many frames.
-  void AdvanceDecoding(DecodableInterface *decodable,
-                       int32 max_num_frames = -1);
+  // TODO
+  //void AdvanceDecoding(DecodableInterface *decodable,
+  //                     int32 max_num_frames = -1);
 
   /// Returns the number of frames already decoded.
-  int32 NumFramesDecoded() const { return num_frames_decoded_; }
+  int32 NumFramesDecoded() const;
 
  protected:
 
