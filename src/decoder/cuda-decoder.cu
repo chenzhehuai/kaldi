@@ -25,7 +25,7 @@
 #include <cuda_runtime_api.h>
 #include <float.h>
 #include <math.h>
-#include <cooperative_groups.h>
+//#include <cooperative_groups.h>
 
 //#define MEMADVISE only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
@@ -888,18 +888,19 @@ template<typename T>
 
     int threadIdxy = threadIdx.x / blockDimx;
 
-    auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
+    //auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     CudaDecoder::CostType local_cutoff = INFINITY;
     int32 size = params.prev_toks.size(); 
 
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) { 
-      int i;
-      if(group.thread_rank()==0) { //thread 0 nominated to get new token
+      __shared__ int i;
+      if(threadIdx.x == 0) { //thread 0 nominated to get new token
         i=atomicAdd(params.fb_idx,1);      //get token index
       }
-      i=group.shfl(i,0);           //broadcast token index
+      //i=group.shfl(i,0);           //broadcast token index
+      __syncthreads();
       //i=__shfl_sync(0xffffffff,i,0);
       if(i>=size) break;  //Work complete
       
@@ -911,7 +912,7 @@ template<typename T>
       
       int32 ilabel, ilabel_next;
 
-      int j=start+group.thread_rank();
+      int j=start+threadIdx.x;
 
       if(j<finish) {
         ilabel_next = params.arc_ilabels[j];
@@ -951,17 +952,18 @@ template<typename T>
     typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
     int threadIdxy = threadIdx.x / blockDimx;
     
-    auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
+    //auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     CostType cutoff=*params.cutoff;
     int32 size = params.prev_toks.size();
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) {
       int i;
-      if(group.thread_rank()==0) { //thread 0 nominated to get new token
+      if(threadIdx.x==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.pe_idx,1);      //get token index
       }
-      i=group.shfl(i,0);           //broadcast token index
+      //i=group.shfl(i,0);           //broadcast token index
+      __syncthreads();
       //i=__shfl_sync(0xffffffff,i,0);
       if(i>=size) break;
 
@@ -972,7 +974,7 @@ template<typename T>
       uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
       int32 ilabel, ilabel_next;  //prefetch ilabel since it leads to a dependent load
 
-      int j=start+group.thread_rank();
+      int j=start+threadIdx.x;
 
       if(j<finish) {
         ilabel_next = params.arc_ilabels[j];
@@ -1038,17 +1040,18 @@ template<typename T>
     typedef CudaDecoder::CostType CostType;
     typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
     
-    auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
+    //auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     int threadIdxy = threadIdx.x / blockDimx;
 
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) {
       int i;
-      if(group.thread_rank()==0) { //thread 0 nominated to get new token
+      if(threadIdx.x==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.ne_idx,1);      //get token index
       }
-      i=group.shfl(i,0);           //broadcast token index
+      //i=group.shfl(i,0);           //broadcast token index
+      __syncthreads();
       //i=__shfl_sync(0xffffffff,i,0);
       if(i>=size) break;
       
@@ -1057,7 +1060,7 @@ template<typename T>
       StateId state = ts.state;
 
       uint32_t start=params.ne_offsets[state], finish=params.ne_offsets[state+1];
-      for(int j=start+group.thread_rank();j<finish;j+=blockDimx) {
+      for(int j=start+threadIdx.x;j<finish;j+=blockDimx) {
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
