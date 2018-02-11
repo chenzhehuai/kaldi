@@ -76,8 +76,10 @@ DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
         atomicAdd((int*)fast_epoch, nb);
  
         // wait for the sign bit to commute   
-        while (((*fast_epoch) ^ old_epoch) >= 0)
+        int cnt=0;
+        while (((*fast_epoch) ^ old_epoch) >= 0&& ++cnt!=(1<<19))//deadlock hack
             ;
+        if (blockIdx.x == 0) *fast_epoch=0;
     }
     __syncthreads();
 }
@@ -1262,6 +1264,9 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.allocator=allocator;
     params.ne_idx=ne_idx_d;
     params.barrier=barrier_d;
+    
+    params.verbose=verbose;
+    params.frame=num_frames_decoded_;
 
 #if 0
     void *args[] = { (void*) &params };
