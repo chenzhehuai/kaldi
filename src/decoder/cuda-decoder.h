@@ -124,13 +124,16 @@ struct CudaDecoderConfig {
   double gpu_fraction;
   uint32_t max_tokens_per_frame;
   uint32_t max_tokens;
+  int verbose;
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
                        max_tokens_per_frame(900000),
-                       max_tokens(60000000) {}
+                       max_tokens(60000000),
+                       verbose(0){}
   
   void Register(OptionsItf *opts) {
+    opts->Register("verbose", &verbose, "debug log verbose.");
     opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
     opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this decoder.  "
                                                   "A single decoding cannot saturate the device.  "
@@ -316,6 +319,8 @@ class CudaDecoder {
   //warp assignment indexes
   int *pe_idx_d, *ne_idx_d, *fb_idx_d;
   int *barrier_d;  //barrier to allow grid syncs
+  
+  int verbose;
   
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
