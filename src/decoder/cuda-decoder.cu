@@ -472,6 +472,7 @@ template<typename T>
     int device;
     cudaGetDevice(&device);
 
+    cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 1e7);
 
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop,device);
@@ -564,10 +565,12 @@ template<typename T>
 
     InitDecoding();
 
+
     ComputeLogLikelihoods(decodable);
 
     while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
 
+      KALDI_LOG << num_frames_decoded_<<std::endl;
 #ifndef MEMADVISE
       //no need to prefetch if we have done a memadvise
       allocator.prefetch_next_to_device(cudaStreamPerThread);
@@ -639,7 +642,6 @@ template<typename T>
   void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
       int32 max_num_frames) {
     printf("AdvanceDecoding\n");
-  
 
     nvtxRangePushA("AdvanceDecoding");
     KALDI_ASSERT(num_frames_decoded_ >= 0 &&
@@ -662,6 +664,7 @@ template<typename T>
     
     while (num_frames_decoded_ < target_frames_decoded) {
 
+      KALDI_LOG << num_frames_decoded_<<std::endl;
 #ifndef MEMADVISE
       //no need to prefetch if we have done a memadvise
       allocator.prefetch_next_to_device(cudaStreamPerThread);
@@ -1055,6 +1058,7 @@ template<typename T>
       TokenState ts = params.cur_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
+      
 
       uint32_t start=params.ne_offsets[state], finish=params.ne_offsets[state+1];
       for(int j=start+group.thread_rank();j<finish;j+=blockDimx) {
@@ -1063,6 +1067,7 @@ template<typename T>
 
         Token next_tok = Token(weight, tok, j);
 
+      printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           TokenLookupElem lookup_elem;
           load16(&lookup_elem,&params.current_tokens_lookup[nextstate]);
@@ -1095,7 +1100,9 @@ template<typename T>
           } //end try update loop
         }
       }
+
     }
+      printf("ED: %i %i %i \n",threadIdx.x, group.thread_rank(), blockIdx.x);
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1142,12 +1149,19 @@ template<typename T>
   __global__ void processTokens_cg(processTokens_params params) {
 //    auto grid = cooperative_groups::this_grid();
 
+    bool rank0 = blockIdx.x==0 && threadIdx.x==0;
+    int p=0;
+    if(rank0) 
+    {p++;printf("S: %i\n",p);}
 
     findBestCutoff_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
-    
-    
+   
+   
+    if(rank0) 
+    {p++;printf("S: %i\n",p);}
+
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
@@ -1157,6 +1171,8 @@ template<typename T>
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
     
+    if(rank0) 
+    {p++;printf("S: %i\n",p);}
 
     do {
 
@@ -1172,17 +1188,21 @@ template<typename T>
 
       *modified1 = false;
 
-      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0);
+      processNonEmittingTokens_function<32,1>(params,cutoff,size,modified0);
 
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
 
     } while ((*modified0)==true);
 
+    if(rank0) 
+    {p++;printf("S: %i\n",p);}
 
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
+    
+    if(rank0) 
+    {p++;printf("S: %i\n",p);}
   
-    bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     if(rank0) {
       //prepare for next iteration
       params.prev_toks.clear();
@@ -1197,6 +1217,8 @@ template<typename T>
       params.allocator.advanceFront(params.cur_toks.size());
     }
 
+    if(rank0) 
+    {p++;printf("S: %i\n",p);}
     
   }
 
@@ -1243,6 +1265,7 @@ template<typename T>
     dim3 threads(64,1);
     dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
 
+      KALDI_LOG <<std::endl;
 
     params.prev_toks=prev_toks_;
     params.cur_toks=cur_toks_;
@@ -1263,8 +1286,10 @@ template<typename T>
     params.fb_idx=fb_idx_d;
     params.barrier=barrier_d;
 
+      KALDI_LOG <<std::endl;
     cudaStreamWaitEvent(stream_comp,event_ll,0); //make sure log likelihoods are on the device before starting these kernels
 
+      KALDI_LOG <<std::endl;
 #if 0
     void *args[] = { (void*) &params };
     cudaLaunchCooperativeKernel((void*)processTokens_cg, blocks, threads, args, 0, stream_comp);
