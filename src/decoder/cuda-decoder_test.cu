@@ -45,14 +45,22 @@ DEVICE void release_semaphore(volatile int *lock){
     release_semaphore((int*)(mutex+threadIdx.x));
     }
   }
-
+  template<int blockDimx, int blockDimy>
+  inline DEVICE void myadd0(int *ret, volatile int *mutex) {
+    acquire_semaphore((int*)(mutex));
+    (*(ret))++;
+    release_semaphore((int*)(mutex));
+  }
 
   __global__ void callmyadd(int *ret, int *mutex) {
-  myadd2<32,2>(ret, mutex);
+  //myadd2<32,2>(ret, mutex);
+  myadd0<32,2>(ret, mutex);
   //myadd<32,2>(ret, mutex);
   }
 int main() {
-    int blocks=200;
+  //int blocks=200;
+  int blocks=3;
+  //int blocks=7;
   int *mutex=0;
   int *ret=0, ret_h=0;
   int n =32;
