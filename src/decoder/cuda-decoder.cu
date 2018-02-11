@@ -943,6 +943,14 @@ template<typename T>
       atomicMin(params.cutoff, local_cutoff);
     }
   }
+inline DEVICE void acquire_semaphore(volatile int *lock){
+  while (atomicCAS((int *)lock, 0, 1) != 0);
+  }
+
+inline DEVICE void release_semaphore(volatile int *lock){
+  *lock = 0;
+  __threadfence();
+  }
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
@@ -1012,7 +1020,7 @@ template<typename T>
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
-            if(params.token_locks[nextstate]==0 && atomicExch((int*)&params.token_locks[nextstate],1)==0) {       //try and grab lock
+          acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min
                 
                 if(sizeof(Token)==16)
@@ -1020,13 +1028,9 @@ template<typename T>
                 else
                   *cur_tok=next_tok;
 
-                __threadfence();                                                                                  //ensure my write is visible to all threads   
               }
-              
-              atomicExch((int*)&params.token_locks[nextstate],0);                                                 //release lock
+              release_semaphore((int*)&params.token_locks[nextstate]);
               break;                                                                                              //exit loop as our update is done
-            }
-            __threadfence();                                                                                      //ensure writes cur_tok and token_locks are visible
           } //end while
         } //end total_cost<=cutoff
       } //end arc loop
@@ -1081,22 +1085,19 @@ template<typename T>
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
-            if(params.token_locks[nextstate]==0 && atomicExch((int*)&params.token_locks[nextstate],1)==0) {  //try and grab locks
+            acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
                 else
                   *cur_tok=next_tok;
 
-                __threadfence();                                                                             //ensure my write is visible to all threads
               }
               
-              atomicExch((int*)&params.token_locks[nextstate],0);                                            //release lock
               
               (*modified) = true;                                                                            //mark as updated
+            release_semaphore((int*)&params.token_locks[nextstate]);
               break;  //exit loop as our update is done
-            }
-            __threadfence(); //ensure writes to cur_tok and token_locks are visible
           } //end try update loop
         }
       }
