@@ -1164,7 +1164,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       params.allocator.advanceFront(params.cur_toks.size());
   }
 
-  __launch_bounds__(64,32)
+  __launch_bounds__(64,64)
   __global__ void processTokens_cg(processTokens_params params) {
 //    auto grid = cooperative_groups::this_grid();
 
