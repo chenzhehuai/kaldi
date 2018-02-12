@@ -1288,8 +1288,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
     dim3 threads(64,1);
     dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
 
-      if (params.verbose>3) KALDI_LOG <<blocks.x<<std::endl;
-
     params.prev_toks=prev_toks_;
     params.cur_toks=cur_toks_;
     params.allocator=allocator;
@@ -1310,6 +1308,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.barrier=barrier_d;
     params.verbose=verbose;
     params.frame=num_frames_decoded_;
+
+    if (params.verbose>2&&params.frame==1) KALDI_LOG <<"# of blocks: "<<blocks.x<<std::endl;
 
      if (params.verbose>4) KALDI_LOG <<std::endl;
     cudaStreamWaitEvent(stream_comp,event_ll,0); //make sure log likelihoods are on the device before starting these kernels
