@@ -1282,9 +1282,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
   void CudaDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
-
     processTokens_params params;
-   
     dim3 threads(64,1);
     dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
 
