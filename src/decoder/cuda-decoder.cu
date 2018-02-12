@@ -77,9 +77,9 @@ DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
  
         // wait for the sign bit to commute   
         int cnt=0;
-        while (((*fast_epoch) ^ old_epoch) >= 0&& ++cnt!=(1<<19))//deadlock hack
+        while (((*fast_epoch) ^ old_epoch) >= 0)//&& ++cnt!=(1<<19) //deadlock hack
             ;
-        if (blockIdx.x == 0) *fast_epoch=0;
+        //if (blockIdx.x == 0) *fast_epoch=0;
     }
     __syncthreads();
 }
@@ -960,7 +960,7 @@ DEVICE void release_semaphore(volatile int *lock){
 DEVICE void acquire_semaphore(volatile int *lock){
   short cnt=0;
   while (atomicCAS((int *)lock, 0, 1) != 0) {
-    if (++cnt==0) release_semaphore(lock); //deadlock hack
+    //if (++cnt==0) release_semaphore(lock); //deadlock hack
   }
   }
 
