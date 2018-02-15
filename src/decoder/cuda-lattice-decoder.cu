@@ -17,7 +17,6 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include "decoder/cuda-decoder.h"
 #include "fstext/remove-eps-local.h"
 #include <algorithm>
 #include <nvToolsExt.h>
@@ -25,6 +24,7 @@
 #include <float.h>
 #include <math.h>
 #include <cooperative_groups.h>
+#include "decoder/cuda-lattice-decoder.h"
 
 //#define MEMADVISE only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
@@ -39,6 +39,21 @@
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 namespace kaldi {
+
+  typedef CudaLatticeDecoder::Token Token;
+  typedef CudaLatticeDecoder::StateId StateId;
+  typedef CudaLatticeDecoder::TokenState TokenState;
+  typedef CudaLatticeDecoder::CostType CostType;
+  typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem;
+  typedef CudaLatticeDecoder::LatLink LatLink;
+  typedef CudaLatticeDecoder::LatToken LatToken;
+  typedef CudaLatticeDecoder::LatTokenVector LatTokenVector;
+  typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
+  typedef CudaLatticeDecoder::TokenVector TokenVector;
+  typedef CudaLatticeDecoder::processTokens_params processTokens_params;
+
+  template class CudaVector<LatToken>; 
+  template class CudaVector<LatLink>; 
 
   template <typename T>
   DEVICE __forceinline__ void load16(T *a, const T *b) {
@@ -362,18 +377,18 @@ template<typename T>
 
   /***************************************End CudaFst****************************************************/
 
-  DEVICE inline void allocateAllTokens_function(CudaLatticeDecoder::TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaLatticeDecoder::TokenAllocator allocator) {
+  DEVICE inline void allocateAllTokens_function(TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaLatticeDecoder::TokenAllocator allocator) {
     for(int i=blockIdx.x*blockDim.x+threadIdx.x; i<numStates; i+=blockDim.x*gridDim.x) {
-      CudaLatticeDecoder::Token *token = allocator.getToken(i);
+      Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
-      CudaLatticeDecoder::TokenLookupElem elem;
+      TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
       store16(&current_tokens_lookup[i], &elem);
     }
   }
-  __global__ void allocateAllTokens(CudaLatticeDecoder::TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaLatticeDecoder::TokenAllocator allocator, int *barrier) {
+  __global__ void allocateAllTokens(TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaLatticeDecoder::TokenAllocator allocator, int *barrier) {
     allocateAllTokens_function(current_tokens_lookup,numStates,allocator);
      __grid_sync_nv_internal(barrier);
      if(blockIdx.x==0 && threadIdx.x==0) {
@@ -381,14 +396,14 @@ template<typename T>
      }
   }
 
-  DEVICE inline void allocateNewTokens_function(CudaLatticeDecoder::TokenLookupElem *current_tokens_lookup, CudaLatticeDecoder::TokenVector cur_toks, CudaLatticeDecoder::TokenAllocator allocator) {
+  DEVICE inline void allocateNewTokens_function(TokenLookupElem *current_tokens_lookup, TokenVector cur_toks, CudaLatticeDecoder::TokenAllocator allocator) {
     int32 size = cur_toks.size();
     for(int i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
-      CudaLatticeDecoder::Token *token = allocator.getToken(i);
+      Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
-      CudaLatticeDecoder::StateId state=cur_toks[i].state;
-      CudaLatticeDecoder::TokenLookupElem elem;
+      StateId state=cur_toks[i].state;
+      TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
       store16(&current_tokens_lookup[state], &elem);
@@ -455,7 +470,7 @@ template<typename T>
     cudaFreeHost(front_h);
   }
 
-  DEVICE inline CudaLatticeDecoder::Token* CudaLatticeDecoder::TokenAllocator::getToken(uint32_t offset) {
+  DEVICE inline Token* CudaLatticeDecoder::TokenAllocator::getToken(uint32_t offset) {
     int idx = *front_d + offset;
     return &tokens_allocation[idx];
   }
@@ -528,6 +543,7 @@ template<typename T>
     cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
 
     verbose=config.verbose;
+    prune_interval_=config.prune_interval;
 
     //lattice
     cudaMalloc((void**)&lat_toks_vec_,sizeof(lat_toks_vec_)*(config.prune_interval)); 
@@ -549,14 +565,12 @@ template<typename T>
 
     cur_toks_.free();
     prev_toks_.free();
-    for (int i=0; i < config.prune_interval; i++) {
+    for (int i=0; i < prune_interval_; i++) {
       lat_toks_vec_[i].free();
       lat_arcs_vec_[i].free();
     }
     cudaFree(lat_toks_vec_);
     cudaFree(lat_arcs_vec_);
-    lat_toks_.free();
-    lat_arcs_.free();
     allocator.finalize();
 
     cudaFreeHost(loglikelihoods_h);
@@ -583,15 +597,36 @@ template<typename T>
     cudaStreamDestroy(stream_ll);
 
   }
-
-
+  DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
+    StateId nextstate, CostType total_cost, CostType acoustic_cost,
+    TokenState* ts, uint32_t j, bool add_arc) {
+    TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
+    Token *cur_tok=lookup_elem.token;
+    uint32_t lat_idx = params.frame % params.prune_interval;
+    uint32_t lat_idx_prev = (params.frame-1)%params.prune_interval;
+    //check if token is active or not.  Double check the lock.
+    if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
+      //if havent seen, add into hash
+      uint32_t lat_tok_idx=params.lat_toks_vec[lat_idx].push_back(LatToken(total_cost));
+      lookup_elem.tokenstate_idx =
+      params.cur_toks.push_back(TokenState(cur_tok,nextstate, lat_tok_idx));
+    }
+    if (add_arc) {
+      uint32_t lat_tok_idx_prev=ts->lat_tok_idx;
+      uint32_t lat_tok_idx = params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx;
+      uint32_t lat_arc_idx=params.lat_arcs_vec[lat_idx].push_back(LatLink(lat_tok_idx, j, 
+              acoustic_cost, params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx));
+      params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=lat_arc_idx;
+    }
+    return cur_tok;  
+  }
   __global__ void addOneToken(processTokens_params& params, StateId state) {
-    FindOrAddTokenArc(params, state, StdWeight::One().Value(), //add first token
-      StdWeight::One().Value(), NULL, -1, false);
+    FindOrAddTokenArc(params, state, 0, //add first token
+      0, NULL, -1, false);
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
-  __global__ void initializeCutoff(CudaLatticeDecoder::CostType *cutoff) {
+  __global__ void initializeCutoff(CostType *cutoff) {
     *cutoff = INFINITY;
   }
 
@@ -600,7 +635,7 @@ template<typename T>
   // clean up from last time:
     ClearToks(cur_toks_);
     ClearToks(prev_toks_);
-    for (int i=0; i < config.prune_interval; i++) {
+    for (int i=0; i < prune_interval_; i++) {
       lat_toks_vec_[i].clear(stream_comp);
       lat_arcs_vec_[i].clear(stream_comp);
     }
@@ -852,48 +887,16 @@ template<typename T>
   }
 
   //structs to hold kernel parameters.  Large numbers of parameters can slow down launch latency which matters when we are launching very short kernels
-  struct processTokens_params {
-
-    CudaLatticeDecoder::TokenVector prev_toks;
-    CudaLatticeDecoder::TokenVector cur_toks;
-    CudaLatticeDecoder::TokenAllocator allocator;
-    CudaLatticeDecoder::CostType *cutoff;
-
-    //never change
-    const __restrict__ uint32_t *e_offsets;
-    const __restrict__ uint32_t *ne_offsets;
-    const __restrict__ int32 *arc_ilabels;
-    const __restrict__ int32 *arc_olabels; 
-    const __restrict__ BaseFloat *arc_weights;
-    const __restrict__ CudaLatticeDecoder::StateId *arc_nextstates;
-    const __restrict__ BaseFloat *loglikelihoods;
-    CudaLatticeDecoder::TokenLookupElem *current_tokens_lookup;
-    volatile int *token_locks;
-    BaseFloat beam;
-    volatile int *modified;
-    int *pe_idx;
-    int *ne_idx;
-    int *fb_idx;
-    int *barrier;
-
-    //debug
-    int verbose;
-    int frame;
-  };
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
   inline DEVICE void findBestCutoff_function(processTokens_params params) {
-    typedef CudaLatticeDecoder::TokenState TokenState;
-    typedef CudaLatticeDecoder::Token Token; 
-    typedef CudaLatticeDecoder::StateId StateId;
-    typedef CudaLatticeDecoder::CostType CostType;
 
     int threadIdxy = threadIdx.x / blockDimx;
 
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
-    CudaLatticeDecoder::CostType local_cutoff = INFINITY;
+    CostType local_cutoff = INFINITY;
     int32 size = params.prev_toks.size(); 
 
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
@@ -931,7 +934,7 @@ template<typename T>
         BaseFloat acoustic_cost = -params.loglikelihoods[ilabel]; //TODO can I prefetch this?
         CostType weight = params.arc_weights[j];
         
-        CudaLatticeDecoder::CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
+        CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
 
         if(total_cost<local_cutoff)
           local_cutoff = total_cost;
@@ -957,39 +960,10 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
   }
 
-  inline DEVICE Token* FindOrAddTokenArc(processTokens_params& params,
-    StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, uint32_t j, bool add_arc) {
-    TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
-    Token *cur_tok=lookup_elem.token
-    //TokenLookupElem lookup_elem;
-    //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]); //fast read
-    uint32_t lat_idx = params.frame%params.prune_interval;
-    uint32_t lat_idx_prev = (params.frame-1)%params.prune_interval;
-    //check if token is active or not.  Double check the lock.
-    if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
-      //if havent seen, add into hash
-      uint32_t lat_tok_idx=params.lat_toks_vec_[lat_idx].push_back(LatToken(total_cost));
-      lookup_elem.tokenstate_idx =
-      params.cur_toks.push_back(TokenState(cur_tok,nextstate, lat_tok_idx));
-    }
-    if (add_arc) {
-      uint32_t lat_tok_idx_prev=ts->lat_tok_idx;
-      uint32_t lat_tok_idx = params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx;
-      lat_arc_idx=params.lat_arcs_vec_[lat_idx].push_back(LatLink(lat_tok_idx, j, 
-              acoustic_cost, params.lat_toks_vec_[lat_idx_prev][lat_tok_idx_prev].last_arc_idx));
-      params.lat_toks_vec_[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=lat_arc_idx;
-    }
-    return cur_tok;  
-  }
+
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
   inline DEVICE void processEmittingTokens_function(processTokens_params params) {
-    typedef CudaLatticeDecoder::TokenState TokenState;
-    typedef CudaLatticeDecoder::Token Token; 
-    typedef CudaLatticeDecoder::StateId StateId;
-    typedef CudaLatticeDecoder::CostType CostType;
-    typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem; 
     int threadIdxy = threadIdx.x / blockDimx;
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
@@ -1062,12 +1036,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
   
     template<int blockDimx, int blockDimy>
-  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaLatticeDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
-    typedef CudaLatticeDecoder::TokenState TokenState;
-    typedef CudaLatticeDecoder::Token Token; 
-    typedef CudaLatticeDecoder::StateId StateId;
-    typedef CudaLatticeDecoder::CostType CostType;
-    typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem; 
+  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int *modified) {
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
@@ -1100,8 +1069,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
-          Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true);
+          Token *cur_tok = FindOrAddTokenArc(params, nextstate, weight, 
+            0, &ts, j, true);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1135,7 +1104,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
 
-    CudaLatticeDecoder::CostType cutoff=*params.cutoff;
+    CostType cutoff=*params.cutoff;
     do {
 
       uint32_t size = params.cur_toks.size();
@@ -1185,7 +1154,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
-    CudaLatticeDecoder::CostType cutoff=*params.cutoff;
+    CostType cutoff=*params.cutoff;
 
     processEmittingTokens_function<32,2>(params);
     //grid.sync();
@@ -1263,7 +1232,9 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.barrier=barrier_d;
     params.verbose=verbose;
     params.frame=num_frames_decoded_;
-    params.prune_interval = config.prune_interval;
+    params.prune_interval = prune_interval_;
+    params.lat_toks_vec = lat_toks_vec_;
+    params.lat_arcs_vec = lat_arcs_vec_;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1292,13 +1263,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
   void CudaLatticeDecoder::PreProcessLattices(LatTokenVector** cur_toks_,
       LatTokenVector** prev_toks_, LatLinkVector** cur_arcs_) {
-    uint32_t frame=num_frames_decoded_%config.prune_interval;
-    uint32_t frame_prev=(num_frames_decoded_-1)%config.prune_interval;
+    uint32_t frame=num_frames_decoded_%prune_interval_;
+    uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
     if (frame_prev>=0) *prev_toks_=&lat_toks_vec_[frame_prev];
     else *prev_toks_=NULL;
     if (num_frames_decoded_) {
       lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
-      *cur_arcs_=&lat_toks_vec_[frame_prev];
+      *cur_arcs_=&lat_arcs_vec_[frame_prev];
     }
     else *cur_arcs_=NULL;
     lat_toks_vec_[frame].copy_all_to_host(stream_comp);
@@ -1350,5 +1321,4 @@ DEVICE void acquire_semaphore(volatile int *lock){
     //cannot acctually delete tokens as they may still be connected to active tokens
     toks.clear(stream_comp);
   }
-
 } // end namespace kaldi.

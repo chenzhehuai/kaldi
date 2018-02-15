@@ -23,14 +23,13 @@
 
 #include "util/stl-utils.h"
 #include "util/hash-list.h"
-#include "fst/fstlib.h"
 #include "itf/decodable-itf.h"
 #include "fstext/fstext-lib.h"
 #include "lat/determinize-lattice-pruned.h"
 #include "lat/kaldi-lattice.h"
+#include "cuda-lattice-decoder.h"
 
 namespace kaldi {
-
 
 /** A bit more optimized version of the lattice decoder.
    See \ref lattices_generation \ref decoders_faster and \ref decoders_simple
@@ -42,34 +41,29 @@ class LatticeFasterDecoderCuda {
   typedef Arc::Label Label;
   typedef Arc::StateId StateId;
   typedef Arc::Weight Weight;
+  typedef CudaLatticeDecoder::LatToken LatToken;
+  typedef CudaLatticeDecoder::LatTokenVector LatTokenVector;
+  typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
 
   // instantiate this class once for each thing you have to decode.
-  LatticeFasterDecoderCuda(const fst::Fst<fst::StdArc> &fst,
-                       const LatticeFasterDecoderConfig &config);
+  LatticeFasterDecoderCuda(const CudaFst &fst,
+                       const CudaLatticeDecoderConfig &config);
 
   // This version of the initializer "takes ownership" of the fst,
   // and will delete it when this object is destroyed.
-  LatticeFasterDecoderCuda(const LatticeFasterDecoderConfig &config,
-                       fst::Fst<fst::StdArc> *fst);
 
-
-  void SetOptions(const LatticeFasterDecoderConfig &config) {
-    config_ = config;
-  }
-
-  const LatticeFasterDecoderConfig &GetOptions() const {
+  ~LatticeFasterDecoderCuda();
+  const CudaLatticeDecoderConfig&GetOptions() const {
     return config_;
   }
 
-  ~LatticeFasterDecoderCuda();
 
   /// Decodes until there are no more frames left in the "decodable" object..
   /// note, this may block waiting for input if the "decodable" object blocks.
   /// Returns true if any kind of traceback is available (not necessarily from a
   /// final state).
   bool Decode(DecodableInterface *decodable);
-
-
+  void InitDecoding();
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
   bool ReachedFinal() const {
@@ -180,8 +174,12 @@ class LatticeFasterDecoderCuda {
   };
 
   typedef HashList<StateId, Token*>::Elem Elem;
+  void CreateTokAndRegister(LatToken& tok_d_h, 
+  Token *&toks, std::vector<Token *>& tok_vec);
+  void ProcessLattices(LatTokenVector& cur_toks_,
+  LatTokenVector& prev_toks_, LatLinkVector& cur_arcs_);
+  void FinalizeDecoding();
 
-  void PossiblyResizeHash(size_t num_toks);
 
   // prunes outgoing links for all tokens in active_toks_[frame]
   // it's called by PruneActiveTokens
@@ -243,13 +241,12 @@ class LatticeFasterDecoderCuda {
   std::vector<StateId> queue_;  // temp variable used in ProcessNonemitting,
 
   // make it class member to avoid internal new/delete.
-  const fst::Fst<fst::StdArc> &fst_;
+  const CudaFst& fst_;
   bool delete_fst_;
   std::vector<BaseFloat> cost_offsets_; // This contains, for each
   // frame, an offset that was added to the acoustic log-likelihoods on that
   // frame in order to keep everything in a nice dynamic range i.e.  close to
   // zero, to reduce roundoff errors.
-  int32 num_toks_; // current total #toks allocated...
   bool warned_;
 
   /// decoding_finalized_ is true if someone called FinalizeDecoding().  [note,
@@ -267,8 +264,10 @@ class LatticeFasterDecoderCuda {
   BaseFloat final_best_cost_;
 
   const CudaLatticeDecoderConfig &config_;
+  int32 num_toks_; // current total #toks allocated...
   CudaLatticeDecoder decoder_;
   std::vector<Token *> active_toks_vec_[2];
+  int num_frames_decoded_;
 
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.
@@ -296,7 +295,6 @@ class LatticeFasterDecoderCuda {
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeFasterDecoderCuda);
 };
-
 
 
 } // end namespace kaldi.

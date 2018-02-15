@@ -17,19 +17,25 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include <nvToolsExt.h>
 #include "decoder/lattice-faster-decoder-cuda.h"
 #include "lat/lattice-functions.h"
 
 namespace kaldi {
 
+
+  typedef CudaLatticeDecoder::LatToken LatToken;
+  typedef CudaLatticeDecoder::LatTokenVector LatTokenVector;
+  typedef CudaLatticeDecoder::LatLink LatLink;
+  typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
+
 // instantiate this class once for each thing you have to decode.
-LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const fst::Fst<fst::StdArc> &fst,
+LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
                                            const CudaLatticeDecoderConfig &config):
     fst_(fst), delete_fst_(false), config_(config), num_toks_(0), 
     decoder_(fst, config_){
   //toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
   decoder_.InitDecoding();
-  decoder_.InitLattice();
   InitDecoding();
 }
 
@@ -50,7 +56,7 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   final_costs_.clear();
   StateId start_state = fst_.Start();
   KALDI_ASSERT(start_state != fst::kNoStateId);
-
+  num_frames_decoded_=0;
   //change to init in ProcessLattices()
   //active_toks_.resize(1);
   //Token *start_tok = new Token(0.0, 0.0, NULL, NULL);
@@ -81,22 +87,24 @@ void LatticeFasterDecoderCuda::ProcessLattices(LatTokenVector& cur_toks_,
   tok_vec.clear(); //for current frame
   for (int i=0;i<cur_toks_.size();i++) {
     CreateTokAndRegister(cur_toks_[i], active_toks_[num_frames_decoded_].toks, tok_vec);
+    num_toks_++;
   }
   for (int i=0;i<prev_toks_.size();i++) {
     LatToken& tok_d_h = prev_toks_[i];
     if (num_frames_decoded_==1) { //if num_frames_decoded_!=1, it has been created
       CreateTokAndRegister(tok_d_h, active_toks_[num_frames_decoded_-1].toks, 
                            tok_vec_prev);
+      num_toks_++;
     }
-    Token& tok_prev = tok_vec_prev[i];
+    Token* tok_prev = tok_vec_prev[i];
     uint32_t arc_idx=tok_d_h.last_arc_idx;
     while (arc_idx != -1) {
       LatLink& arc_d_h = cur_arcs_[arc_idx];
-      BaseFloat graph_cost=decoder_.arc_weights_h[arc_d_h.arc_id];
-      StateId nextstate=decoder_.arc_nextstates_h[arc_d_h.arc_id];
-      int32 ilabel=decoder_.arc_ilabels_h[arc_d_h.arc_id];
-      int32 olabel=decoder_.arc_olabels_h[arc_d_h.arc_id];
-      Token& next_tok=tok_vec[arc_d_h.next_tok];
+      const CudaFst& cu_fst = decoder_.fst_;
+      BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
+      int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
+      int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
+      Token* next_tok=tok_vec[arc_d_h.next_tok];
       tok_prev->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
                                         arc_d_h.acoustic_cost, tok_prev->links);
       arc_idx=arc_d_h.last_arc_idx;
@@ -117,9 +125,11 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   LatTokenVector* prev_toks_;
   LatLinkVector* cur_arcs_;
   decoder_.InitDecoding();
+  InitDecoding();
   decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
 
   decoder_.ComputeLogLikelihoods(decodable);
+  num_frames_decoded_++;
 
   while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     decoder_.PreProcessTokens();
@@ -130,6 +140,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
     //computes log likelihoods for the next frame
     decoder_.ComputeLogLikelihoods(decodable);
+    num_frames_decoded_++;
   }
 
   nvtxRangePop();
@@ -145,7 +156,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 // FinalizeDecoding() is a version of PruneActiveTokens that we call
 // (optionally) on the final frame.  Takes into account the final-prob of
 // tokens.  This function used to be called PruneActiveTokensFinal().
-void LatticeFasterDecoder::FinalizeDecoding() {
+void LatticeFasterDecoderCuda::FinalizeDecoding() {
   int32 final_frame_plus_one = NumFramesDecoded();
   int32 num_toks_begin = num_toks_;
   // PruneForwardLinksFinal() prunes final frame (with final-probs), and
@@ -354,7 +365,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinksFinal() {
   // otherwise there would be a time, after calling PruneTokensForFrame() on the
   // final frame, when toks_.GetList() or toks_.Clear() would contain pointers
   // to nonexistent tokens.
-  DeleteElems(toks_.Clear());
+  //DeleteElems(toks_.Clear());
 
   // Now go through tokens on this frame, pruning forward links...  may have to
   // iterate a few times until there is no more change, because the list is not
@@ -501,51 +512,47 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
     BaseFloat *final_relative_cost,
     BaseFloat *final_best_cost) const {
   KALDI_ASSERT(!decoding_finalized_);
-  if (final_costs != NULL)
-    final_costs->clear();
-  const Elem *final_toks = toks_.GetList();
-  BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
-  BaseFloat best_cost = infinity,
-      best_cost_with_final = infinity;
-  while (final_toks != NULL) {
-    StateId state = final_toks->key;
-    Token *tok = final_toks->val;
-    const Elem *next = final_toks->tail;
-    BaseFloat final_cost = fst_.Final(state).Value();
-    BaseFloat cost = tok->tot_cost,
-        cost_with_final = cost + final_cost;
-    best_cost = std::min(cost, best_cost);
-    best_cost_with_final = std::min(cost_with_final, best_cost_with_final);
-    if (final_costs != NULL && final_cost != infinity)
-      (*final_costs)[tok] = final_cost;
-    final_toks = next;
-  }
-  if (final_relative_cost != NULL) {
-    if (best_cost == infinity && best_cost_with_final == infinity) {
-      // Likely this will only happen if there are no tokens surviving.
-      // This seems the least bad way to handle it.
-      *final_relative_cost = infinity;
-    } else {
-      *final_relative_cost = best_cost_with_final - best_cost;
-    }
-  }
-  if (final_best_cost != NULL) {
-    if (best_cost_with_final != infinity) { // final-state exists.
-      *final_best_cost = best_cost_with_final;
-    } else { // no final-state exists.
-      *final_best_cost = best_cost;
-    }
-  }
+  *final_relative_cost=0;
+  *final_best_cost=0;
+  KALDI_WARN<<"unfinished here";
+//  if (final_costs != NULL)
+//    final_costs->clear();
+//  const Elem *final_toks = toks_.GetList();
+//  BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
+//  BaseFloat best_cost = infinity,
+//      best_cost_with_final = infinity;
+//  while (final_toks != NULL) {
+//    StateId state = final_toks->key;
+//    Token *tok = final_toks->val;
+//    const Elem *next = final_toks->tail;
+//    BaseFloat final_cost = fst_.Final(state).Value();
+//    BaseFloat cost = tok->tot_cost,
+//        cost_with_final = cost + final_cost;
+//    best_cost = std::min(cost, best_cost);
+//    best_cost_with_final = std::min(cost_with_final, best_cost_with_final);
+//    if (final_costs != NULL && final_cost != infinity)
+//      (*final_costs)[tok] = final_cost;
+//    final_toks = next;
+//  }
+//  if (final_relative_cost != NULL) {
+//    if (best_cost == infinity && best_cost_with_final == infinity) {
+//      // Likely this will only happen if there are no tokens surviving.
+//      // This seems the least bad way to handle it.
+//      *final_relative_cost = infinity;
+//    } else {
+//      *final_relative_cost = best_cost_with_final - best_cost;
+//    }
+//  }
+//  if (final_best_cost != NULL) {
+//    if (best_cost_with_final != infinity) { // final-state exists.
+//      *final_best_cost = best_cost_with_final;
+//    } else { // no final-state exists.
+//      *final_best_cost = best_cost;
+//    }
+//  }
 }
 
 
-
-void LatticeFasterDecoderCuda::DeleteElems(Elem *list) {
-  for (Elem *e = list, *e_tail; e != NULL; e = e_tail) {
-    e_tail = e->tail;
-    toks_.Delete(e);
-  }
-}
 
 void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at utt end/begin
   for (size_t i = 0; i < active_toks_.size(); i++) {

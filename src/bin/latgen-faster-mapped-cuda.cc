@@ -26,7 +26,8 @@
 #include "decoder/decoder-wrappers.h"
 #include "decoder/decodable-matrix.h"
 #include "base/timer.h"
-
+#include "decoder/lattice-faster-decoder-cuda.h"
+#include "decoder/cuda-lattice-decoder.h"
 
 int main(int argc, char *argv[]) {
   try {
@@ -45,7 +46,7 @@ int main(int argc, char *argv[]) {
     Timer timer;
     bool allow_partial = false;
     BaseFloat acoustic_scale = 0.1;
-    LatticeFasterDecoderConfig config;
+    CudaLatticeDecoderConfig config;
 
     std::string word_syms_filename;
     config.Register(&po);
@@ -97,10 +98,12 @@ int main(int argc, char *argv[]) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
       Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
+      CudaFst decode_fst_cuda;
+      decode_fst_cuda.initialize(*decode_fst);
       timer.Reset();
 
       {
-        LatticeFasterDecoderCuda decoder(*decode_fst, config);
+        LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
           std::string utt = loglike_reader.Key();
@@ -115,7 +118,7 @@ int main(int argc, char *argv[]) {
           DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
 
           double like;
-          if (DecodeUtteranceLatticeFaster(
+          if (DecodeUtteranceLatticeFasterCuda(
                   decoder, decodable, trans_model, word_syms, utt,
                   acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
