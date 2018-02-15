@@ -549,10 +549,14 @@ template<typename T>
     prune_interval_=config.prune_interval;
 
     //lattice
-    cudaMalloc((void**)&lat_toks_vec_,sizeof(lat_toks_vec_)*(config.prune_interval)); 
-    bytes_cudaMalloc+=sizeof(lat_toks_vec_)*(config.prune_interval);
-    cudaMalloc((void**)&lat_arcs_vec_,sizeof(lat_arcs_vec_)*(config.prune_interval)); 
-    bytes_cudaMalloc+=sizeof(lat_arcs_vec_)*(config.prune_interval);
+    //lat_toks_vec_=(LatTokenVector *)calloc(config.prune_interval, sizeof(lat_toks_vec_));
+    cudaMallocHost((void**)&lat_toks_vec_,sizeof(lat_toks_vec_)*(config.prune_interval));
+    //cudaMemset((void*)lat_toks_vec_,0,sizeof(lat_toks_vec_)*(config.prune_interval));
+    //bytes_cudaMalloc+=sizeof(lat_toks_vec_)*(config.prune_interval);
+    //lat_arcs_vec_=(LatLinkVector *)calloc(config.prune_interval, sizeof(lat_arcs_vec_));
+    cudaMallocHost((void**)&lat_arcs_vec_,sizeof(lat_arcs_vec_)*(config.prune_interval)); 
+    //cudaMemset((void*)lat_arcs_vec_,0,sizeof(lat_arcs_vec_)*(config.prune_interval));
+    //bytes_cudaMalloc+=sizeof(lat_arcs_vec_)*(config.prune_interval);
     for (int i=0; i < config.prune_interval; i++) {
       lat_toks_vec_[i].allocate(config.max_lat_tok_per_frame);
       lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
@@ -572,8 +576,10 @@ template<typename T>
       lat_toks_vec_[i].free();
       lat_arcs_vec_[i].free();
     }
-    cudaFree(lat_toks_vec_);
-    cudaFree(lat_arcs_vec_);
+    //free(lat_toks_vec_);
+    //free(lat_arcs_vec_);
+    cudaFreeHost(lat_toks_vec_);
+    cudaFreeHost(lat_arcs_vec_);
     allocator.finalize();
 
     cudaFreeHost(loglikelihoods_h);
