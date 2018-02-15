@@ -30,6 +30,7 @@
 #endif
 
 #include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
 #include "util/stl-utils.h"
 #include "fst/fstlib.h"
 #include "lat/determinize-lattice-pruned.h"
@@ -95,11 +96,11 @@ class CudaFst {
 template<typename T>
 class CudaVector {
     public:
-      HOST DEVICE inline T& operator[](uint32_t idx); 
-      HOST DEVICE inline const T& operator[](uint32_t idx) const; 
+      HOST DEVICE T& operator[](uint32_t idx); 
+      HOST DEVICE const T& operator[](uint32_t idx) const; 
       inline void allocate(uint32_t max_size);
       inline void free();
-      HOST DEVICE inline uint32_t size() const; 
+      HOST DEVICE uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
       inline void clear(cudaStream_t stream=0); 
       inline bool empty() const;
@@ -118,6 +119,7 @@ class CudaVector {
       uint32_t max_size;
       T* mem_d, *mem_h;
 };
+
 
 struct CudaLatticeDecoderConfig {
   BaseFloat beam;
@@ -257,6 +259,7 @@ typedef CudaVector<TokenState> TokenVector;
 
   typedef CudaVector<LatToken> LatTokenVector;
   typedef CudaVector<LatLink> LatLinkVector;
+
 
   //Preallocates tokens and allocates them in a circular buffer.
   //This allows threads to concurrently allocate/deallocate objects quickly in CUDA

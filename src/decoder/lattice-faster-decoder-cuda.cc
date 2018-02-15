@@ -18,6 +18,7 @@
 // limitations under the License.
 
 #include <nvToolsExt.h>
+#include "cuda-lattice-decoder.h"
 #include "decoder/lattice-faster-decoder-cuda.h"
 #include "lat/lattice-functions.h"
 

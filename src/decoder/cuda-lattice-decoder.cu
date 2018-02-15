@@ -20,7 +20,6 @@
 #include "fstext/remove-eps-local.h"
 #include <algorithm>
 #include <nvToolsExt.h>
-#include <cuda_runtime_api.h>
 #include <float.h>
 #include <math.h>
 #include <cooperative_groups.h>
@@ -52,8 +51,12 @@ namespace kaldi {
   typedef CudaLatticeDecoder::TokenVector TokenVector;
   typedef CudaLatticeDecoder::processTokens_params processTokens_params;
 
-  template class CudaVector<LatToken>; 
-  template class CudaVector<LatLink>; 
+  //template class CudaVector<LatToken>; 
+  //template class CudaVector<LatLink>; 
+  //http://en.cppreference.com/w/cpp/language/class_template
+  template HOST DEVICE uint32_t CudaVector<LatToken>::size() const;
+  template HOST DEVICE LatToken& CudaVector<LatToken>::operator[](uint32_t idx); 
+  template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
 
   template <typename T>
   DEVICE __forceinline__ void load16(T *a, const T *b) {
