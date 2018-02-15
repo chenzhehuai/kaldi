@@ -82,7 +82,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(LatTokenVector& cur_toks_,
   
   if (num_frames_decoded_==1) {
     tok_vec_prev.clear();
-    active_toks_.resize(1);
+    active_toks_.resize(0);
   }
   active_toks_.resize(active_toks_.size() + 1);
   tok_vec.clear(); //for current frame
@@ -455,6 +455,7 @@ BaseFloat LatticeFasterDecoderCuda::FinalRelativeCost() const {
 // It's called by PruneActiveTokens if any forward links have been pruned
 void LatticeFasterDecoderCuda::PruneTokensForFrame(int32 frame_plus_one) {
   KALDI_ASSERT(frame_plus_one >= 0 && frame_plus_one < active_toks_.size());
+  return;
   Token *&toks = active_toks_[frame_plus_one].toks;
   if (toks == NULL)
     KALDI_WARN << "No tokens alive [doing pruning]";

@@ -102,7 +102,7 @@ class CudaVector {
       inline void free();
       HOST DEVICE uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
-      inline void clear(cudaStream_t stream=0); 
+      HOST DEVICE inline void clear(cudaStream_t stream=0); 
       inline bool empty() const;
       inline void swap(CudaVector<T> &v); 
       inline void copy_all_to_host(cudaStream_t stream=0);
@@ -318,7 +318,7 @@ typedef CudaVector<TokenState> TokenVector;
     //debug
     int verbose;
 
-    int frame;
+    uint32_t frame;
     int prune_interval;
     LatTokenVector* lat_toks_vec;
     LatLinkVector* lat_arcs_vec;

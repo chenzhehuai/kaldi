@@ -538,23 +538,16 @@ template<typename T>
     cudaMalloc((void**)&loglikelihoods_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
     cudaMalloc((void**)&loglikelihoods_old_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
 
-    cudaStreamSynchronize(stream_comp);
-    cudaStreamSynchronize(stream_copy);
-    cudaStreamSynchronize(cudaStreamPerThread);
-
-    //sgemm requires shared memory and we don't want cache config changing.  So set a device wide cache config.
-    cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
-
     verbose=config.verbose;
     prune_interval_=config.prune_interval;
 
     //lattice
     //lat_toks_vec_=(LatTokenVector *)calloc(config.prune_interval, sizeof(lat_toks_vec_));
-    cudaMallocHost((void**)&lat_toks_vec_,sizeof(lat_toks_vec_)*(config.prune_interval));
+    cudaMallocHost((void**)&lat_toks_vec_,sizeof(LatTokenVector)*(config.prune_interval));
     //cudaMemset((void*)lat_toks_vec_,0,sizeof(lat_toks_vec_)*(config.prune_interval));
     //bytes_cudaMalloc+=sizeof(lat_toks_vec_)*(config.prune_interval);
     //lat_arcs_vec_=(LatLinkVector *)calloc(config.prune_interval, sizeof(lat_arcs_vec_));
-    cudaMallocHost((void**)&lat_arcs_vec_,sizeof(lat_arcs_vec_)*(config.prune_interval)); 
+    cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(config.prune_interval)); 
     //cudaMemset((void*)lat_arcs_vec_,0,sizeof(lat_arcs_vec_)*(config.prune_interval));
     //bytes_cudaMalloc+=sizeof(lat_arcs_vec_)*(config.prune_interval);
     for (int i=0; i < config.prune_interval; i++) {
@@ -563,7 +556,12 @@ template<typename T>
       bytes_cudaMalloc += lat_toks_vec_[i].getCudaMallocBytes() +
                           lat_arcs_vec_[i].getCudaMallocBytes();
     }
-    
+
+    cudaStreamSynchronize(stream_comp);
+    cudaStreamSynchronize(stream_copy);
+    cudaStreamSynchronize(cudaStreamPerThread);
+    //sgemm requires shared memory and we don't want cache config changing.  So set a device wide cache config.
+    cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
   }
 
   CudaLatticeDecoder::~CudaLatticeDecoder() {
@@ -629,9 +627,19 @@ template<typename T>
     }
     return cur_tok;  
   }
-  __global__ void addOneToken(processTokens_params& params, StateId state) {
-    FindOrAddTokenArc(params, state, 0, //add first token
+  __global__ void addOneToken(processTokens_params params, StateId state) {
+    Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
       0, NULL, -1, false);
+    Token tok(0, NULL, 0);
+    *cur_tok = tok;
+  }
+  __global__ void addOneToken2(TokenLookupElem *current_tokens_lookup,  TokenVector cur_toks, Token tok, StateId state, LatTokenVector* lat_toks_vec) {
+
+    TokenLookupElem elem = current_tokens_lookup[state];
+    *elem.token = tok;
+    current_tokens_lookup[state].active = true;
+    uint32_t lat_tok_idx=lat_toks_vec[0].push_back(LatToken(0));
+    cur_toks.push_back(TokenState(elem.token,state, lat_tok_idx));   //add token to current token list 
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -641,6 +649,7 @@ template<typename T>
 
   void CudaLatticeDecoder::InitDecoding() {
     printf("CUDA LatticeDecoder InitDecoding\n");
+    num_frames_decoded_ = 0;
   // clean up from last time:
     ClearToks(cur_toks_);
     ClearToks(prev_toks_);
@@ -668,10 +677,13 @@ template<typename T>
     processTokens_params params;
     initParams(params);
     addOneToken<<<1,1,0,stream_comp>>>(params, start_state);
+
+    //Token tok(StdWeight::One().Value(), NULL, 0);
+    //addOneToken2<<<1,1,0,stream_comp>>>(current_tokens_lookup_d, cur_toks_, tok, start_state, lat_toks_vec_);
+
     cudaCheckError();
 
     initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
-    num_frames_decoded_ = 0;
     ProcessNonemitting();
   }
 
@@ -972,7 +984,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void processEmittingTokens_function(processTokens_params params) {
+  inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
     int threadIdxy = threadIdx.x / blockDimx;
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
@@ -1274,15 +1286,15 @@ DEVICE void acquire_semaphore(volatile int *lock){
       LatTokenVector** prev_toks_, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
-    if (frame_prev>=0) *prev_toks_=&lat_toks_vec_[frame_prev];
+    if (num_frames_decoded_>=0) *prev_toks_=&lat_toks_vec_[frame_prev];
     else *prev_toks_=NULL;
     if (num_frames_decoded_) {
       lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
-      *cur_arcs_=&lat_arcs_vec_[frame_prev];
+      *cur_arcs_=&lat_arcs_vec_[frame];
     }
     else *cur_arcs_=NULL;
     lat_toks_vec_[frame].copy_all_to_host(stream_comp);
-    *cur_toks_=&lat_toks_vec_[frame_prev];
+    *cur_toks_=&lat_toks_vec_[frame];
     cudaStreamSynchronize(stream_comp);
   }
   void CudaLatticeDecoder::PreProcessTokens() {
@@ -1296,6 +1308,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
   void CudaLatticeDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
+    num_frames_decoded_++;
     if (verbose>4) KALDI_LOG << num_frames_decoded_<<std::endl;
 
     processTokens_params params;
@@ -1321,7 +1334,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
     cudaEventSynchronize(event_pt); //throttle
     cudaEventRecord(event_pt,stream_comp);
 
-    num_frames_decoded_++;
 
     nvtxRangePop();
   }
