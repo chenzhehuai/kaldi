@@ -414,6 +414,7 @@ template<typename T>
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
+      elem.tokenstate_idx=-1;
       store16(&current_tokens_lookup[state], &elem);
     }
   }
@@ -998,7 +999,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void processEmittingTokens_function(processTokens_params params) {
+  inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
     int threadIdxy = threadIdx.x / blockDimx;
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
@@ -1078,7 +1079,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
   
     template<int blockDimx, int blockDimy>
-  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params params, CostType cutoff, uint32_t size,  volatile int *modified) {
+  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params& params, CostType cutoff, uint32_t size,  volatile int *modified) {
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
