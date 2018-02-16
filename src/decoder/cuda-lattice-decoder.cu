@@ -610,11 +610,17 @@ template<typename T>
   }
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, uint32_t j, bool add_arc) {
+    TokenState* ts, uint32_t j, bool add_arc, bool emit) {
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
     Token *cur_tok=lookup_elem.token;
     uint32_t lat_idx = params.frame % params.prune_interval;
-    uint32_t lat_idx_prev = (params.frame-1)%params.prune_interval;
+    uint32_t lat_idx_prev;
+    if (emit) {
+      lat_idx_prev = (params.frame-1)%params.prune_interval;
+    }
+    else {
+      lat_idx_prev = lat_idx;
+    }
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
@@ -634,7 +640,7 @@ template<typename T>
   }
   __global__ void addOneToken(processTokens_params params, StateId state) {
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL, -1, false);
+      0, NULL, -1, false, false);
     Token tok(0, NULL, 0);
     *cur_tok = tok;
   }
@@ -1041,7 +1047,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         {
           Token next_tok =  Token(acoustic_cost+weight, tok, j);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true);
+            acoustic_cost, &ts, j, true, true);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1105,7 +1111,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true);
+            0, &ts, j, true, false);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 

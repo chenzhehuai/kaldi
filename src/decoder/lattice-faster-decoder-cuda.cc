@@ -36,8 +36,8 @@ LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
     fst_(fst), delete_fst_(false), config_(config), num_toks_(0), 
     decoder_(fst, config_){
   //toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
-  decoder_.InitDecoding();
-  InitDecoding();
+  //decoder_.InitDecoding();
+  //InitDecoding();
 }
 
 LatticeFasterDecoderCuda::~LatticeFasterDecoderCuda() {
