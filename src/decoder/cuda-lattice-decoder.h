@@ -218,9 +218,11 @@ struct TokenState {
   
   Token* token; //arc and labels
   StateId state;  //to state
-  uint32_t lat_tok_idx;    
+  int32_t lat_tok_idx;   //-1: havent init 
   HOST DEVICE inline TokenState (Token *token, StateId state, 
-    uint32_t ilat_tok_idx) : token(token), state(state), lat_tok_idx(ilat_tok_idx) { }
+    int32_t ilat_tok_idx) : token(token), state(state), lat_tok_idx(ilat_tok_idx) { }
+  HOST DEVICE inline TokenState (Token *token, StateId state) : token(token), state(state), lat_tok_idx(-1) { }
+
   HOST DEVICE inline TokenState () : token(NULL) {};
 };
 

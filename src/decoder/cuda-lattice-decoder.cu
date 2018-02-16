@@ -117,8 +117,10 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
   template<typename T>
     HOST DEVICE inline T& CudaVector<T>::operator[](uint32_t idx) { 
 #ifdef __CUDA_ARCH__
+      assert(idx<*count_d);
       return mem_d[idx];
 #else
+      assert(idx<*count_h);
       return mem_h[idx];
 #endif
     }
@@ -126,8 +128,10 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
   template<typename T>
     HOST DEVICE inline const T& CudaVector<T>::operator[](uint32_t idx) const { 
 #ifdef __CUDA_ARCH__
+      assert(idx<*count_d);
       return mem_d[idx];
 #else
+      assert(idx<*count_h);
       return mem_h[idx];
 #endif
     } 
@@ -614,14 +618,15 @@ template<typename T>
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      uint32_t lat_tok_idx=params.lat_toks_vec[lat_idx].push_back(LatToken(total_cost));
-      lookup_elem.tokenstate_idx =
-      params.cur_toks.push_back(TokenState(cur_tok,nextstate, lat_tok_idx));
+      lookup_elem.tokenstate_idx =params.cur_toks.push_back(TokenState(cur_tok,nextstate));
+      int32_t lat_tok_idx=params.lat_toks_vec[lat_idx].push_back(LatToken(total_cost));
+      params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx=lat_tok_idx;
     }
+    volatile int& lat_tok_idx = params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx;
+    while (lat_tok_idx==-1);
     if (add_arc) {
-      uint32_t lat_tok_idx_prev=ts->lat_tok_idx;
-      uint32_t lat_tok_idx = params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx;
-      uint32_t lat_arc_idx=params.lat_arcs_vec[lat_idx].push_back(LatLink(lat_tok_idx, j, 
+      int32_t lat_tok_idx_prev=ts->lat_tok_idx;
+      int32_t lat_arc_idx=params.lat_arcs_vec[lat_idx].push_back(LatLink(lat_tok_idx, j, 
               acoustic_cost, params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx));
       params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=lat_arc_idx;
     }
@@ -1107,11 +1112,15 @@ DEVICE void acquire_semaphore(volatile int *lock){
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
-//              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx];
-//              uint32_t lat_idx = params.frame % params.prune_interval;
-//              CostType& pcost=params.lat_toks_vec[lat_idx][nts.lat_tok_idx].tot_cost;
-//              assert(cur_tokv->cost_ == INFINITY || pcost>=total_cost);
-//              pcost=total_cost;             
+              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx];
+              uint32_t lat_idx = params.frame % params.prune_interval;
+              LatTokenVector& clat_tok_vec=params.lat_toks_vec[lat_idx];
+              //LatToken& clat_tok = 
+              clat_tok_vec[nts.lat_tok_idx];
+              //CostType* pcost=&(clat_toks_vec[nts.lat_tok_idx].tot_cost);
+              //CostType* pcost=&params.lat_toks_vec[lat_idx][nts.lat_tok_idx].tot_cost;
+              //assert(cur_tokv->cost_ == INFINITY || *pcost>=total_cost);
+              //*pcost=total_cost;             
 
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
