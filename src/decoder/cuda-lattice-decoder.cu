@@ -1043,13 +1043,18 @@ DEVICE void acquire_semaphore(volatile int *lock){
           while(*cur_tokv < next_tok) {   //check if we need to update
           acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
+//              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx];
+//              uint32_t lat_idx = params.frame % params.prune_interval;
+//              CostType& pcost=params.lat_toks_vec[lat_idx][nts.lat_tok_idx].tot_cost;
+//              assert(cur_tokv->cost_ == INFINITY || pcost>=total_cost);
+//              pcost=total_cost; 
+
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
                 else
                   *cur_tok=next_tok;
+
               }
-              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx]
-              params.lat_toks_vec[nts.lat_tok_idx].tot_cost=total_cost;              
               release_semaphore((int*)&params.token_locks[nextstate]);
               break;                                                                                              //exit loop as our update is done
           } //end while
@@ -1102,14 +1107,19 @@ DEVICE void acquire_semaphore(volatile int *lock){
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
+//              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx];
+//              uint32_t lat_idx = params.frame % params.prune_interval;
+//              CostType& pcost=params.lat_toks_vec[lat_idx][nts.lat_tok_idx].tot_cost;
+//              assert(cur_tokv->cost_ == INFINITY || pcost>=total_cost);
+//              pcost=total_cost;             
+
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
                 else
                   *cur_tok=next_tok;
-              }
-              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx]
-              params.lat_toks_vec[nts.lat_tok_idx].tot_cost=total_cost;
+
               (*modified) = true;                                                                            //mark as updated
+              }
             release_semaphore((int*)&params.token_locks[nextstate]);
               break;  //exit loop as our update is done
           } //end try update loop
@@ -1296,6 +1306,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
     lat_toks_vec_[frame].copy_all_to_host(stream_comp);
     cudaStreamSynchronize(stream_comp);
+    
     if (num_frames_decoded_) {
       *cur_arcs_=&lat_arcs_vec_[frame];
     }
@@ -1303,6 +1314,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     *cur_toks_=&lat_toks_vec_[frame];
   }
   void CudaLatticeDecoder::PreProcessTokens() {
+    num_frames_decoded_++;
 #ifndef MEMADVISE
     //no need to prefetch if we have done a memadvise
     allocator.prefetch_next_to_device(cudaStreamPerThread);
@@ -1310,10 +1322,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
     //TODO prefetch here
     
     cur_toks_.swap(prev_toks_);
+    
+    uint32_t frame=num_frames_decoded_%prune_interval_;
+    lat_toks_vec_[frame].clear();
+    lat_arcs_vec_[frame].clear();
   }
   void CudaLatticeDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
-    num_frames_decoded_++;
     if (verbose>4) KALDI_LOG << num_frames_decoded_<<std::endl;
 
     processTokens_params params;
