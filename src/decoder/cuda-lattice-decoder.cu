@@ -1048,6 +1048,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
                 else
                   *cur_tok=next_tok;
               }
+              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx]
+              params.lat_toks_vec[nts.lat_tok_idx].tot_cost=total_cost;              
               release_semaphore((int*)&params.token_locks[nextstate]);
               break;                                                                                              //exit loop as our update is done
           } //end while
@@ -1105,7 +1107,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
                 else
                   *cur_tok=next_tok;
               }
-              
+              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx]
+              params.lat_toks_vec[nts.lat_tok_idx].tot_cost=total_cost;
               (*modified) = true;                                                                            //mark as updated
             release_semaphore((int*)&params.token_locks[nextstate]);
               break;  //exit loop as our update is done
