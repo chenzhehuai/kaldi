@@ -1088,9 +1088,11 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
         Token next_tok = Token(weight, tok, j);
 
+        CostType total_cost = tok->cost_ + weight;
+
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
-          Token *cur_tok = FindOrAddTokenArc(params, nextstate, weight, 
+          Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             0, &ts, j, true);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
@@ -1288,14 +1290,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
     if (num_frames_decoded_>=0) *prev_toks_=&lat_toks_vec_[frame_prev];
     else *prev_toks_=NULL;
+    lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
+    lat_toks_vec_[frame].copy_all_to_host(stream_comp);
+    cudaStreamSynchronize(stream_comp);
     if (num_frames_decoded_) {
-      lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
       *cur_arcs_=&lat_arcs_vec_[frame];
     }
     else *cur_arcs_=NULL;
-    lat_toks_vec_[frame].copy_all_to_host(stream_comp);
     *cur_toks_=&lat_toks_vec_[frame];
-    cudaStreamSynchronize(stream_comp);
   }
   void CudaLatticeDecoder::PreProcessTokens() {
 #ifndef MEMADVISE

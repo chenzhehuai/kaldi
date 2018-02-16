@@ -82,7 +82,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(LatTokenVector& cur_toks_,
   
   if (num_frames_decoded_==1) {
     tok_vec_prev.clear();
-    active_toks_.resize(0);
+    active_toks_.resize(1);
   }
   active_toks_.resize(active_toks_.size() + 1);
   tok_vec.clear(); //for current frame
