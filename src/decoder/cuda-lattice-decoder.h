@@ -209,7 +209,7 @@ class __align__(16) Token {
   struct __align__(16) TokenLookupElem{
     Token *token;     //pointer for that token
     uint32_t active;  //tells if token has activiated or not
-    uint32_t tokenstate_idx;     //aligning to 16 bytes
+    int32_t tokenstate_idx;     //aligning to 16 bytes
   };
 
 
@@ -253,7 +253,11 @@ typedef CudaVector<TokenState> TokenVector;
     //CostType graph_cost; //can be obtained from arc_id
     CostType acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     int32_t last_arc_idx; //to simulate a linklist
-    
+
+     HOST DEVICE inline LatLink(int32_t inext_tok, int32_t iarc_id, 
+      CostType iacoustic_cost): next_tok(inext_tok),
+      arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(-1) { }
+   
     HOST DEVICE inline LatLink(int32_t inext_tok, int32_t iarc_id, 
       CostType iacoustic_cost, int32_t ilast_arc_idx ): next_tok(inext_tok),
       arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(ilast_arc_idx) { }

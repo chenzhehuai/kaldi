@@ -392,6 +392,7 @@ template<typename T>
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
+      elem.tokenstate_idx=-1;
       store16(&current_tokens_lookup[i], &elem);
     }
   }
@@ -626,14 +627,16 @@ template<typename T>
       //if havent seen, add into hash
       lookup_elem.tokenstate_idx =params.cur_toks.push_back(TokenState(cur_tok,nextstate));
       int32_t lat_tok_idx=params.lat_toks_vec[lat_idx].push_back(LatToken(total_cost));
-      params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx=lat_tok_idx;
+      params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx=lat_tok_idx; //by this way to ensure atomic
     }
+    while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     volatile int& lat_tok_idx = params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx;
-    while (lat_tok_idx==-1);
+    while (lat_tok_idx==-1);//hasnt pushed
     if (add_arc) {
       int32_t lat_tok_idx_prev=ts->lat_tok_idx;
       int32_t lat_arc_idx=params.lat_arcs_vec[lat_idx].push_back(LatLink(lat_tok_idx, j, 
-              acoustic_cost, params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx));
+              acoustic_cost));
+      params.lat_arcs_vec[lat_idx][lat_arc_idx].last_arc_idx = params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx; //by this way to ensure atomic
       params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=lat_arc_idx;
     }
     return cur_tok;  
@@ -995,7 +998,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
+  inline DEVICE void processEmittingTokens_function(processTokens_params params) {
     int threadIdxy = threadIdx.x / blockDimx;
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
@@ -1075,7 +1078,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
   
     template<int blockDimx, int blockDimy>
-  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int *modified) {
+  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params params, CostType cutoff, uint32_t size,  volatile int *modified) {
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
