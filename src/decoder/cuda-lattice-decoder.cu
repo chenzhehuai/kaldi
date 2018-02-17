@@ -45,8 +45,6 @@ namespace kaldi {
   typedef CudaLatticeDecoder::CostType CostType;
   typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem;
   typedef CudaLatticeDecoder::LatLink LatLink;
-  typedef CudaLatticeDecoder::LatToken LatToken;
-  typedef CudaLatticeDecoder::LatTokenVector LatTokenVector;
   typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
   typedef CudaLatticeDecoder::TokenVector TokenVector;
   typedef CudaLatticeDecoder::processTokens_params processTokens_params;
@@ -54,8 +52,6 @@ namespace kaldi {
   //template class CudaVector<LatToken>; 
   //template class CudaVector<LatLink>; 
   //http://en.cppreference.com/w/cpp/language/class_template
-  template HOST DEVICE uint32_t CudaVector<LatToken>::size() const;
-  template HOST DEVICE LatToken& CudaVector<LatToken>::operator[](uint32_t idx); 
   template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
 
   template <typename T>
@@ -612,17 +608,9 @@ template<typename T>
   }
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, uint32_t j, bool add_arc, bool emit, int32_t subid {
+    TokenState* ts, uint32_t j, bool add_arc, bool emit, int32_t subid) {
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
     Token *cur_tok=lookup_elem.token;
-    uint32_t lat_idx = params.frame % params.prune_interval;
-    uint32_t lat_idx_prev;
-    if (emit) {
-      lat_idx_prev = (params.frame-1)%params.prune_interval;
-    }
-    else {
-      lat_idx_prev = lat_idx;
-    }
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
@@ -630,26 +618,18 @@ template<typename T>
     }
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     if (add_arc) {
-      int32_t lat_arc_idx=params.lat_arcs_vec[subid].push_back(LatLink(ts->token, j, 
+      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(LatLink(ts->token, j, 
               acoustic_cost));
-      params.lat_arcs_vec[subid][lat_arc_idx].last_arc_idx = cur_tok.last_arc_idx; //by this way to ensure atomic
+      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok.last_arc_idx; //by this way to ensure atomic
       cur_tok.last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
     }
     return cur_tok;  
   }
   __global__ void addOneToken(processTokens_params params, StateId state) {
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL, -1, false, false, blockIdx.x%sub_vec_num_);
+      0, NULL, -1, false, false, 0);
     Token tok(0, NULL, 0);
     *cur_tok = tok;
-  }
-  __global__ void addOneToken2(TokenLookupElem *current_tokens_lookup,  TokenVector cur_toks, Token tok, StateId state, LatTokenVector* lat_toks_vec) {
-
-    TokenLookupElem elem = current_tokens_lookup[state];
-    *elem.token = tok;
-    current_tokens_lookup[state].active = true;
-    uint32_t lat_tok_idx=lat_toks_vec[0].push_back(LatToken(0));
-    cur_toks.push_back(TokenState(elem.token,state, lat_tok_idx));   //add token to current token list 
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -1055,11 +1035,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
           while(*cur_tokv < next_tok) {   //check if we need to update
           acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
-//              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx];
-//              uint32_t lat_idx = params.frame % params.prune_interval;
-//              CostType& pcost=params.lat_toks_vec[lat_idx][nts.lat_tok_idx].tot_cost;
-//              assert(cur_tokv->cost_ == INFINITY || pcost>=total_cost);
-//              pcost=total_cost; 
 
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
@@ -1248,9 +1223,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
 //    auto grid = cooperative_groups::this_grid();
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
-    
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
   
     if(rank0) {
       //prepare for next iteration
@@ -1265,12 +1237,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     if(rank0) {
       params.allocator.advanceFront(params.cur_toks.size());
     }
-
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
   }
     
-  __launch_bounds__(64,64)
   void CudaLatticeDecoder::PostProcessTokens() {
     processTokens_params params;
     dim3 threads(64,1);

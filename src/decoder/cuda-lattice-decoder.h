@@ -129,13 +129,13 @@ struct CudaLatticeDecoderConfig {
   uint32_t max_lat_arc_per_frame;
   uint32_t max_tokens;
   int32_t prune_interval;
-  int32_t sub_vec_num;
   BaseFloat lattice_beam;
   bool determinize_lattice;
   BaseFloat prune_scale;
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
 
   int verbose;
+  int32_t sub_vec_num;
   
   CudaLatticeDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
@@ -222,10 +222,8 @@ struct TokenState {
   Token* token; //arc and labels
   StateId state;  //to state
   //int32_t lat_tok_idx;   //-1: havent init 
-  HOST DEVICE inline TokenState (Token *token, StateId state, 
-    int32_t ilat_tok_idx) : token(token), state(state), lat_tok_idx(ilat_tok_idx) { }
-  HOST DEVICE inline TokenState (Token *token, StateId state) : token(token), state(state), lat_tok_idx(-1) { }
-
+  HOST DEVICE inline TokenState (Token *token, StateId state)
+    : token(token), state(state) { }
   HOST DEVICE inline TokenState () : token(NULL) {};
 };
 
@@ -249,9 +247,9 @@ typedef CudaVector<TokenState> TokenVector;
       arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(ilast_arc_idx) { }
   };
 
-  #define ((rawid<<5)+thd)  GET_ARCIDX(rawid, thd) //assume 32 threads
-  #define (id>>5)  GET_RAWARCIDX(id) //assume 32 threads
-  #define (id%32)  GET_THDIDX(id) //assume 32 threads
+  #define GET_ARCIDX(rawid, thd) ((rawid<<5)+thd)   //assume 32 threads
+  #define GET_RAWARCIDX(id)  (id>>5) //assume 32 threads
+  #define GET_THDIDX(id) (id%32) //assume 32 threads
 
   typedef CudaVector<LatLink> LatLinkVector;
 
@@ -353,8 +351,8 @@ typedef CudaVector<TokenState> TokenVector;
   void InitDecoding();  
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
-  void PreProcessLattices(LatTokenVector** cur_toks_,
-      LatTokenVector** prev_toks_, LatLinkVector** cur_arcs_);
+  void PreProcessLattices(TokenVector** cur_toks_,
+      TokenVector** prev_toks_, LatLinkVector** cur_arcs_);
   void PreProcessTokens();
 
   /// This will decode until there are no more frames ready in the decodable
@@ -380,6 +378,7 @@ typedef CudaVector<TokenState> TokenVector;
 
   void ProcessNonemitting();
   void ProcessTokens();
+  void PostProcessTokens(); 
 
  
   //token lookup table.  Provides constant time lookup for active tokens.
