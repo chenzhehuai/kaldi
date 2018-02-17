@@ -174,8 +174,7 @@ class LatticeFasterDecoderCuda {
   };
 
   typedef HashList<StateId, Token*>::Elem Elem;
-  void CreateTokAndRegister(LatToken& tok_d_h, 
-  Token *&toks, std::vector<Token *>& tok_vec);
+  
   void ProcessLattices(LatTokenVector& cur_toks_,
   LatTokenVector& prev_toks_, LatLinkVector& cur_arcs_);
   void FinalizeDecoding();
@@ -266,7 +265,7 @@ class LatticeFasterDecoderCuda {
   const CudaLatticeDecoderConfig &config_;
   int32 num_toks_; // current total #toks allocated...
   CudaLatticeDecoder decoder_;
-  std::vector<Token *> active_toks_vec_[2];
+  std::unordered_map<CudaLatticeDecoder::Token* , Token *> active_toks_map_;  
   int num_frames_decoded_;
 
   // There are various cleanup tasks... the the toks_ structure contains

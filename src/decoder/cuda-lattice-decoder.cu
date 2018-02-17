@@ -551,14 +551,11 @@ template<typename T>
     sub_vec_num_=config.sub_vec_num;
 
     //lattice
-    cudaMallocHost((void**)&lat_toks_vec_,sizeof(LatTokenVector)*(config.prune_interval));
     cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(config.prune_interval)); 
     cudaMallocHost((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
     for (int i=0; i < config.prune_interval; i++) {
-      lat_toks_vec_[i].allocate(config.max_lat_tok_per_frame);
       lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
-      bytes_cudaMalloc += lat_toks_vec_[i].getCudaMallocBytes() +
-                          lat_arcs_vec_[i].getCudaMallocBytes();
+      bytes_cudaMalloc += lat_arcs_vec_[i].getCudaMallocBytes();
     }
     for (int i=0; i < config.sub_vec_num; i++) {
       lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame/config.sub_vec_num);
@@ -579,15 +576,12 @@ template<typename T>
     cur_toks_.free();
     prev_toks_.free();
     for (int i=0; i < prune_interval_; i++) {
-      lat_toks_vec_[i].free();
       lat_arcs_vec_[i].free();
     }
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].free();
     }
-    //free(lat_toks_vec_);
     //free(lat_arcs_vec_);
-    cudaFreeHost(lat_toks_vec_);
     cudaFreeHost(lat_arcs_vec_);
     cudaFreeHost(lat_arcs_sub_vec_);
     allocator.finalize();
@@ -670,7 +664,6 @@ template<typename T>
     ClearToks(cur_toks_);
     ClearToks(prev_toks_);
     for (int i=0; i < prune_interval_; i++) {
-      lat_toks_vec_[i].clear(stream_comp);
       lat_arcs_vec_[i].clear(stream_comp);
     }
     for (int i=0; i < sub_vec_num_; i++) {
@@ -1247,8 +1240,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
     if (rank0&&params.verbose>2&&params.frame%10==0) 
           printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
 
-    // TODO: do PreProcessLattices before here
+    // TODO: do PreProcessLattices before here    
+  }
 
+  __launch_bounds__(64,64)
+  __global__ void PostProcessTokens_cg(processTokens_params params) {
+//    auto grid = cooperative_groups::this_grid();
+    bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
     
     if(rank0&&params.verbose>4)  
@@ -1270,8 +1268,20 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     if(rank0&&params.verbose>4)  
     {p++;printf("S: %i\n",p);}
-    
   }
+    
+  __launch_bounds__(64,64)
+  void CudaLatticeDecoder::PostProcessTokens() {
+    processTokens_params params;
+    dim3 threads(64,1);
+    dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
+
+    initParams(params);
+
+    PostProcessTokens_cg<<<blocks,threads,0,stream_comp>>>(params);  //doesn't work
+    cudaCheckError();
+  }
+
   void CudaLatticeDecoder::initParams(processTokens_params& params) {
     params.prev_toks=prev_toks_;
     params.allocator=allocator;
@@ -1294,7 +1304,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.verbose=verbose;
     params.frame=num_frames_decoded_;
     params.prune_interval = prune_interval_;
-    params.lat_toks_vec = lat_toks_vec_;
     params.lat_arcs_vec = lat_arcs_vec_;
     params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
   }
@@ -1329,7 +1338,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
     * prev_toks_ = prev_toks_;
     * cur_toks_ = cur_toks_;
-    //TODO: copy lat_arcs_sub_vec_ to lat_arcs_vec_
 
     lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
 

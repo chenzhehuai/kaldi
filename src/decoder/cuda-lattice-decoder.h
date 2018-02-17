@@ -251,9 +251,9 @@ typedef CudaVector<TokenState> TokenVector;
 
   #define ((rawid<<5)+thd)  GET_ARCIDX(rawid, thd) //assume 32 threads
   #define (id>>5)  GET_RAWARCIDX(id) //assume 32 threads
+  #define (id%32)  GET_THDIDX(id) //assume 32 threads
 
   typedef CudaVector<LatLink> LatLinkVector;
-
 
   //Preallocates tokens and allocates them in a circular buffer.
   //This allows threads to concurrently allocate/deallocate objects quickly in CUDA
