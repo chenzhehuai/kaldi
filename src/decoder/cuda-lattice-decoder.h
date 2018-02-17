@@ -129,6 +129,7 @@ struct CudaLatticeDecoderConfig {
   uint32_t max_lat_arc_per_frame;
   uint32_t max_tokens;
   int32_t prune_interval;
+  int32_t sub_vec_num;
   BaseFloat lattice_beam;
   bool determinize_lattice;
   BaseFloat prune_scale;
@@ -146,7 +147,8 @@ struct CudaLatticeDecoderConfig {
                        lattice_beam(10.0),
                        determinize_lattice(true),
                        prune_scale(0.1), 
-                       verbose(0) { }
+                       verbose(0),
+                       sub_vec_num(32) { }
   
   void Register(OptionsItf *opts) {
     det_opts.Register(opts);
@@ -263,6 +265,9 @@ typedef CudaVector<TokenState> TokenVector;
       arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(ilast_arc_idx) { }
   };
 
+  #define ((rawid<<5)+thd)  GET_ARCIDX(rawid, thd) //assume 32 threads
+  #define (id>>5)  GET_RAWARCIDX(id) //assume 32 threads
+
   typedef CudaVector<LatToken> LatTokenVector;
   typedef CudaVector<LatLink> LatLinkVector;
 
@@ -328,6 +333,7 @@ typedef CudaVector<TokenState> TokenVector;
     int prune_interval;
     LatTokenVector* lat_toks_vec;
     LatLinkVector* lat_arcs_vec;
+    LatLinkVector* lat_arcs_sub_vec;
   };
 
 
@@ -431,10 +437,12 @@ typedef CudaVector<TokenState> TokenVector;
   
   int verbose;
   int prune_interval_;
+  int sub_vec_num_;
 
 
   LatTokenVector* lat_toks_vec_;
   LatLinkVector* lat_arcs_vec_;
+  LatLinkVector* lat_arcs_sub_vec_;
 
 
 

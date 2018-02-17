@@ -546,21 +546,21 @@ template<typename T>
 
     verbose=config.verbose;
     prune_interval_=config.prune_interval;
+    sub_vec_num_=config.sub_vec_num;
 
     //lattice
-    //lat_toks_vec_=(LatTokenVector *)calloc(config.prune_interval, sizeof(lat_toks_vec_));
     cudaMallocHost((void**)&lat_toks_vec_,sizeof(LatTokenVector)*(config.prune_interval));
-    //cudaMemset((void*)lat_toks_vec_,0,sizeof(lat_toks_vec_)*(config.prune_interval));
-    //bytes_cudaMalloc+=sizeof(lat_toks_vec_)*(config.prune_interval);
-    //lat_arcs_vec_=(LatLinkVector *)calloc(config.prune_interval, sizeof(lat_arcs_vec_));
     cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(config.prune_interval)); 
-    //cudaMemset((void*)lat_arcs_vec_,0,sizeof(lat_arcs_vec_)*(config.prune_interval));
-    //bytes_cudaMalloc+=sizeof(lat_arcs_vec_)*(config.prune_interval);
+    cudaMallocHost((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
     for (int i=0; i < config.prune_interval; i++) {
       lat_toks_vec_[i].allocate(config.max_lat_tok_per_frame);
       lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
       bytes_cudaMalloc += lat_toks_vec_[i].getCudaMallocBytes() +
                           lat_arcs_vec_[i].getCudaMallocBytes();
+    }
+    for (int i=0; i < config.sub_vec_num; i++) {
+      lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame/config.sub_vec_num);
+      bytes_cudaMalloc += lat_arcs_sub_vec_[i].getCudaMallocBytes();
     }
 
     cudaStreamSynchronize(stream_comp);
@@ -580,10 +580,14 @@ template<typename T>
       lat_toks_vec_[i].free();
       lat_arcs_vec_[i].free();
     }
+    for (int i=0; i < sub_vec_num_; i++) {
+      lat_arcs_sub_vec_[i].free();
+    }
     //free(lat_toks_vec_);
     //free(lat_arcs_vec_);
     cudaFreeHost(lat_toks_vec_);
     cudaFreeHost(lat_arcs_vec_);
+    cudaFreeHost(lat_arcs_sub_vec_);
     allocator.finalize();
 
     cudaFreeHost(loglikelihoods_h);
@@ -612,7 +616,7 @@ template<typename T>
   }
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, uint32_t j, bool add_arc, bool emit) {
+    TokenState* ts, uint32_t j, bool add_arc, bool emit, int32_t subid {
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
     Token *cur_tok=lookup_elem.token;
     uint32_t lat_idx = params.frame % params.prune_interval;
@@ -635,16 +639,16 @@ template<typename T>
     while (lat_tok_idx==-1);//hasnt pushed
     if (add_arc) {
       int32_t lat_tok_idx_prev=ts->lat_tok_idx;
-      int32_t lat_arc_idx=params.lat_arcs_vec[lat_idx].push_back(LatLink(lat_tok_idx, j, 
+      int32_t lat_arc_idx=params.lat_arcs_vec[subid].push_back(LatLink(lat_tok_idx, j, 
               acoustic_cost));
-      params.lat_arcs_vec[lat_idx][lat_arc_idx].last_arc_idx = params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx; //by this way to ensure atomic
-      params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=lat_arc_idx;
+      params.lat_arcs_vec[subid][lat_arc_idx].last_arc_idx = params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx; //by this way to ensure atomic
+      params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
     }
     return cur_tok;  
   }
   __global__ void addOneToken(processTokens_params params, StateId state) {
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL, -1, false, false);
+      0, NULL, -1, false, false, blockIdx.x%sub_vec_num_);
     Token tok(0, NULL, 0);
     *cur_tok = tok;
   }
@@ -671,6 +675,9 @@ template<typename T>
     for (int i=0; i < prune_interval_; i++) {
       lat_toks_vec_[i].clear(stream_comp);
       lat_arcs_vec_[i].clear(stream_comp);
+    }
+    for (int i=0; i < sub_vec_num_; i++) {
+      lat_arcs_sub_vec_[i].clear(stream_comp);  
     }
     
     allocator.reset();
@@ -1051,7 +1058,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         {
           Token next_tok =  Token(acoustic_cost+weight, tok, j);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, true);
+            acoustic_cost, &ts, j, true, true, blockIdx.x%sub_vec_num_);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1115,7 +1122,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, false);
+            0, &ts, j, true, false, blockIdx.x%sub_vec_num_);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1290,6 +1297,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.prune_interval = prune_interval_;
     params.lat_toks_vec = lat_toks_vec_;
     params.lat_arcs_vec = lat_arcs_vec_;
+    params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1322,6 +1330,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
     if (num_frames_decoded_>=0) *prev_toks_=&lat_toks_vec_[frame_prev];
     else *prev_toks_=NULL;
+    //TODO: copy lat_arcs_sub_vec_ to lat_arcs_vec_
+
     lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
     lat_toks_vec_[frame].copy_all_to_host(stream_comp);
     cudaStreamSynchronize(stream_comp);

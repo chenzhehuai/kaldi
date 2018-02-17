@@ -111,6 +111,8 @@ void LatticeFasterDecoderCuda::ProcessLattices(LatTokenVector& cur_toks_,
       arc_idx=arc_d_h.last_arc_idx;
     }
   } 
+  //TODO didnt proc nonemit in tok_vec
+  
   //call prune
   if (num_frames_decoded_ % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
