@@ -191,9 +191,10 @@ class __align__(16) Token {
   Token *prev_;
   CostType cost_; // accumulated total cost up to this point.
   uint32_t arc_index_;
-    BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
+  int32_t last_arc_idx;
+  //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
-  HOST DEVICE inline Token(BaseFloat cost, Token *prev, uint32_t arc_index) : prev_(prev), cost_(cost), arc_index_(arc_index) {
+  HOST DEVICE inline Token(BaseFloat cost, Token *prev, uint32_t arc_index) : prev_(prev), cost_(cost), arc_index_(arc_index), last_arc_idx(-1) {
     if(prev) {
       cost_ += prev->cost_;
     }
@@ -220,7 +221,7 @@ struct TokenState {
   
   Token* token; //arc and labels
   StateId state;  //to state
-  int32_t lat_tok_idx;   //-1: havent init 
+  //int32_t lat_tok_idx;   //-1: havent init 
   HOST DEVICE inline TokenState (Token *token, StateId state, 
     int32_t ilat_tok_idx) : token(token), state(state), lat_tok_idx(ilat_tok_idx) { }
   HOST DEVICE inline TokenState (Token *token, StateId state) : token(token), state(state), lat_tok_idx(-1) { }
@@ -230,37 +231,20 @@ struct TokenState {
 
 typedef CudaVector<TokenState> TokenVector;
 
-//lattice
-  class __align__(16) LatToken { //100000*50*16=80MB
-   public:
-    CostType tot_cost;
-    CostType extra_cost;
-    int32_t last_arc_idx;  //if <0, it's pruned, to simulate a linklist
-    int32_t num_arcs; //mainly for padding.
-
-    HOST DEVICE inline LatToken(CostType itot_cost) : tot_cost(itot_cost), extra_cost(0), last_arc_idx(-1)  { }
-
-    HOST DEVICE inline bool operator < (const LatToken &other) {
-      return tot_cost > other.tot_cost;
-    }
-    HOST DEVICE inline bool operator < (const LatToken &other) volatile{
-      return tot_cost > other.tot_cost;
-    }
-  }; 
   class __align__(16) LatLink {  //300000*50*16=240MB
    public:
-    int32_t next_tok;  //get LatToken by this index and the frame_idx
+    Token* next_tok;  //get LatToken by this index and the frame_idx
     int32_t arc_id;    //if <0, it's pruned, FST arcid to get Ilabel and Olabel
     // graph cost of traversing link (contains LM, etc.)
     //CostType graph_cost; //can be obtained from arc_id
     CostType acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     int32_t last_arc_idx; //to simulate a linklist
 
-     HOST DEVICE inline LatLink(int32_t inext_tok, int32_t iarc_id, 
+     HOST DEVICE inline LatLink(Token* inext_tok, int32_t iarc_id, 
       CostType iacoustic_cost): next_tok(inext_tok),
       arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(-1) { }
    
-    HOST DEVICE inline LatLink(int32_t inext_tok, int32_t iarc_id, 
+    HOST DEVICE inline LatLink(Token* inext_tok, int32_t iarc_id, 
       CostType iacoustic_cost, int32_t ilast_arc_idx ): next_tok(inext_tok),
       arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(ilast_arc_idx) { }
   };
@@ -268,7 +252,6 @@ typedef CudaVector<TokenState> TokenVector;
   #define ((rawid<<5)+thd)  GET_ARCIDX(rawid, thd) //assume 32 threads
   #define (id>>5)  GET_RAWARCIDX(id) //assume 32 threads
 
-  typedef CudaVector<LatToken> LatTokenVector;
   typedef CudaVector<LatLink> LatLinkVector;
 
 
@@ -331,7 +314,6 @@ typedef CudaVector<TokenState> TokenVector;
 
     uint32_t frame;
     int prune_interval;
-    LatTokenVector* lat_toks_vec;
     LatLinkVector* lat_arcs_vec;
     LatLinkVector* lat_arcs_sub_vec;
   };
@@ -440,7 +422,6 @@ typedef CudaVector<TokenState> TokenVector;
   int sub_vec_num_;
 
 
-  LatTokenVector* lat_toks_vec_;
   LatLinkVector* lat_arcs_vec_;
   LatLinkVector* lat_arcs_sub_vec_;
 

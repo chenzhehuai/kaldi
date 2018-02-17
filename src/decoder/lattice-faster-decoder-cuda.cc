@@ -90,6 +90,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(LatTokenVector& cur_toks_,
     CreateTokAndRegister(cur_toks_[i], active_toks_[num_frames_decoded_].toks, tok_vec);
     num_toks_++;
   }
+  //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   for (int i=0;i<prev_toks_.size();i++) {
     LatToken& tok_d_h = prev_toks_[i];
     if (num_frames_decoded_==1) { //if num_frames_decoded_!=1, it has been created
@@ -111,8 +112,6 @@ void LatticeFasterDecoderCuda::ProcessLattices(LatTokenVector& cur_toks_,
       arc_idx=arc_d_h.last_arc_idx;
     }
   } 
-  //TODO didnt proc nonemit in tok_vec
-  
   //call prune
   if (num_frames_decoded_ % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
@@ -124,8 +123,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   //decoder_.Decode(decodable);
 
   nvtxRangePushA("CudaLatticeDecoder::Decode");
-  LatTokenVector* cur_toks_;
-  LatTokenVector* prev_toks_;
+  TokenVector* cur_toks_;
+  TokenVector* prev_toks_;
   LatLinkVector* cur_arcs_;
   decoder_.InitDecoding();
   InitDecoding();

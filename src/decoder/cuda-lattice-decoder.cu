@@ -389,6 +389,7 @@ template<typename T>
       Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
+      token->last_arc_idx = -1;
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
@@ -410,6 +411,7 @@ template<typename T>
       Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
+      token->last_arc_idx = -1;
       StateId state=cur_toks[i].state;
       TokenLookupElem elem;
       elem.token=token;
@@ -631,18 +633,13 @@ template<typename T>
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
       lookup_elem.tokenstate_idx =params.cur_toks.push_back(TokenState(cur_tok,nextstate));
-      int32_t lat_tok_idx=params.lat_toks_vec[lat_idx].push_back(LatToken(total_cost));
-      params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx=lat_tok_idx; //by this way to ensure atomic
     }
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
-    volatile int& lat_tok_idx = params.cur_toks[lookup_elem.tokenstate_idx].lat_tok_idx;
-    while (lat_tok_idx==-1);//hasnt pushed
     if (add_arc) {
-      int32_t lat_tok_idx_prev=ts->lat_tok_idx;
-      int32_t lat_arc_idx=params.lat_arcs_vec[subid].push_back(LatLink(lat_tok_idx, j, 
+      int32_t lat_arc_idx=params.lat_arcs_vec[subid].push_back(LatLink(ts->token, j, 
               acoustic_cost));
-      params.lat_arcs_vec[subid][lat_arc_idx].last_arc_idx = params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx; //by this way to ensure atomic
-      params.lat_toks_vec[lat_idx_prev][lat_tok_idx_prev].last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      params.lat_arcs_vec[subid][lat_arc_idx].last_arc_idx = cur_tok.last_arc_idx; //by this way to ensure atomic
+      cur_tok.last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
     }
     return cur_tok;  
   }
@@ -1250,6 +1247,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     if (rank0&&params.verbose>2&&params.frame%10==0) 
           printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
 
+    // TODO: do PreProcessLattices before here
+
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
     
     if(rank0&&params.verbose>4)  
@@ -1324,23 +1323,25 @@ DEVICE void acquire_semaphore(volatile int *lock){
     nvtxRangePop();
   }
 
-  void CudaLatticeDecoder::PreProcessLattices(LatTokenVector** cur_toks_,
-      LatTokenVector** prev_toks_, LatLinkVector** cur_arcs_) {
+  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks_,
+      TokenVector** prev_toks_, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
-    if (num_frames_decoded_>=0) *prev_toks_=&lat_toks_vec_[frame_prev];
-    else *prev_toks_=NULL;
+    * prev_toks_ = prev_toks_;
+    * cur_toks_ = cur_toks_;
     //TODO: copy lat_arcs_sub_vec_ to lat_arcs_vec_
 
     lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
-    lat_toks_vec_[frame].copy_all_to_host(stream_comp);
+
+    for (int i=0; i < sub_vec_num_; i++) {
+      lat_arcs_sub_vec_[i].copy_all_to_host(stream_comp);  
+    }    
     cudaStreamSynchronize(stream_comp);
     
     if (num_frames_decoded_) {
-      *cur_arcs_=&lat_arcs_vec_[frame];
+      *cur_arcs_=lat_arcs_sub_vec_;
     }
     else *cur_arcs_=NULL;
-    *cur_toks_=&lat_toks_vec_[frame];
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
@@ -1353,8 +1354,10 @@ DEVICE void acquire_semaphore(volatile int *lock){
     cur_toks_.swap(prev_toks_);
     
     uint32_t frame=num_frames_decoded_%prune_interval_;
-    lat_toks_vec_[frame].clear();
     lat_arcs_vec_[frame].clear();
+    for (int i=0; i < sub_vec_num_; i++) {
+      lat_arcs_sub_vec_[i].clear();  
+    }
   }
   void CudaLatticeDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
