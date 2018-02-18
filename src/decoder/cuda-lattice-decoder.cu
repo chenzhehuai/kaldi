@@ -619,8 +619,8 @@ template<typename T>
     }
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     if (add_arc) {
-      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(LatLink(ts->token, j, 
-              acoustic_cost));
+      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(
+          LatLink(ts->token, j, acoustic_cost));
       params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
       cur_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
     }
