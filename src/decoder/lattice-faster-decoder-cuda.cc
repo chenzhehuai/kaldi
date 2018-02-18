@@ -78,7 +78,7 @@ void LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
     cuToken* tok_d_h = cur_toks_[i].token;
     assert(active_toks_map_.count(tok_d_h));
     Token* tok_prev = active_toks_map_[tok_d_h];
-    uint32_t arc_idx=tok_d_h->last_arc_idx;
+    int arc_idx=tok_d_h->last_arc_idx;
     while (arc_idx != -1) {
       LatLink& arc_d_h = cur_arcs_[GET_THDIDX(arc_idx)][GET_RAWARCIDX(arc_idx)];
       const CudaFst& cu_fst = decoder_.fst_;

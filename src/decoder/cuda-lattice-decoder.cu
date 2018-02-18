@@ -547,9 +547,9 @@ template<typename T>
     prune_interval_=config.prune_interval;
     sub_vec_num_=config.sub_vec_num;
 
-    //lattice
+    //lattice TODO: should use manage
     cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(config.prune_interval)); 
-    cudaMallocHost((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
+    cudaMallocManaged((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
     for (int i=0; i < config.prune_interval; i++) {
       lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
       bytes_cudaMalloc += lat_arcs_vec_[i].getCudaMallocBytes();
@@ -580,7 +580,7 @@ template<typename T>
     }
     //free(lat_arcs_vec_);
     cudaFreeHost(lat_arcs_vec_);
-    cudaFreeHost(lat_arcs_sub_vec_);
+    cudaFree(lat_arcs_sub_vec_);
     allocator.finalize();
 
     cudaFreeHost(loglikelihoods_h);
@@ -619,9 +619,11 @@ template<typename T>
     }
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     if (add_arc) {
-      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(
-          LatLink(ts->token, j, acoustic_cost));
-      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
+      LatLink arc=LatLink(ts->token, j, acoustic_cost);
+      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
+      //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
+      arc.last_arc_idx=cur_tok->last_arc_idx;
+      store16(&params.lat_arcs_sub_vec[subid][lat_arc_idx],&arc);
       cur_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
     }
     return cur_tok;  
