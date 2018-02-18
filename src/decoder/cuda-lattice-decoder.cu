@@ -1296,6 +1296,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
       TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
+    prev_toks_.copy_all_to_host(stream_comp);
+    cur_toks_.copy_all_to_host(stream_comp);
     * prev_toks = &prev_toks_;
     * cur_toks = &cur_toks_;
 

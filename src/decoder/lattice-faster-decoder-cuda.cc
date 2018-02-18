@@ -75,10 +75,10 @@ void LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
   //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   //copy lat_arcs_sub_vec_ to lat_arcs_vec_
   for (int i=0;i<cur_toks_.size();i++) {
-    cuToken& tok_d_h = *cur_toks_[i].token;
-    assert(active_toks_map_.count(&tok_d_h));
-    Token* tok_prev = active_toks_map_[&tok_d_h];
-    uint32_t arc_idx=tok_d_h.last_arc_idx;
+    cuToken* tok_d_h = cur_toks_[i].token;
+    assert(active_toks_map_.count(tok_d_h));
+    Token* tok_prev = active_toks_map_[tok_d_h];
+    uint32_t arc_idx=tok_d_h->last_arc_idx;
     while (arc_idx != -1) {
       LatLink& arc_d_h = cur_arcs_[GET_THDIDX(arc_idx)][GET_RAWARCIDX(arc_idx)];
       const CudaFst& cu_fst = decoder_.fst_;
@@ -111,8 +111,10 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
     CreateTokAndRegister(*cur_toks_[i].token, active_toks_[num_frames_decoded_].toks);
     num_toks_++;
   }
-  //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
+  //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
+  //TODO: change to preproc 0,0; proc t-1,t and t,t
   AddLatticeArcs(prev_toks_, cur_arcs_);
+  AddLatticeArcs(cur_toks_, cur_arcs_);
   //call prune
   if (num_frames_decoded_ % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);

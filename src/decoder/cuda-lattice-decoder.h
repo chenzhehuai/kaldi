@@ -249,7 +249,7 @@ typedef CudaVector<TokenState> TokenVector;
 
   #define GET_ARCIDX(rawid, thd) ((rawid<<5)+thd)   //assume 32 threads
   #define GET_RAWARCIDX(id)  (id>>5) //assume 32 threads
-  #define GET_THDIDX(id) (id%32) //assume 32 threads
+  #define GET_THDIDX(id) (id&((1<<5)-1)) //assume 32 threads
 
   typedef CudaVector<LatLink> LatLinkVector;
 
