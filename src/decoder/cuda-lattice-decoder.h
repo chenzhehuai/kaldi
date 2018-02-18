@@ -314,6 +314,7 @@ typedef CudaVector<TokenState> TokenVector;
     int prune_interval;
     LatLinkVector* lat_arcs_vec;
     LatLinkVector* lat_arcs_sub_vec;
+    int sub_vec_num;
   };
 
 

@@ -41,10 +41,10 @@ class LatticeFasterDecoderCuda {
   typedef Arc::Label Label;
   typedef Arc::StateId StateId;
   typedef Arc::Weight Weight;
-  typedef CudaLatticeDecoder::LatToken LatToken;
-  typedef CudaLatticeDecoder::LatTokenVector LatTokenVector;
+  typedef CudaLatticeDecoder::Token cuToken;
+  typedef CudaLatticeDecoder::TokenVector cuTokenVector;
+  typedef CudaLatticeDecoder::LatLink LatLink;
   typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
-
   // instantiate this class once for each thing you have to decode.
   LatticeFasterDecoderCuda(const CudaFst &fst,
                        const CudaLatticeDecoderConfig &config);
@@ -119,6 +119,7 @@ class LatticeFasterDecoderCuda {
   // ForwardLinks are the links from a token to a token on the next frame.
   // or sometimes on the current frame (for input-epsilon links).
   struct Token;
+  typedef std::unordered_map<cuToken* , Token *> TokenMap;
   struct ForwardLink {
     Token *next_tok; // the next token [or NULL if represents final-state]
     Label ilabel; // ilabel on link.
@@ -174,9 +175,8 @@ class LatticeFasterDecoderCuda {
   };
 
   typedef HashList<StateId, Token*>::Elem Elem;
-  
-  void ProcessLattices(LatTokenVector& cur_toks_,
-  LatTokenVector& prev_toks_, LatLinkVector& cur_arcs_);
+  void ProcessLattices(cuTokenVector& cur_toks_,
+  cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_);
   void FinalizeDecoding();
 
 
@@ -192,6 +192,8 @@ class LatticeFasterDecoderCuda {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
+  void CreateTokAndRegister(cuToken& tok_d_h, Token *&toks);
+  void AddLatticeArcs(cuTokenVector& cur_toks_, LatLinkVector*& cur_arcs_);
 
   // This function computes the final-costs for tokens active on the final
   // frame.  It outputs to final-costs, if non-NULL, a map from the Token*

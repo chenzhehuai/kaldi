@@ -53,6 +53,7 @@ namespace kaldi {
   //template class CudaVector<LatLink>; 
   //http://en.cppreference.com/w/cpp/language/class_template
   template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
+  template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
 
   template <typename T>
   DEVICE __forceinline__ void load16(T *a, const T *b) {
@@ -620,8 +621,8 @@ template<typename T>
     if (add_arc) {
       int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(LatLink(ts->token, j, 
               acoustic_cost));
-      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok.last_arc_idx; //by this way to ensure atomic
-      cur_tok.last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
+      cur_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
     }
     return cur_tok;  
   }
@@ -1028,7 +1029,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         {
           Token next_tok =  Token(acoustic_cost+weight, tok, j);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, true, blockIdx.x%sub_vec_num_);
+            acoustic_cost, &ts, j, true, true, blockIdx.x%params.sub_vec_num);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1087,23 +1088,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, false, blockIdx.x%sub_vec_num_);
+            0, &ts, j, true, false, blockIdx.x%params.sub_vec_num);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
-              TokenState &nts=params.cur_toks[params.current_tokens_lookup[nextstate].tokenstate_idx];
-              uint32_t lat_idx = params.frame % params.prune_interval;
-              LatTokenVector& clat_tok_vec=params.lat_toks_vec[lat_idx];
-              //LatToken& clat_tok = 
-              clat_tok_vec[nts.lat_tok_idx];
-              //CostType* pcost=&(clat_toks_vec[nts.lat_tok_idx].tot_cost);
-              //CostType* pcost=&params.lat_toks_vec[lat_idx][nts.lat_tok_idx].tot_cost;
-              //assert(cur_tokv->cost_ == INFINITY || *pcost>=total_cost);
-              //*pcost=total_cost;             
-
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
                 else
@@ -1274,6 +1265,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.prune_interval = prune_interval_;
     params.lat_arcs_vec = lat_arcs_vec_;
     params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
+    params.sub_vec_num=sub_vec_num_;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1300,12 +1292,12 @@ DEVICE void acquire_semaphore(volatile int *lock){
     nvtxRangePop();
   }
 
-  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks_,
-      TokenVector** prev_toks_, LatLinkVector** cur_arcs_) {
+  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
+      TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
-    * prev_toks_ = prev_toks_;
-    * cur_toks_ = cur_toks_;
+    * prev_toks = &prev_toks_;
+    * cur_toks = &cur_toks_;
 
     lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
 
