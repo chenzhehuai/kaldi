@@ -213,7 +213,7 @@ class __align__(16) Token {
   struct __align__(16) TokenLookupElem{
     Token *token;     //pointer for that token
     uint32_t active;  //tells if token has activiated or not
-    int32_t tokenstate_idx;     //aligning to 16 bytes
+    volatile int32_t tokenstate_idx;     //aligning to 16 bytes
   };
 
 
