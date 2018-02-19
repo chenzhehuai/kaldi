@@ -54,6 +54,7 @@ namespace kaldi {
   //http://en.cppreference.com/w/cpp/language/class_template
   template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
   template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
+  template HOST DEVICE uint32_t  CudaVector<TokenState>::size() const; 
 
 DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
@@ -644,12 +645,12 @@ template<typename T>
       volatile int& arc_lock = ts->arc_lock;
       Token *prev_tok = ts->token;  
       LatLink arc=LatLink(cur_tok, j, acoustic_cost);
-      int32_t lat_arc_idx=0;
-      //int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
-      //acquire_semaphore((int*)&arc_lock);
-      //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = prev_tok->last_arc_idx; //by this way to ensure atomic
-      //prev_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
-      //release_semaphore((int*)&arc_lock);
+      //int32_t lat_arc_idx=0;
+      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
+      acquire_semaphore((int*)&arc_lock);
+      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = prev_tok->last_arc_idx; //by this way to ensure atomic
+      prev_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      release_semaphore((int*)&arc_lock);
     }
     return cur_tok;  
   }
