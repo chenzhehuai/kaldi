@@ -82,6 +82,7 @@ void LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
     while (arc_idx != -1) {
       LatLink& arc_d_h = cur_arcs_[GET_THDIDX(arc_idx)][GET_RAWARCIDX(arc_idx)];
       const CudaFst& cu_fst = decoder_.fst_;
+      assert(arc_d_h.arc_id<cu_fst.arc_count);
       BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
       int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
       int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];

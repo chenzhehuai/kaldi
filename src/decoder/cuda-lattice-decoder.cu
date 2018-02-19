@@ -1051,18 +1051,19 @@ template<typename T>
           Token next_tok =  Token(acoustic_cost+weight, tok);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             acoustic_cost, &ts, j, true, true, threadIdx.x%params.sub_vec_num);
-          next_tok.last_arc_idx=cur_tok->last_arc_idx;
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
+          volatile int& arc_lock = ts.arc_lock;
           acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
 
-                if(sizeof(Token)==16)
-                  store16(cur_tok,&next_tok);                                                                       //update token
-                else
-                  *cur_tok=next_tok;
+                //if(sizeof(Token)==16)
+                //  store16(cur_tok,&next_tok);                                                                       //update token
+                //else
+                //  *cur_tok=next_tok;
+                cur_tok->cost_=next_tok.cost_;
 
               }
               release_semaphore((int*)&params.token_locks[nextstate]);
@@ -1111,17 +1112,17 @@ template<typename T>
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             0, &ts, j, true, false, threadIdx.x%params.sub_vec_num);
-          next_tok.last_arc_idx=cur_tok->last_arc_idx;
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
-                if(sizeof(Token)==16)
-                  store16(cur_tok,&next_tok);                                                                       //update token
-                else
-                  *cur_tok=next_tok;
+                //if(sizeof(Token)==16)
+                //  store16(cur_tok,&next_tok);                                                                       //update token
+                //else
+                //  *cur_tok=next_tok;
+                cur_tok->cost_=next_tok.cost_;
 
               (*modified) = true;                                                                            //mark as updated
               }
