@@ -465,7 +465,6 @@ BaseFloat LatticeFasterDecoderCuda::FinalRelativeCost() const {
 // It's called by PruneActiveTokens if any forward links have been pruned
 void LatticeFasterDecoderCuda::PruneTokensForFrame(int32 frame_plus_one) {
   KALDI_ASSERT(frame_plus_one >= 0 && frame_plus_one < active_toks_.size());
-  return;
   Token *&toks = active_toks_[frame_plus_one].toks;
   if (toks == NULL)
     KALDI_WARN << "No tokens alive [doing pruning]";
