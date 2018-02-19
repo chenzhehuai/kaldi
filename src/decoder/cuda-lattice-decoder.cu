@@ -678,9 +678,9 @@ template<typename T>
     for (int i=0; i < prune_interval_; i++) {
       lat_arcs_vec_[i].clear(stream_comp);
     }
-    for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].clear(stream_comp);  
-    }
+    //for (int i=0; i < sub_vec_num_; i++) {
+    //  lat_arcs_sub_vec_[i].clear(stream_comp);  
+    //}
     
     allocator.reset();
     int threads=64;
