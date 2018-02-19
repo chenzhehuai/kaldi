@@ -136,21 +136,19 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.ComputeLogLikelihoods(decodable);
   num_frames_decoded_++;
 
-  while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
+  while( !decodable->IsLastFrame(NumFramesDecoded() - 1)) {
     decoder_.PreProcessTokens();
     decoder_.ProcessTokens();
-
     decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
     ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
-
+    
+    if (decodable->IsLastFrame(NumFramesDecoded() - 1)) break;
+    
     decoder_.PostProcessTokens();
     //computes log likelihoods for the next frame
     decoder_.ComputeLogLikelihoods(decodable);
     num_frames_decoded_++;
   }
-
-  //add final lattice of t,t
-  AddLatticeArcs(*cur_toks_, cur_arcs_);
 
   nvtxRangePop();
 
@@ -526,17 +524,17 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
 //  KALDI_WARN<<"unfinished here";
   if (final_costs != NULL)
     final_costs->clear();
-  const Elem *final_toks = toks_.GetList();
   BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
   BaseFloat best_cost = infinity, best_cost_with_final = infinity;
 
-  for (int i=0;i<cur_toks_.size();i++) {
-    cuToken* tok_d_h = cur_toks_[i].token;
+  cuTokenVector& cur_toks=*this->cur_toks_;
+  for (int i=0;i<cur_toks.size();i++) {
+    cuToken* tok_d_h = cur_toks[i].token;
     assert(active_toks_map_.count(tok_d_h));
-    StateId state = cur_toks_[i].StateId;
-    Token* tok = active_toks_map_[tok_d_h];
+    StateId state = cur_toks[i].state;
+    Token* tok = active_toks_map_.at(tok_d_h);
 
-    BaseFloat final_cost = fst_.Final(state).Value();
+    BaseFloat final_cost = fst_.Final(state);
     BaseFloat cost = tok->tot_cost,
         cost_with_final = cost + final_cost;
     best_cost = std::min(cost, best_cost);

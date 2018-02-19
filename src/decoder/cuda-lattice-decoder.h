@@ -59,7 +59,7 @@ class CudaFst {
 
     inline uint32_t NumStates() const {  return numStates; }
     inline StateId Start() const { return start; }    
-    HOST DEVICE inline float Final(StateId state) const;
+    HOST DEVICE float Final(StateId state) const;
     size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
   private:
     friend class CudaLatticeDecoder;

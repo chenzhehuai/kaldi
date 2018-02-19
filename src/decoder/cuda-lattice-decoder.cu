@@ -260,7 +260,7 @@ template<typename T>
   /**************************************End CudaVector Implementation**********************************/
 
   /***************************************CudaFst Implementation*****************************************/
-  HOST DEVICE inline float CudaFst::Final(StateId state) const {
+  HOST DEVICE float CudaFst::Final(StateId state) const {
     #ifdef __CUDA_ARCH__
     return final_d[state];
     #else
@@ -709,8 +709,8 @@ template<typename T>
   }
 
   void CudaLatticeDecoder::PreFinalizeDecoding() { 
-    cur_toks_.copy_all_to_host(stream_comp);
-    cudaStreamSynchronize(stream_comp);
+    //cur_toks_.copy_all_to_host(stream_comp);
+    //cudaStreamSynchronize(stream_comp);
   }
 
   void CudaLatticeDecoder::AdvanceDecoding(DecodableInterface *decodable,
