@@ -1049,7 +1049,8 @@ template<typename T>
         {
           Token next_tok =  Token(acoustic_cost+weight, tok);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, true, blockIdx.x%params.sub_vec_num);
+            acoustic_cost, &ts, j, true, true, i%params.sub_vec_num);
+          next_tok.last_arc_idx=cur_tok->last_arc_idx;
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1108,7 +1109,8 @@ template<typename T>
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, false, blockIdx.x%params.sub_vec_num);
+            0, &ts, j, true, false, i%params.sub_vec_num);
+          next_tok.last_arc_idx=cur_tok->last_arc_idx;
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
