@@ -129,9 +129,6 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   //decoder_.Decode(decodable);
 
   nvtxRangePushA("CudaLatticeDecoder::Decode");
-  cuTokenVector* cur_toks_;
-  cuTokenVector* prev_toks_;
-  LatLinkVector* cur_arcs_;
   decoder_.InitDecoding();
   InitDecoding();
   decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
@@ -520,9 +517,9 @@ void LatticeFasterDecoderCuda::PruneActiveTokens(BaseFloat delta) {
 }
 
 void LatticeFasterDecoderCuda::ComputeFinalCosts(
-    unordered_map<Token*, BaseFloat> *final_costs,
-    BaseFloat *final_relative_cost,
-    BaseFloat *final_best_cost) const {
+  unordered_map<Token*, BaseFloat> *final_costs,
+  BaseFloat *final_relative_cost,
+  BaseFloat *final_best_cost) const {
   KALDI_ASSERT(!decoding_finalized_);
 //  *final_relative_cost=0;
 //  *final_best_cost=0;
@@ -531,21 +528,23 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
     final_costs->clear();
   const Elem *final_toks = toks_.GetList();
   BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
-  BaseFloat best_cost = infinity,
-      best_cost_with_final = infinity;
-  while (final_toks != NULL) {
-    StateId state = final_toks->key;
-    Token *tok = final_toks->val;
-    const Elem *next = final_toks->tail;
+  BaseFloat best_cost = infinity, best_cost_with_final = infinity;
+
+  for (int i=0;i<cur_toks_.size();i++) {
+    cuToken* tok_d_h = cur_toks_[i].token;
+    assert(active_toks_map_.count(tok_d_h));
+    StateId state = cur_toks_[i].StateId;
+    Token* tok = active_toks_map_[tok_d_h];
+
     BaseFloat final_cost = fst_.Final(state).Value();
     BaseFloat cost = tok->tot_cost,
         cost_with_final = cost + final_cost;
     best_cost = std::min(cost, best_cost);
     best_cost_with_final = std::min(cost_with_final, best_cost_with_final);
     if (final_costs != NULL && final_cost != infinity)
-      (*final_costs)[tok] = final_cost;
-    final_toks = next;
+      (*final_costs)[tok] = final_cost;    
   }
+
   if (final_relative_cost != NULL) {
     if (best_cost == infinity && best_cost_with_final == infinity) {
       // Likely this will only happen if there are no tokens surviving.

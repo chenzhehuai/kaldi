@@ -270,6 +270,10 @@ class LatticeFasterDecoderCuda {
   std::unordered_map<CudaLatticeDecoder::Token* , Token *> active_toks_map_;  
   int num_frames_decoded_;
 
+  cuTokenVector* cur_toks_;
+  cuTokenVector* prev_toks_;
+  LatLinkVector* cur_arcs_;  
+
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.
   // It also indexes them in a hash, indexed by state (this hash is only
