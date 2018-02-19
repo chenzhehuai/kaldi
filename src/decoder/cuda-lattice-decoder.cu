@@ -68,6 +68,11 @@ template <typename T>
     asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
   }
 
+template <typename T>
+  DEVICE __forceinline__ void store4(T *a, const T *b) {
+    asm("st.global.s32 [%0], %1;" :: "l"(a), "l"(b));
+  }
+
 
 
 
@@ -621,17 +626,22 @@ template<typename T>
     if (add_arc) {
       LatLink arc=LatLink(ts->token, j, acoustic_cost);
       int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
-      //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
-      arc.last_arc_idx=cur_tok->last_arc_idx;
-      store16(&params.lat_arcs_sub_vec[subid][lat_arc_idx],&arc);
+      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
+      //Token tok;
+      //load16(&tok, cur_tok);
+      //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx=tok.last_arc_idx;
+      //store16(&params.lat_arcs_sub_vec[subid][lat_arc_idx],&arc);
+      //tok.last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      //store16(cur_tok, &tok);
       cur_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      arc.last_arc_idx=arc.last_arc_idx; //debug
     }
     return cur_tok;  
   }
   __global__ void addOneToken(processTokens_params params, StateId state) {
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
       0, NULL, -1, false, false, 0);
-    Token tok(0, NULL, 0);
+    Token tok(0, NULL);
     *cur_tok = tok;
   }
 
@@ -788,7 +798,8 @@ template<typename T>
   bool CudaLatticeDecoder::GetBestPath(Lattice *fst_out, bool use_final_probs) const {
     nvtxRangePushA("GetBestPath");
 
-
+    return true;
+/*
     fst_out->DeleteStates();
     Token *best_tok = NULL;
     bool is_final = ReachedFinal();
@@ -858,6 +869,7 @@ template<typename T>
     fst::RemoveEpsLocal(fst_out);
     nvtxRangePop();
     return true;
+    */
   }
 
   inline DEVICE void atomicMin(double *address, double val) {
@@ -1029,7 +1041,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
         if(total_cost<=cutoff) 
         {
-          Token next_tok =  Token(acoustic_cost+weight, tok, j);
+          Token next_tok =  Token(acoustic_cost+weight, tok);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             acoustic_cost, &ts, j, true, true, blockIdx.x%params.sub_vec_num);
           
@@ -1083,7 +1095,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
-        Token next_tok = Token(weight, tok, j);
+        Token next_tok = Token(weight, tok);
 
         CostType total_cost = tok->cost_ + weight;
 

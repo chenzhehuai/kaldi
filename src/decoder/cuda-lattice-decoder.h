@@ -190,15 +190,16 @@ class __align__(16) Token {
  public:
   Token *prev_;
   CostType cost_; // accumulated total cost up to this point.
-  uint32_t arc_index_;
   int32_t last_arc_idx;
   //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
-  HOST DEVICE inline Token(BaseFloat cost, Token *prev, uint32_t arc_index) : prev_(prev), cost_(cost), arc_index_(arc_index), last_arc_idx(-1) {
+  HOST DEVICE inline Token(BaseFloat cost, Token *prev) : prev_(prev), cost_(cost), last_arc_idx(-1) {
+    assert(sizeof(Token)==16); 
     if(prev) {
       cost_ += prev->cost_;
     }
   }
+  HOST DEVICE inline Token() { } 
 
   HOST DEVICE inline bool operator < (const Token &other) {
     return cost_ > other.cost_;
@@ -229,7 +230,7 @@ struct TokenState {
 
 typedef CudaVector<TokenState> TokenVector;
 
-  class __align__(16) LatLink {  //300000*50*16=240MB
+  class  LatLink {  //300000*50*24=240MB __align__(16)
    public:
     Token* next_tok;  //get LatToken by this index and the frame_idx
     int32_t arc_id;    //if <0, it's pruned, FST arcid to get Ilabel and Olabel
