@@ -31,8 +31,8 @@ cuda-decoder_test:cuda-decoder_test.o
 #cuda-decoder.o: cuda-decoder_prelink.o
 #	$(CUDATKDIR)/bin/nvcc -G -g -O0 cuda-decoder_prelink.o -v $(CUDA_ARCH)  -dlink -o cuda-decoder.o -Xcompiler "-pthread -fPIC" #-arch=sm_70
 cuda-lattice-decoder_prelink.o: cuda-lattice-decoder.cu cuda-lattice-decoder.h
-	$(CUDATKDIR)/bin/nvcc -G -g -O0 -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS  -Xcompiler "-msse -msse2 -pthread "  -Xcompiler -fPIC -DHAVE_CUDA -o cuda-lattice-decoder_prelink.o cuda-lattice-decoder.cu -lcuda
+	$(CUDATKDIR)/bin/nvcc -G -g -O3 -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS  -Xcompiler "-msse -msse2 -pthread "  -Xcompiler -fPIC -DHAVE_CUDA -o cuda-lattice-decoder_prelink.o cuda-lattice-decoder.cu -lcuda
 cuda-lattice-decoder.o: cuda-lattice-decoder_prelink.o
-	$(CUDATKDIR)/bin/nvcc -G -g -O0 cuda-lattice-decoder_prelink.o -v $(CUDA_ARCH)  -dlink -o cuda-lattice-decoder.o -Xcompiler "-pthread -fPIC" #-arch=sm_70
+	$(CUDATKDIR)/bin/nvcc -G -g -O3 cuda-lattice-decoder_prelink.o -v $(CUDA_ARCH)  -dlink -o cuda-lattice-decoder.o -Xcompiler "-pthread -fPIC" #-arch=sm_70
 
 include ../makefiles/default_rules.mk

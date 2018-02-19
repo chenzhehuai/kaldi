@@ -644,17 +644,12 @@ template<typename T>
       volatile int& arc_lock = ts->arc_lock;
       Token *prev_tok = ts->token;  
       LatLink arc=LatLink(cur_tok, j, acoustic_cost);
-      int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
-      acquire_semaphore((int*)&arc_lock);
-      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = prev_tok->last_arc_idx; //by this way to ensure atomic
-      //Token tok;
-      //load16(&tok, cur_tok);
-      //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx=tok.last_arc_idx;
-      //store16(&params.lat_arcs_sub_vec[subid][lat_arc_idx],&arc);
-      //tok.last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
-      //store16(cur_tok, &tok);
-      prev_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
-      release_semaphore((int*)&arc_lock);
+      int32_t lat_arc_idx=0;
+      //int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
+      //acquire_semaphore((int*)&arc_lock);
+      //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = prev_tok->last_arc_idx; //by this way to ensure atomic
+      //prev_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      //release_semaphore((int*)&arc_lock);
     }
     return cur_tok;  
   }
@@ -1050,7 +1045,7 @@ template<typename T>
         {
           Token next_tok =  Token(acoustic_cost+weight, tok);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, true, 0%params.sub_vec_num);
+            acoustic_cost, &ts, j, true, true, i%params.sub_vec_num);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1111,7 +1106,7 @@ template<typename T>
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, false, 0%params.sub_vec_num);
+            0, &ts, j, true, false, i%params.sub_vec_num);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
