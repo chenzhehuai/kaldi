@@ -222,10 +222,11 @@ struct TokenState {
   
   Token* token; //arc and labels
   StateId state;  //to state
+  volatile int arc_lock;
   //int32_t lat_tok_idx;   //-1: havent init 
   HOST DEVICE inline TokenState (Token *token, StateId state)
-    : token(token), state(state) { }
-  HOST DEVICE inline TokenState () : token(NULL) {};
+    : token(token), state(state), arc_lock(0) { }
+  HOST DEVICE inline TokenState () : token(NULL), arc_lock(0) {};
 };
 
 typedef CudaVector<TokenState> TokenVector;

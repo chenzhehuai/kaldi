@@ -101,6 +101,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   if (num_frames_decoded_==1) {//add prev
     active_toks_.resize(1);
     for (int i=0;i<prev_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
+      assert(prev_toks_[i].token);
       CreateTokAndRegister(*prev_toks_[i].token, active_toks_[num_frames_decoded_-1].toks);
       num_toks_++;
     }    
@@ -108,6 +109,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   //add current
   active_toks_.resize(active_toks_.size() + 1);
   for (int i=0;i<cur_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
+    assert(cur_toks_[i].token);
     CreateTokAndRegister(*cur_toks_[i].token, active_toks_[num_frames_decoded_].toks);
     num_toks_++;
   }

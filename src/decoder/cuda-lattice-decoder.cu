@@ -55,6 +55,20 @@ namespace kaldi {
   template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
   template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
 
+DEVICE void release_semaphore(volatile int *lock){
+  *lock = 0;
+  __threadfence();
+  }
+
+
+DEVICE void acquire_semaphore(volatile int *lock){
+  short cnt=0;
+  while (atomicCAS((int *)lock, 0, 1) != 0) {
+    //if (++cnt==0) release_semaphore(lock); //deadlock hack
+  }
+  }
+
+
   template <typename T>
   DEVICE __forceinline__ void load16(T *a, const T *b) {
     const ulong2 *src = reinterpret_cast<const ulong2*>(b);
@@ -615,8 +629,10 @@ template<typename T>
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
     TokenState* ts, uint32_t j, bool add_arc, bool emit, int32_t subid) {
+    //TokenLookupElem lookup_elem;
+    //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
-    Token *cur_tok=lookup_elem.token;
+    Token *cur_tok = lookup_elem.token;  
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
@@ -624,17 +640,20 @@ template<typename T>
     }
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     if (add_arc) {
-      LatLink arc=LatLink(ts->token, j, acoustic_cost);
+      volatile int& arc_lock = ts->arc_lock;
+      Token *prev_tok = ts->token;  
+      LatLink arc=LatLink(cur_tok, j, acoustic_cost);
       int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
-      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = cur_tok->last_arc_idx; //by this way to ensure atomic
+      acquire_semaphore((int*)&arc_lock);
+      params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = prev_tok->last_arc_idx; //by this way to ensure atomic
       //Token tok;
       //load16(&tok, cur_tok);
       //params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx=tok.last_arc_idx;
       //store16(&params.lat_arcs_sub_vec[subid][lat_arc_idx],&arc);
       //tok.last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
       //store16(cur_tok, &tok);
-      cur_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
-      arc.last_arc_idx=arc.last_arc_idx; //debug
+      prev_tok->last_arc_idx=GET_ARCIDX(lat_arc_idx, subid);
+      release_semaphore((int*)&arc_lock);
     }
     return cur_tok;  
   }
@@ -973,19 +992,6 @@ template<typename T>
     if(local_cutoff!=INFINITY) {
       atomicMin(params.cutoff, local_cutoff);
     }
-  }
-
-DEVICE void release_semaphore(volatile int *lock){
-  *lock = 0;
-  __threadfence();
-  }
-
-
-DEVICE void acquire_semaphore(volatile int *lock){
-  short cnt=0;
-  while (atomicCAS((int *)lock, 0, 1) != 0) {
-    //if (++cnt==0) release_semaphore(lock); //deadlock hack
-  }
   }
 
 
