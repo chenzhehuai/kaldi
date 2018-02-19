@@ -524,44 +524,44 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
     BaseFloat *final_relative_cost,
     BaseFloat *final_best_cost) const {
   KALDI_ASSERT(!decoding_finalized_);
-  *final_relative_cost=0;
-  *final_best_cost=0;
-  KALDI_WARN<<"unfinished here";
-//  if (final_costs != NULL)
-//    final_costs->clear();
-//  const Elem *final_toks = toks_.GetList();
-//  BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
-//  BaseFloat best_cost = infinity,
-//      best_cost_with_final = infinity;
-//  while (final_toks != NULL) {
-//    StateId state = final_toks->key;
-//    Token *tok = final_toks->val;
-//    const Elem *next = final_toks->tail;
-//    BaseFloat final_cost = fst_.Final(state).Value();
-//    BaseFloat cost = tok->tot_cost,
-//        cost_with_final = cost + final_cost;
-//    best_cost = std::min(cost, best_cost);
-//    best_cost_with_final = std::min(cost_with_final, best_cost_with_final);
-//    if (final_costs != NULL && final_cost != infinity)
-//      (*final_costs)[tok] = final_cost;
-//    final_toks = next;
-//  }
-//  if (final_relative_cost != NULL) {
-//    if (best_cost == infinity && best_cost_with_final == infinity) {
-//      // Likely this will only happen if there are no tokens surviving.
-//      // This seems the least bad way to handle it.
-//      *final_relative_cost = infinity;
-//    } else {
-//      *final_relative_cost = best_cost_with_final - best_cost;
-//    }
-//  }
-//  if (final_best_cost != NULL) {
-//    if (best_cost_with_final != infinity) { // final-state exists.
-//      *final_best_cost = best_cost_with_final;
-//    } else { // no final-state exists.
-//      *final_best_cost = best_cost;
-//    }
-//  }
+//  *final_relative_cost=0;
+//  *final_best_cost=0;
+//  KALDI_WARN<<"unfinished here";
+  if (final_costs != NULL)
+    final_costs->clear();
+  const Elem *final_toks = toks_.GetList();
+  BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
+  BaseFloat best_cost = infinity,
+      best_cost_with_final = infinity;
+  while (final_toks != NULL) {
+    StateId state = final_toks->key;
+    Token *tok = final_toks->val;
+    const Elem *next = final_toks->tail;
+    BaseFloat final_cost = fst_.Final(state).Value();
+    BaseFloat cost = tok->tot_cost,
+        cost_with_final = cost + final_cost;
+    best_cost = std::min(cost, best_cost);
+    best_cost_with_final = std::min(cost_with_final, best_cost_with_final);
+    if (final_costs != NULL && final_cost != infinity)
+      (*final_costs)[tok] = final_cost;
+    final_toks = next;
+  }
+  if (final_relative_cost != NULL) {
+    if (best_cost == infinity && best_cost_with_final == infinity) {
+      // Likely this will only happen if there are no tokens surviving.
+      // This seems the least bad way to handle it.
+      *final_relative_cost = infinity;
+    } else {
+      *final_relative_cost = best_cost_with_final - best_cost;
+    }
+  }
+  if (final_best_cost != NULL) {
+    if (best_cost_with_final != infinity) { // final-state exists.
+      *final_best_cost = best_cost_with_final;
+    } else { // no final-state exists.
+      *final_best_cost = best_cost;
+    }
+  }
 }
 
 
