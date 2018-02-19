@@ -227,7 +227,7 @@ template<typename T>
   template<typename T> 
     HOST DEVICE inline uint32_t CudaVector<T>::push_back(const T &val) { 
 #ifdef __CUDA_ARCH__
-      //assert(*count_d<max_size);
+      assert(*count_d<max_size);
       uint32_t idx = atomicAdd(count_d,1);
       mem_d[idx]=val; 
 #else
@@ -575,7 +575,7 @@ template<typename T>
       bytes_cudaMalloc += lat_arcs_vec_[i].getCudaMallocBytes();
     }
     for (int i=0; i < config.sub_vec_num; i++) {
-      lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame/config.sub_vec_num);
+      lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
       bytes_cudaMalloc += lat_arcs_sub_vec_[i].getCudaMallocBytes();
     }
 
@@ -1050,7 +1050,7 @@ template<typename T>
         {
           Token next_tok =  Token(acoustic_cost+weight, tok);
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, true, threadIdx.x%params.sub_vec_num);
+            acoustic_cost, &ts, j, true, true, 0%params.sub_vec_num);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1111,7 +1111,7 @@ template<typename T>
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, false, threadIdx.x%params.sub_vec_num);
+            0, &ts, j, true, false, 0%params.sub_vec_num);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
