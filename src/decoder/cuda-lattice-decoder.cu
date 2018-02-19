@@ -429,6 +429,7 @@ template<typename T>
       token->prev_ = NULL;
       token->last_arc_idx = -1;
       StateId state=cur_toks[i].state;
+      cur_toks[i].token->last_arc_idx=-1; //clear it as they has been saved in CPU; btw, lat_arcs_sub_vec_ is clearred in PreProcessTokens
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
@@ -1349,6 +1350,7 @@ template<typename T>
     lat_arcs_vec_[frame].clear();
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].clear();  
+      //clear it as they has been saved in CPU; btw, cur_toks[i].token->last_arc_idx=-1; //is in PostProcessTokens_cg
     }
   }
   void CudaLatticeDecoder::ProcessTokens() {
