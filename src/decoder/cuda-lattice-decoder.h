@@ -190,10 +190,10 @@ class __align__(16) Token {
  public:
   Token *prev_;
   CostType cost_; // accumulated total cost up to this point.
-  int32_t last_arc_idx;
+  int32_t arc_index_; //TODO
   //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
-  HOST DEVICE inline Token(BaseFloat cost, Token *prev) : prev_(prev), cost_(cost), last_arc_idx(-1) {
+  HOST DEVICE inline Token(BaseFloat cost, Token *prev) : prev_(prev), cost_(cost), arc_index_(-1) {
     assert(sizeof(Token)==16); 
     if(prev) {
       cost_ += prev->cost_;
@@ -233,20 +233,17 @@ typedef CudaVector<TokenState> TokenVector;
 
   class  LatLink {  //300000*50*24=240MB __align__(16)
    public:
-    Token* next_tok;  //get LatToken by this index and the frame_idx
+    Token* prev_tok; 
+    Token* next_tok;  
     int32_t arc_id;    //if <0, it's pruned, FST arcid to get Ilabel and Olabel
     // graph cost of traversing link (contains LM, etc.)
     //CostType graph_cost; //can be obtained from arc_id
     CostType acoustic_cost; // acoustic cost (pre-scaled) of traversing link
-    int32_t last_arc_idx; //to simulate a linklist
 
-     HOST DEVICE inline LatLink(Token* inext_tok, int32_t iarc_id, 
-      CostType iacoustic_cost): next_tok(inext_tok),
-      arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(-1) { }
-   
-    HOST DEVICE inline LatLink(Token* inext_tok, int32_t iarc_id, 
-      CostType iacoustic_cost, int32_t ilast_arc_idx ): next_tok(inext_tok),
-      arc_id(iarc_id),  acoustic_cost(iacoustic_cost), last_arc_idx(ilast_arc_idx) { }
+     HOST DEVICE inline LatLink(Token* iprev_tok, Token* inext_tok, int32_t iarc_id, 
+      CostType iacoustic_cost): prev_tok(iprev_tok), next_tok(inext_tok),
+      arc_id(iarc_id),  acoustic_cost(iacoustic_cost) { }
+
   };
 
   #define GET_ARCIDX(rawid, thd) ((rawid<<5)+thd)   //assume 32 threads

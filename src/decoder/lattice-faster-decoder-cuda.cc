@@ -74,24 +74,21 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
       LatLinkVector*& cur_arcs_) {
   //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   //copy lat_arcs_sub_vec_ to lat_arcs_vec_
+  const CudaFst& cu_fst = decoder_.fst_;
   int num_arcs=0;
-  for (int i=0;i<cur_toks_.size();i++) {
-    cuToken* tok_d_h = cur_toks_[i].token;
-    assert(active_toks_map_.count(tok_d_h));
-    Token* tok_prev = active_toks_map_[tok_d_h];
-    int arc_idx=tok_d_h->last_arc_idx;
-    while (arc_idx != -1) {
-      LatLink& arc_d_h = cur_arcs_[GET_THDIDX(arc_idx)][GET_RAWARCIDX(arc_idx)];
-      const CudaFst& cu_fst = decoder_.fst_;
+  for (int i = 0; i < config_.sub_vec_num; i++) {
+    for ( int j = 0; j < cur_arcs_[i].size(); j++) {
+      LatLink& arc_d_h = cur_arcs_[i][j];
       assert(arc_d_h.arc_id<cu_fst.arc_count);
       BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
       int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
       int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
       assert(active_toks_map_.count(arc_d_h.next_tok));
-      Token* next_tok=active_toks_map_[arc_d_h.next_tok];
-      tok_prev->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
-                                        arc_d_h.acoustic_cost, tok_prev->links);
-      arc_idx=arc_d_h.last_arc_idx;
+      assert(active_toks_map_.count(arc_d_h.prev_tok));
+      Token* next_tok=active_toks_map_.at(arc_d_h.next_tok);
+      Token* prev_tok=active_toks_map_.at(arc_d_h.prev_tok);
+      prev_tok->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
+                                        arc_d_h.acoustic_cost, prev_tok->links);
       num_arcs++;
     }
   }
