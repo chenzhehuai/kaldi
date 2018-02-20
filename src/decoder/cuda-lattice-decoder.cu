@@ -646,7 +646,6 @@ template<typename T>
       volatile int& arc_lock = ts->arc_lock;
       volatile Token *prev_tok = reinterpret_cast<volatile Token*>(ts->token);  
       LatLink arc=LatLink(cur_tok, j, acoustic_cost);
-      //int32_t lat_arc_idx=0;
       int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
       acquire_semaphore((int*)&arc_lock);
       params.lat_arcs_sub_vec[subid][lat_arc_idx].last_arc_idx = prev_tok->last_arc_idx; //by this way to ensure atomic
