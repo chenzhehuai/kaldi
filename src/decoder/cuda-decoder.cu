@@ -1215,7 +1215,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     } while ((*modified0)==true);
 
-    if (rank0&&params.verbose>2&&params.frame%10==0) 
+    int itv = params.verbose>2? 1: 10;
+    if (rank0&&params.verbose>1&&params.frame%itv==0) 
           printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
 
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
