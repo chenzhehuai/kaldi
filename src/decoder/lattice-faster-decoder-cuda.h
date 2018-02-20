@@ -193,7 +193,7 @@ class LatticeFasterDecoderCuda {
                          bool *links_pruned,
                          BaseFloat delta);
   void CreateTokAndRegister(cuToken& tok_d_h, Token *&toks);
-  void AddLatticeArcs(cuTokenVector& cur_toks_, LatLinkVector*& cur_arcs_);
+  int AddLatticeArcs(cuTokenVector& cur_toks_, LatLinkVector*& cur_arcs_);
 
   // This function computes the final-costs for tokens active on the final
   // frame.  It outputs to final-costs, if non-NULL, a map from the Token*

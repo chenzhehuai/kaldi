@@ -70,10 +70,11 @@ void LatticeFasterDecoderCuda::CreateTokAndRegister(cuToken& tok_d_h,
     toks = new_tok; //add into active_toks_;
     active_toks_map_[&tok_d_h] = new_tok;
 }
-void LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
+int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
       LatLinkVector*& cur_arcs_) {
   //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   //copy lat_arcs_sub_vec_ to lat_arcs_vec_
+  int num_arcs=0;
   for (int i=0;i<cur_toks_.size();i++) {
     cuToken* tok_d_h = cur_toks_[i].token;
     assert(active_toks_map_.count(tok_d_h));
@@ -91,8 +92,10 @@ void LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
       tok_prev->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
                                         arc_d_h.acoustic_cost, tok_prev->links);
       arc_idx=arc_d_h.last_arc_idx;
+      num_arcs++;
     }
   }
+  return num_arcs;
 }
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_) {
@@ -116,8 +119,11 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   }
   //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   //TODO: change to preproc 0,0; proc t-1,t and t,t
-  AddLatticeArcs(prev_toks_, cur_arcs_);
-  AddLatticeArcs(cur_toks_, cur_arcs_);
+  int num_arcs=0, num_arcs2=0;
+  num_arcs+=AddLatticeArcs(prev_toks_, cur_arcs_);
+  num_arcs+=AddLatticeArcs(cur_toks_, cur_arcs_);
+  for (int i=0; i<config_.sub_vec_num; i++)  num_arcs2+=cur_arcs_[i].size();
+  assert(num_arcs==num_arcs2);
   //call prune
   if (num_frames_decoded_ % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
@@ -307,6 +313,8 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
   bool changed = true;  // difference new minus old extra cost >= delta ?
   while (changed) {
     changed = false;
+    int extra_flag=0;
+    int extra_flag2=0;
     for (Token *tok = active_toks_[frame_plus_one].toks;
          tok != NULL; tok = tok->next) {
       ForwardLink *link, *prev_link = NULL;
@@ -321,6 +329,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
              - next_tok->tot_cost);  // difference in brackets is >= 0
         // link_exta_cost is the difference in score between the best paths
         // through link source state and through link destination state
+        if (link_extra_cost == 0) extra_flag = 1;
         KALDI_ASSERT(link_extra_cost == link_extra_cost);  // check for NaN
         if (link_extra_cost > config_.lattice_beam) {  // excise link
           ForwardLink *next_link = link->next;
@@ -335,8 +344,9 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
               KALDI_WARN << "Negative extra_cost: " << link_extra_cost;
             link_extra_cost = 0.0;
           }
-          if (link_extra_cost < tok_extra_cost)
+          if (link_extra_cost < tok_extra_cost) {
             tok_extra_cost = link_extra_cost;
+          }
           prev_link = link;  // move to next link
           link = link->next;
         }
@@ -344,9 +354,12 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
       if (fabs(tok_extra_cost - tok->extra_cost) > delta)
         changed = true;   // difference new minus old is bigger than delta
       tok->extra_cost = tok_extra_cost;
+      if (tok_extra_cost==0) extra_flag2=1;
       // will be +infinity or <= lattice_beam_.
       // infinity indicates, that no forward link survived pruning
     }  // for all Token on active_toks_[frame]
+    if (!extra_flag) KALDI_WARN<<frame_plus_one<<" no link_extra_cost==0";
+    if (!extra_flag2) KALDI_WARN<<frame_plus_one<<" no tok_extra_cost==0";
     if (changed) *extra_costs_changed = true;
 
     // Note: it's theoretically possible that aggressive compiler
@@ -463,7 +476,7 @@ void LatticeFasterDecoderCuda::PruneTokensForFrame(int32 frame_plus_one) {
   KALDI_ASSERT(frame_plus_one >= 0 && frame_plus_one < active_toks_.size());
   Token *&toks = active_toks_[frame_plus_one].toks;
   if (toks == NULL)
-    KALDI_WARN << "No tokens alive [doing pruning]";
+    KALDI_WARN << "frame: "<<frame_plus_one<< " No tokens alive [doing pruning]";
   Token *tok, *next_tok, *prev_tok = NULL;
   for (tok = toks; tok != NULL; tok = next_tok) {
     next_tok = tok->next;
