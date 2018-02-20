@@ -1181,7 +1181,9 @@ template<typename T>
     if(rank0&&params.verbose>4)  
     {p++;printf("S: %i\n",p);}
 
-    findBestCutoff_function<32,2>(params);
+    if (params.frame>1) {
+      findBestCutoff_function<32,2>(params);
+    } else *params.cutoff = INFINITY;
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
    
@@ -1199,7 +1201,8 @@ template<typename T>
     __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
   
     int tok_E;
-    if (rank0&&params.verbose>2&&params.frame%10==0) 
+    int itv = params.verbose>2? 1: 10;
+    if (rank0&&params.verbose>1&&params.frame%itv==0) 
       tok_E=params.cur_toks.size();
 
     do {
@@ -1223,8 +1226,8 @@ template<typename T>
 
     } while ((*modified0)==true);
 
-    if (rank0&&params.verbose>2&&params.frame%10==0) 
-          printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
+    if (rank0&&params.verbose>1&&params.frame%itv==0) 
+          printf("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
 
     // TODO: do PreProcessLattices before here    
   }
