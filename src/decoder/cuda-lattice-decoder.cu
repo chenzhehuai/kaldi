@@ -1046,7 +1046,6 @@ template<typename T>
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
-          volatile int& arc_lock = ts.arc_lock;
           acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
 
@@ -1324,10 +1323,7 @@ template<typename T>
     }    
     cudaStreamSynchronize(stream_comp);
     
-    if (num_frames_decoded_) {
-      *cur_arcs_=lat_arcs_sub_vec_;
-    }
-    else *cur_arcs_=NULL;
+    *cur_arcs_=lat_arcs_sub_vec_;
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
@@ -1338,12 +1334,14 @@ template<typename T>
     //TODO prefetch here
     
     cur_toks_.swap(prev_toks_);
-    
+   
+    if (num_frames_decoded_ > 1) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     lat_arcs_vec_[frame].clear();
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].clear();  
       //clear it as they has been saved in CPU; btw, cur_toks[i].token->last_arc_idx=-1; //is in PostProcessTokens_cg
+    }
     }
   }
   void CudaLatticeDecoder::ProcessTokens() {

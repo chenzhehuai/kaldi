@@ -96,17 +96,17 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
 }
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_) {
-  KALDI_ASSERT(num_frames_decoded_);
+  //KALDI_ASSERT(num_frames_decoded_);
   //active_toks_map_.clear();
 
-  if (num_frames_decoded_==1) {//add prev
-    active_toks_.resize(1);
-    for (int i=0;i<prev_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
-      assert(prev_toks_[i].token);
-      CreateTokAndRegister(*prev_toks_[i].token, active_toks_[num_frames_decoded_-1].toks);
-      num_toks_++;
-    }    
-  }
+//  if (num_frames_decoded_==1) {//add prev
+//    active_toks_.resize(1);
+//    for (int i=0;i<prev_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
+//      assert(prev_toks_[i].token);
+//      CreateTokAndRegister(*prev_toks_[i].token, active_toks_[num_frames_decoded_-1].toks);
+//      num_toks_++;
+//    }    
+//  }
   //add current
   active_toks_.resize(active_toks_.size() + 1);
   for (int i=0;i<cur_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
@@ -118,11 +118,10 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   //TODO: change to preproc 0,0; proc t-1,t and t,t
   int num_arcs=0, num_arcs2=0;
   num_arcs+=AddLatticeArcs(prev_toks_, cur_arcs_);
-  num_arcs+=AddLatticeArcs(cur_toks_, cur_arcs_);
   for (int i=0; i<config_.sub_vec_num; i++)  num_arcs2+=cur_arcs_[i].size();
   assert(num_arcs==num_arcs2);
   //call prune
-  if (num_frames_decoded_ % config_.prune_interval == 0)
+  if (NumFramesDecoded() % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
 }
 // Returns true if any kind of traceback is available (not necessarily from
@@ -135,6 +134,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.InitDecoding();
   InitDecoding();
   decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
+  ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
 
   decoder_.ComputeLogLikelihoods(decodable);
   num_frames_decoded_++;
@@ -471,6 +471,7 @@ BaseFloat LatticeFasterDecoderCuda::FinalRelativeCost() const {
 // It's called by PruneActiveTokens if any forward links have been pruned
 void LatticeFasterDecoderCuda::PruneTokensForFrame(int32 frame_plus_one) {
   KALDI_ASSERT(frame_plus_one >= 0 && frame_plus_one < active_toks_.size());
+  int num_toks_s=num_toks_;
   Token *&toks = active_toks_[frame_plus_one].toks;
   if (toks == NULL)
     KALDI_WARN << "frame: "<<frame_plus_one<< " No tokens alive [doing pruning]";
@@ -488,6 +489,7 @@ void LatticeFasterDecoderCuda::PruneTokensForFrame(int32 frame_plus_one) {
       prev_tok = tok;
     }
   }
+  KALDI_VLOG(5) << "PR: "<<frame_plus_one<<","<<num_toks_s-num_toks_;
 }
 
 // Go backwards through still-alive tokens, pruning them, starting not from
