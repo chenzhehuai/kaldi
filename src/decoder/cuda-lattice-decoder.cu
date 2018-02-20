@@ -1181,9 +1181,7 @@ template<typename T>
     if(rank0&&params.verbose>4)  
     {p++;printf("S: %i\n",p);}
 
-    if (params.frame>1) {
-      findBestCutoff_function<32,2>(params);
-    } else *params.cutoff = INFINITY;
+    findBestCutoff_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
    
