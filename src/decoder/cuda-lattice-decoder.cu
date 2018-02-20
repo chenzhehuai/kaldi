@@ -1337,9 +1337,9 @@ template<typename T>
     cur_toks_.swap(prev_toks_);
    
     if (num_frames_decoded_ > 1) {
-    uint32_t frame=num_frames_decoded_%prune_interval_;
-    lat_arcs_vec_[frame].clear();
-    ClearArcVector();
+      uint32_t frame=num_frames_decoded_%prune_interval_;
+      lat_arcs_vec_[frame].clear();
+      ClearArcVector();
     }
   }
   void CudaLatticeDecoder::ProcessTokens() {
