@@ -258,8 +258,8 @@ bool LatticeFasterDecoderCuda::GetRawLattice(Lattice *ofst,
         KALDI_ASSERT(iter != tok_map.end());
         BaseFloat cost_offset = 0.0;
         if (l->ilabel != 0) {  // emitting..
-          KALDI_ASSERT(f >= 0 && f < cost_offsets_.size());
-          cost_offset = cost_offsets_[f];
+          //KALDI_ASSERT(f >= 0 && f < cost_offsets_.size());
+          cost_offset = 0; //cost_offsets_[f];
         }
         Arc arc(l->ilabel, l->olabel,
                 Weight(l->graph_cost, l->acoustic_cost - cost_offset),
@@ -355,8 +355,8 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
       // will be +infinity or <= lattice_beam_.
       // infinity indicates, that no forward link survived pruning
     }  // for all Token on active_toks_[frame]
-    if (!extra_flag) KALDI_WARN<<frame_plus_one<<" no link_extra_cost==0";
-    if (!extra_flag2) KALDI_WARN<<frame_plus_one<<" no tok_extra_cost==0";
+    if (!extra_flag) KALDI_VLOG(6)<<frame_plus_one<<" no link_extra_cost==0";
+    if (!extra_flag2) KALDI_VLOG(6)<<frame_plus_one<<" no tok_extra_cost==0";
     if (changed) *extra_costs_changed = true;
 
     // Note: it's theoretically possible that aggressive compiler

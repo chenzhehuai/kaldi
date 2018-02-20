@@ -644,7 +644,7 @@ template<typename T>
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     if (add_arc) {
       Token *prev_tok = ts->token;  
-      LatLink arc=LatLink(prev_tok, cur_tok, j, acoustic_cost);
+      LatLink arc=LatLink(prev_tok, cur_tok, j, acoustic_cost); //duplicate arcs in NE
       int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
     }
     return cur_tok;  
