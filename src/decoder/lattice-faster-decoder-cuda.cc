@@ -131,8 +131,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   //decoder_.Decode(decodable);
 
   nvtxRangePushA("CudaLatticeDecoder::Decode");
-  decoder_.InitDecoding();
   InitDecoding();
+  decoder_.InitDecoding();
   decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
   ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
 
@@ -586,6 +586,7 @@ void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at ut
     }
   }
   active_toks_.clear();
+  active_toks_map_.clear();
   KALDI_ASSERT(num_toks_ == 0);
 }
 

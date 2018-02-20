@@ -348,7 +348,8 @@ typedef CudaVector<TokenState> TokenVector;
   /// intend to call AdvanceDecoding().  If you call Decode(), you don't need
   /// to call this.  You can call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance. 
-  void InitDecoding();  
+  void InitDecoding(); 
+  void ClearArcVector();
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
   void PreProcessLattices(TokenVector** cur_toks_,

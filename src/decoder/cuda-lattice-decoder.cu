@@ -660,7 +660,11 @@ template<typename T>
   __global__ void initializeCutoff(CostType *cutoff) {
     *cutoff = INFINITY;
   }
-
+  void CudaLatticeDecoder::ClearArcVector() {
+    for (int i=0; i < sub_vec_num_; i++) {
+      lat_arcs_sub_vec_[i].clear(stream_comp);  
+    }
+  }
   void CudaLatticeDecoder::InitDecoding() {
     printf("CUDA LatticeDecoder InitDecoding\n");
     num_frames_decoded_ = 0;
@@ -670,10 +674,7 @@ template<typename T>
     for (int i=0; i < prune_interval_; i++) {
       lat_arcs_vec_[i].clear(stream_comp);
     }
-    //for (int i=0; i < sub_vec_num_; i++) {
-    //  lat_arcs_sub_vec_[i].clear(stream_comp);  
-    //}
-    
+    ClearArcVector();    
     allocator.reset();
     int threads=64;
     int blocks=DIV_ROUND_UP(total_threads,threads);
@@ -1338,10 +1339,7 @@ template<typename T>
     if (num_frames_decoded_ > 1) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     lat_arcs_vec_[frame].clear();
-    for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].clear();  
-      //clear it as they has been saved in CPU; btw, cur_toks[i].token->last_arc_idx=-1; //is in PostProcessTokens_cg
-    }
+    ClearArcVector();
     }
   }
   void CudaLatticeDecoder::ProcessTokens() {
