@@ -84,14 +84,6 @@ template <typename T>
     asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
   }
 
-template <typename T>
-  DEVICE __forceinline__ void store4(T *a, const T *b) {
-    asm("st.global.s32 [%0], %1;" :: "l"(a), "l"(b));
-  }
-
-
-
-
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 // No stream priorities
 DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
