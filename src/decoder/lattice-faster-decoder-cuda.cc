@@ -144,10 +144,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     decoder_.ProcessTokens();
     decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
     ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
-    
-    if (decodable->IsLastFrame(NumFramesDecoded() - 1)) break;
-    
     decoder_.PostProcessTokens();
+    if (decodable->IsLastFrame(NumFramesDecoded() - 1)) break;
     //computes log likelihoods for the next frame
     decoder_.ComputeLogLikelihoods(decodable);
     num_frames_decoded_++;
