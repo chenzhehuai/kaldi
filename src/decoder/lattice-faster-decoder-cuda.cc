@@ -64,12 +64,14 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   //num_toks_++;
   //ProcessNonemittingWrapper(config_.beam);
 }
-
-inline void LatticeFasterDecoderCuda::CreateTokAndRegister(cuToken& tok_d_h, 
+//inline
+void LatticeFasterDecoderCuda::CreateTokAndRegister(cuToken& tok_d_h, 
   Token *&toks) {
     Token *new_tok = new Token (tok_d_h.cost_, 0, NULL, toks);
     toks = new_tok; //add into active_toks_;
-    active_toks_map_[&tok_d_h] = new_tok;
+}
+void LatticeFasterDecoderCuda::dbg(cuToken *i) {
+    active_toks_map_[i] = active_toks_[num_frames_decoded_].toks;
 }
 int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
       LatLinkVector*& cur_arcs_) {
@@ -113,6 +115,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   for (int i=0;i<cur_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
     assert(cur_toks_[i].token);
     CreateTokAndRegister(*cur_toks_[i].token, active_toks_[num_frames_decoded_].toks);
+    dbg(cur_toks_[i].token);
     num_toks_++;
   }
   //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
