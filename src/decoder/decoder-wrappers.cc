@@ -17,6 +17,7 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include "base/timer.h"
 #include "decoder/decoder-wrappers.h"
 #include "decoder/faster-decoder.h"
 #include "lat/lattice-functions.h"
@@ -257,6 +258,7 @@ bool DecodeUtteranceLatticeFasterCuda(
   }
 
   // Get lattice, and do determinization if requested.
+  Timer timer;
   Lattice lat;
   decoder.GetRawLattice(&lat);
   if (lat.NumStates() == 0)
@@ -276,12 +278,16 @@ bool DecodeUtteranceLatticeFasterCuda(
     if (acoustic_scale != 0.0)
       fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &clat);
     compact_lattice_writer->Write(utt, clat);
+
   } else {
     // We'll write the lattice without acoustic scaling.
     if (acoustic_scale != 0.0)
       fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &lat);
     lattice_writer->Write(utt, lat);
   }
+    double t4 = timer.Elapsed();
+    KALDI_VLOG(3)<<"get_lat,det_lat: "<<t4;
+
   KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
             << (likelihood / num_frames) << " over "
             << num_frames << " frames.";

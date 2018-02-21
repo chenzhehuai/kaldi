@@ -18,6 +18,7 @@
 // limitations under the License.
 
 #include <nvToolsExt.h>
+#include "base/timer.h"
 #include "cuda-lattice-decoder.h"
 #include "decoder/lattice-faster-decoder-cuda.h"
 #include "lat/lattice-functions.h"
@@ -131,6 +132,10 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   //decoder_.Decode(decodable);
 
   nvtxRangePushA("CudaLatticeDecoder::Decode");
+
+  Timer timer;
+  timer.Reset();
+
   InitDecoding();
   decoder_.InitDecoding();
   decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
@@ -139,23 +144,37 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.ComputeLogLikelihoods(decodable);
   num_frames_decoded_++;
 
+  double pre_time = timer.Elapsed();
+
+  double cpu_proc_time=0, gpu_proc_time=0;
   while( !decodable->IsLastFrame(NumFramesDecoded() - 1)) {
+    double t1 = timer.Elapsed();
     decoder_.PreProcessTokens();
     decoder_.ProcessTokens();
     decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
+    double t2 = timer.Elapsed();
     ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
+    double t3 = timer.Elapsed();
+    //active_toks_.resize(active_toks_.size()+1);
     decoder_.PostProcessTokens();
     if (decodable->IsLastFrame(NumFramesDecoded() - 1)) break;
     //computes log likelihoods for the next frame
     decoder_.ComputeLogLikelihoods(decodable);
     num_frames_decoded_++;
+    double t4 = timer.Elapsed();
+    
+    cpu_proc_time += t3-t2;
+    gpu_proc_time += t2-t1+t4-t3;
   }
 
   nvtxRangePop();
 
+  double t5 = timer.Elapsed();
   decoder_.PreFinalizeDecoding();
   FinalizeDecoding();
-
+  double t6 = timer.Elapsed();
+  cpu_proc_time += t6-t5;
+  KALDI_VLOG(3)<<"pre_time,cpu_proc_time,gpu_proc_time: "<<pre_time<<" "<<cpu_proc_time<<" "<<gpu_proc_time;
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
   return !active_toks_.empty() && active_toks_.back().toks != NULL;
