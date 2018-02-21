@@ -192,7 +192,7 @@ class LatticeFasterDecoderCuda {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
-  void CreateTokAndRegister(cuToken& tok_d_h, Token *&toks);
+  inline void CreateTokAndRegister(cuToken& tok_d_h, Token *&toks);
   int AddLatticeArcs(cuTokenVector& cur_toks_, LatLinkVector*& cur_arcs_);
 
   // This function computes the final-costs for tokens active on the final

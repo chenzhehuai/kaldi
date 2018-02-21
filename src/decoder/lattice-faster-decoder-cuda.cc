@@ -65,7 +65,7 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   //ProcessNonemittingWrapper(config_.beam);
 }
 
-void LatticeFasterDecoderCuda::CreateTokAndRegister(cuToken& tok_d_h, 
+inline void LatticeFasterDecoderCuda::CreateTokAndRegister(cuToken& tok_d_h, 
   Token *&toks) {
     Token *new_tok = new Token (tok_d_h.cost_, 0, NULL, toks);
     toks = new_tok; //add into active_toks_;
