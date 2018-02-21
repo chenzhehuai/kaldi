@@ -6,7 +6,7 @@ include ../kaldi.mk
 
 LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
-LDLIBS += -lnvToolsExt  -lcuda
+LDLIBS += -lnvToolsExt  #-lcuda
 
 BINFILES = align-equal align-equal-compiled acc-tree-stats \
         show-alignments compile-questions cluster-phones \
@@ -26,7 +26,7 @@ BINFILES = align-equal align-equal-compiled acc-tree-stats \
         matrix-sum build-pfile-from-ali get-post-on-ali tree-info am-info \
         vector-sum matrix-sum-rows est-pca sum-lda-accs sum-mllt-accs \
         transform-vec align-text matrix-dim post-to-smat \
-				decode-faster-mapped-cuda latgen-faster-mapped-cuda 
+				latgen-faster-mapped-cuda #decode-faster-mapped-cuda 
 
 
 OBJFILES =
