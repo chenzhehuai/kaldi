@@ -65,9 +65,9 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   //ProcessNonemittingWrapper(config_.beam);
 }
 //inline
-void LatticeFasterDecoderCuda::CreateTokAndRegister(cuToken& tok_d_h, 
+void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost, 
   Token *&toks) {
-    Token *new_tok = new Token (tok_d_h.cost_, 0, NULL, toks);
+    Token *new_tok = new Token (cost, 0, NULL, toks);
     toks = new_tok; //add into active_toks_;
 }
 void LatticeFasterDecoderCuda::dbg(cuToken *i) {
@@ -97,6 +97,12 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
   }
   return num_arcs;
 }
+BaseFloat LatticeFasterDecoderCuda::get_cost(int i) {
+  return (*cur_toks_)[i].token->cost_;
+}
+LatticeFasterDecoderCuda::cuToken*  LatticeFasterDecoderCuda::get_cutok(int i) {
+  return (*cur_toks_)[i].token;
+}
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_) {
   //KALDI_ASSERT(num_frames_decoded_);
@@ -113,9 +119,9 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   //add current
   active_toks_.resize(active_toks_.size() + 1);
   for (int i=0;i<cur_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
-    assert(cur_toks_[i].token);
-    CreateTokAndRegister(*cur_toks_[i].token, active_toks_[num_frames_decoded_].toks);
-    dbg(cur_toks_[i].token);
+    assert(get_cutok(i));
+    CreateTokAndRegister(get_cost(i), active_toks_[num_frames_decoded_].toks);
+    dbg(get_cutok(i));
     num_toks_++;
   }
   //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
@@ -176,8 +182,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.PreFinalizeDecoding();
   FinalizeDecoding();
   double t6 = timer.Elapsed();
-  cpu_proc_time += t6-t5;
-  KALDI_VLOG(3)<<"pre_time,cpu_proc_time,gpu_proc_time: "<<pre_time<<" "<<cpu_proc_time<<" "<<gpu_proc_time;
+  double cpu_proc_time_f = t6-t5;
+  KALDI_VLOG(3)<<"pre_time,cpu_proc_time,cpu_proc_time_f,gpu_proc_time: "<<pre_time<<" "<<cpu_proc_time<<" "<<cpu_proc_time_f<<" "<<gpu_proc_time;
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
   return !active_toks_.empty() && active_toks_.back().toks != NULL;
