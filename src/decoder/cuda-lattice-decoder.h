@@ -262,6 +262,7 @@ typedef CudaVector<TokenState> TokenVector;
       inline void prefetch_next_to_device(cudaStream_t stream, int count);
       inline void prefetch_next_to_device(cudaStream_t stream);
       inline void prefetch_allocated_to_host(cudaStream_t stream);
+      inline void prefetch_allocated_to_host_since_last(cudaStream_t stream);
 
       inline size_t getCudaMallocManagedBytes();
 
@@ -275,7 +276,7 @@ typedef CudaVector<TokenState> TokenVector;
 
       uint32_t size;
       int32_t device;
-      uint32_t *front_d, *front_h;    //next free token index
+      uint32_t *front_d, *front_h, *last_front_h, *last2_front_h;    //next free token index
 
       Token *tokens_allocation;  //TODO we could have a list of these and dynamically add more.  Just going static for now.
       size_t bytes_cudaMallocManaged;

@@ -25,7 +25,7 @@
 #include <cooperative_groups.h>
 #include "decoder/cuda-lattice-decoder.h"
 
-//#define MEMADVISE only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
+#define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
 //Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError() {                                          \
@@ -450,9 +450,19 @@ template<typename T>
 
   void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host(cudaStream_t stream) {
 #ifdef MEMADVISE
+    if (!*front_h) return;
     cudaMemPrefetchAsync(tokens_allocation,sizeof(Token)* *front_h,cudaCpuDeviceId,stream);  
 #endif
   }
+  void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host_since_last(cudaStream_t stream) {
+#ifdef MEMADVISE
+    if (*last2_front_h==*front_h) return;
+    cudaMemPrefetchAsync(tokens_allocation+*last2_front_h,sizeof(Token)* (*front_h-*last2_front_h),cudaCpuDeviceId,stream); 
+    *last2_front_h=*last_front_h;
+    *last_front_h=*front_h;
+#endif
+  }
+
 
   size_t CudaLatticeDecoder::TokenAllocator::getCudaMallocManagedBytes() {
     return bytes_cudaMallocManaged;
@@ -460,6 +470,8 @@ template<typename T>
 
   void CudaLatticeDecoder::TokenAllocator::reset() {
     *front_h=0;
+    *last_front_h=0;
+    *last2_front_h=0;
     cudaMemset(front_d,0,sizeof(int));
   }
 
@@ -475,6 +487,8 @@ template<typename T>
 
     cudaMalloc((void**)&front_d,sizeof(uint32_t)); 
     cudaMallocHost((void**)&front_h,sizeof(uint32_t)); 
+    cudaMallocHost((void**)&last_front_h,sizeof(uint32_t)); 
+    cudaMallocHost((void**)&last2_front_h,sizeof(uint32_t)); 
 
 #ifdef MEMADVISE
     //If we do this we get faster perf as long as we don't over subscribe
@@ -490,6 +504,8 @@ template<typename T>
     cudaFree(tokens_allocation);
     cudaFree(front_d);
     cudaFreeHost(front_h);
+    cudaFreeHost(last_front_h);
+    cudaFreeHost(last2_front_h);
   }
 
   DEVICE inline Token* CudaLatticeDecoder::TokenAllocator::getToken(uint32_t offset) {
@@ -1304,19 +1320,22 @@ template<typename T>
       TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
+    allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
+    //allocator.prefetch_allocated_to_host_since_last(stream_comp); //to access token in CPU
+    
     prev_toks_.copy_all_to_host(stream_comp);
     cur_toks_.copy_all_to_host(stream_comp);
     * prev_toks = &prev_toks_;
     * cur_toks = &cur_toks_;
 
-    lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
+    //lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
 
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].copy_all_to_host(stream_comp);  
-    }    
-    cudaStreamSynchronize(stream_comp);
-    
+    }   
     *cur_arcs_=lat_arcs_sub_vec_;
+
+    cudaStreamSynchronize(stream_comp);
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
