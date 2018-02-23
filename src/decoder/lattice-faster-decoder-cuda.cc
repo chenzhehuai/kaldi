@@ -86,8 +86,6 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
       BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
       int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
       int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
-      assert(active_toks_map_.count(arc_d_h.next_tok));
-      assert(active_toks_map_.count(arc_d_h.prev_tok));
       Token* next_tok=active_toks_map_.at(arc_d_h.next_tok);
       Token* prev_tok=active_toks_map_.at(arc_d_h.prev_tok);
       prev_tok->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
