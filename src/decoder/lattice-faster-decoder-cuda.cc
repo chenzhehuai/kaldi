@@ -390,6 +390,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinksFinal() {
   KALDI_ASSERT(!active_toks_.empty());
   int32 frame_plus_one = active_toks_.size() - 1;
 
+  KALDI_LOG<<"active_toks_map_.size(): "<<active_toks_map_.size();
   if (active_toks_[frame_plus_one].toks == NULL)  // empty list; should not happen.
     KALDI_WARN << "No tokens alive at end of file";
 
@@ -607,6 +608,7 @@ void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at ut
   }
   active_toks_.clear();
   active_toks_map_.clear();
+  active_toks_map_.reserve(1e7);
   KALDI_ASSERT(num_toks_ == 0);
 }
 
