@@ -23,6 +23,7 @@
 #include "tree/context-dep.h"
 #include "hmm/transition-model.h"
 #include "fstext/fstext-lib.h"
+#include "cudamatrix/cu-device.h"
 #include "decoder/decoder-wrappers.h"
 #include "decoder/decodable-matrix.h"
 #include "base/timer.h"
@@ -98,6 +99,10 @@ int main(int argc, char *argv[]) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
       Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
+
+      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().AllowMultithreading();
+
       CudaFst decode_fst_cuda;
       decode_fst_cuda.initialize(*decode_fst);
       timer.Reset();

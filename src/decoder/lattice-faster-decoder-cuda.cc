@@ -43,9 +43,13 @@ LatticeFasterDecoderCuda::~LatticeFasterDecoderCuda() {
   if (delete_fst_) delete &(fst_);
 }
 
+void LatticeFasterDecoderCuda::PrintTime() {
+  KALDI_VLOG(4)<<t_PruneForwardLinks<<" ";
+}
 void LatticeFasterDecoderCuda::InitDecoding() {
   // clean up from last time:
   //DeleteElems(toks_.Clear());
+  t_PruneForwardLinks=0;
   cost_offsets_.clear();
   ClearActiveTokens();
   warned_ = false;
@@ -184,6 +188,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   double t6 = timer.Elapsed();
   double cpu_proc_time_f = t6-t5;
   KALDI_VLOG(3)<<"pre_time,cpu_proc_time,cpu_proc_time_f,gpu_proc_time: "<<pre_time<<" "<<cpu_proc_time<<" "<<cpu_proc_time_f<<" "<<gpu_proc_time;
+  PrintTime();
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
   return !active_toks_.empty() && active_toks_.back().toks != NULL;
@@ -314,6 +319,7 @@ bool LatticeFasterDecoderCuda::GetRawLattice(Lattice *ofst,
 void LatticeFasterDecoderCuda::PruneForwardLinks(
     int32 frame_plus_one, bool *extra_costs_changed,
     bool *links_pruned, BaseFloat delta) {
+  Timer tm;
   // delta is the amount by which the extra_costs must change
   // If delta is larger,  we'll tend to go back less far
   //    toward the beginning of the file.
@@ -389,6 +395,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
     // optimizations could cause an infinite loop here for small delta and
     // high-dynamic-range scores.
   } // while changed
+  t_PruneForwardLinks+=tm.Elapsed();
 }
 
 // PruneForwardLinksFinal is a version of PruneForwardLinks that we call

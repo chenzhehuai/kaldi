@@ -63,6 +63,7 @@ class LatticeFasterDecoderCuda {
   /// Returns true if any kind of traceback is available (not necessarily from a
   /// final state).
   bool Decode(DecodableInterface *decodable);
+  void PrintTime();
   void InitDecoding();
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
@@ -192,6 +193,7 @@ class LatticeFasterDecoderCuda {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
+  double t_PruneForwardLinks;
   void CreateTokAndRegister(BaseFloat cost, Token *&toks);
   void dbg(cuToken *i);
   BaseFloat get_cost(int i);

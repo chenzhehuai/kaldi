@@ -25,6 +25,7 @@
 // after committing the changes to this file, using the command
 // svn merge ^/sandbox/online/src/decoder/lattice-faster-decoder.cc lattice-faster-online-decoder.cc
 
+#include "base/timer.h"
 #include "decoder/lattice-faster-decoder.h"
 #include "lat/lattice-functions.h"
 
@@ -52,9 +53,13 @@ LatticeFasterDecoder::~LatticeFasterDecoder() {
   ClearActiveTokens();
   if (delete_fst_) delete &(fst_);
 }
+void LatticeFasterDecoder::PrintTime() {
+  KALDI_VLOG(4)<<t_PruneForwardLinks<<" ";
+}
 
 void LatticeFasterDecoder::InitDecoding() {
   // clean up from last time:
+  t_PruneForwardLinks=0;
   DeleteElems(toks_.Clear());
   cost_offsets_.clear();
   ClearActiveTokens();
@@ -89,6 +94,7 @@ bool LatticeFasterDecoder::Decode(DecodableInterface *decodable) {
     ProcessNonemittingWrapper(cost_cutoff);
   }
   FinalizeDecoding();
+  PrintTime();
 
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
@@ -300,6 +306,7 @@ inline LatticeFasterDecoder::Token *LatticeFasterDecoder::FindOrAddToken(
 void LatticeFasterDecoder::PruneForwardLinks(
     int32 frame_plus_one, bool *extra_costs_changed,
     bool *links_pruned, BaseFloat delta) {
+  Timer tm;
   // delta is the amount by which the extra_costs must change
   // If delta is larger,  we'll tend to go back less far
   //    toward the beginning of the file.
@@ -368,6 +375,7 @@ void LatticeFasterDecoder::PruneForwardLinks(
     // optimizations could cause an infinite loop here for small delta and
     // high-dynamic-range scores.
   } // while changed
+  t_PruneForwardLinks+=tm.Elapsed();
 }
 
 // PruneForwardLinksFinal is a version of PruneForwardLinks that we call
@@ -592,6 +600,7 @@ void LatticeFasterDecoder::AdvanceDecoding(DecodableInterface *decodable,
     BaseFloat cost_cutoff = ProcessEmittingWrapper(decodable);
     ProcessNonemittingWrapper(cost_cutoff);
   }
+  PrintTime();
 }
 
 // FinalizeDecoding() is a version of PruneActiveTokens that we call

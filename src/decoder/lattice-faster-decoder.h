@@ -169,6 +169,7 @@ class LatticeFasterDecoder {
   /// intend to call AdvanceDecoding().  If you call Decode(), you don't need to
   /// call this.  You can also call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance.
+  void PrintTime();
   void InitDecoding();
 
   /// This will decode until there are no more frames ready in the decodable
@@ -292,7 +293,7 @@ class LatticeFasterDecoder {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
-
+  double t_PruneForwardLinks;
   // This function computes the final-costs for tokens active on the final
   // frame.  It outputs to final-costs, if non-NULL, a map from the Token*
   // pointer to the final-prob of the corresponding state, for all Tokens
