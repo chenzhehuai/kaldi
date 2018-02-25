@@ -198,6 +198,7 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
   
 template<typename T>
     inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream) {
+      cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
       cudaMemcpyAsync(mem_h,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
     }
 
@@ -1320,18 +1321,19 @@ template<typename T>
       TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
+    cudaStreamSynchronize(stream_comp);
     allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
     //allocator.prefetch_allocated_to_host_since_last(stream_comp); //to access token in CPU
     
-    prev_toks_.copy_all_to_host(stream_comp);
-    cur_toks_.copy_all_to_host(stream_comp);
+    //prev_toks_.copy_all_to_host(stream_comp);
+    cur_toks_.copy_data_to_host(stream_comp);
     * prev_toks = &prev_toks_;
     * cur_toks = &cur_toks_;
 
     //lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
 
     for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].copy_all_to_host(stream_comp);  
+      lat_arcs_sub_vec_[i].copy_data_to_host(stream_comp);  
     }   
     *cur_arcs_=lat_arcs_sub_vec_;
 
