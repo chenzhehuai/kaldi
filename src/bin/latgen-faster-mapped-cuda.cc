@@ -100,19 +100,20 @@ int main(int argc, char *argv[]) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
       Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
-
+#if 1
       //cuInit(0);
       cudaDeviceReset();
-      //CuDevice::Instantiate().SelectGpuId("yes");
-      cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
-      //cudaSetDeviceFlags(cudaDeviceScheduleYield);
+      //cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+      cudaSetDeviceFlags(cudaDeviceScheduleYield);
       //cudaSetDeviceFlags(cudaDeviceScheduleSpin);
       uint flags;
       cudaGetDeviceFlags(&flags);
       KALDI_VLOG(3)<<flags;
       //assert(flags&cudaDeviceScheduleBlockingSync);
-      //CuDevice::Instantiate().AllowMultithreading();
-
+#else
+      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().AllowMultithreading();
+#endif
       CudaFst decode_fst_cuda;
       decode_fst_cuda.initialize(*decode_fst);
 
