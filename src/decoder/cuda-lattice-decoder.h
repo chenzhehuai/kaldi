@@ -109,7 +109,8 @@ class CudaVector {
       inline void copy_all_to_device(cudaStream_t stream=0);
       inline void copy_size_to_host(cudaStream_t stream=0);
       inline void copy_size_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_host(cudaStream_t stream=0);
+      inline void copy_data_to_host(T* mem_h=NULL, uint32_t* count_h=NULL,
+          cudaStream_t stream=0);
       inline void copy_data_to_device(cudaStream_t stream=0);
 
       inline size_t getCudaMallocBytes(); 
@@ -120,6 +121,24 @@ class CudaVector {
       T* mem_d, *mem_h;
 };
 
+template<typename T>
+class CudaVectorBuffer {
+    public:
+      T& operator[](uint32_t idx); 
+      inline void allocate(uint32_t max_size, uint32_t max_frame);
+      inline uint32_t size(uint32_t frame) const; 
+      inline void free();
+      inline void clear();
+      inline void clear(uint32_t frame);
+      inline void pushback_data_to_host(CudaVector<T> &iv, 
+          int frame, cudaStream_t stream=0);
+      inline size_t getCudaMallocBytes(); 
+    private:
+      uint32_t *count_h;
+      uint32_t max_size_;
+      uint32_t max_frame_;
+      T* mem_h;
+};
 
 struct CudaLatticeDecoderConfig {
   BaseFloat beam;
@@ -129,6 +148,7 @@ struct CudaLatticeDecoderConfig {
   uint32_t max_lat_arc_per_frame;
   uint32_t max_tokens;
   int32_t prune_interval;
+  int32_t prune_buffer_interval;
   BaseFloat lattice_beam;
   bool determinize_lattice;
   BaseFloat prune_scale;
@@ -144,6 +164,7 @@ struct CudaLatticeDecoderConfig {
                        max_lat_arc_per_frame(300000),
                        max_tokens(60000000),
                        prune_interval(25),
+                       prune_buffer_interval(prune_interval),
                        lattice_beam(10.0),
                        determinize_lattice(true),
                        prune_scale(0.1), 
@@ -164,6 +185,9 @@ struct CudaLatticeDecoderConfig {
                    "and deeper lattices");
     opts->Register("prune-interval", &prune_interval, "Interval (in frames) at "
                    "which to prune tokens");
+    opts->Register("prune-buffer-interval", &prune_buffer_interval, "Interval (in frames) at "
+                   "which to prune tokens");
+
     opts->Register("determinize-lattice", &determinize_lattice, "If true, "
                    "determinize the lattice (lattice-determinization, keeping only "
                    "best pdf-sequence for each word-sequence).");    
@@ -425,9 +449,8 @@ typedef CudaVector<TokenState> TokenVector;
 
   LatLinkVector* lat_arcs_vec_;
   LatLinkVector* lat_arcs_sub_vec_;
-
-
-
+  CudaVectorBuffer<Token> cur_toks_buf_;
+  CudaVectorBuffer<LatLinkVector> cur_arcs_buf_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

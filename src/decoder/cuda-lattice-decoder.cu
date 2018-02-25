@@ -197,7 +197,11 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
     }
   
 template<typename T>
-    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream) {
+    inline void CudaVector<T>::copy_data_to_host(T* mem_h, uint32_t* count_h, cudaStream_t stream) {
+      if (mem_h==NULL||count_h==NULL) {
+        count_h=this->count_h;
+        mem_h=this->mem_h;
+      }
       cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
       cudaMemcpyAsync(mem_h,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
     }
@@ -252,6 +256,50 @@ template<typename T>
       std::swap(max_size,v.max_size);
     }
   /**************************************End CudaVector Implementation**********************************/
+  template<typename T>
+    inline const T& CudaVectorBuffer<T>::operator[](uint32_t idx) { 
+      assert(idx<max_frame_);
+      return mem_h[(idx%max_frame_)*max_size_];
+    } 
+  template<typename T>
+    inline void CudaVectorBuffer<T>::allocate(uint32_t max_size, uint32_t max_frame) {
+      max_size_=max_size;
+      max_frame_=max_frame;
+      cudaMallocHost(&count_h,max_frame*sizeof(uint32_t));
+      cudaMallocHost(&mem_h,max_frame*max_size*sizeof(T));
+      clear();
+    }
+  template<typename T>
+    inline uint32_t CudaVectorBuffer<T>::size(uint32_t frame) const 
+    {
+      return count_h[frame%max_frame_];
+    }
+  template<typename T>
+    inline void CudaVectorBuffer<T>::free() { 
+      cudaFreeHost(mem_h);
+      cudaFreeHost(count_h);
+    }
+  template<typename T> 
+    inline void CudaVectorBuffer<T>::clear() { 
+      for (int i=0; i<max_frame; i++) count_h[i]=0;
+    }
+  template<typename T> 
+    inline void CudaVectorBuffer<T>::clear(uint32_t frame) { 
+      count_h[frame%max_frame_]=0;
+    }
+  template<typename T>
+    inline void CudaVectorBuffer<T>::pushback_data_to_host(CudaVector<T> &iv, 
+          int frame, cudaStream_t stream=0) {
+      T* mem=mem_h+size(frame)+max_size*(frame%max_frame_);
+      uint32_t cp_count;
+      assert(size(frame)+iv.size()<=max_size_);
+      iv.copy_data_to_host(mem, &cp_count, stream);
+      count_h[frame%max_frame_]+=cp_count;
+    }
+  template<typename T>
+    inline size_t CudaVectorBuffer<T>::getCudaMallocBytes() {
+      return sizeof(uint32_t)*max_frame+max_frame*max_size*sizeof(T);
+    }
 
   /***************************************CudaFst Implementation*****************************************/
   HOST DEVICE float CudaFst::Final(StateId state) const {
@@ -589,6 +637,10 @@ template<typename T>
       lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
       bytes_cudaMalloc += lat_arcs_sub_vec_[i].getCudaMallocBytes();
     }
+    //for cpu
+    cur_toks_buf_.allocate(config.max_lat_tok_per_frame, config.prune_buffer_interval);
+    cur_arcs_buf_.allocate(config.max_lat_arc_per_frame, config.prune_buffer_interval);
+
 
     cudaStreamSynchronize(stream_comp);
     cudaStreamSynchronize(stream_copy);
@@ -628,6 +680,9 @@ template<typename T>
     cudaFree((void*)token_locks_d);
     cudaFree(cutoff_d);
     cudaFree(modified_d);
+    
+    cur_toks_buf_.free();
+    cur_arcs_buf_.free();
 
     cudaEventDestroy(event_pt);
     cudaEventDestroy(event_pt_old);
@@ -703,6 +758,9 @@ template<typename T>
     processTokens_params params;
     initParams(params);
     addOneToken<<<1,1,0,stream_comp>>>(params, start_state);
+
+    cur_toks_buf_.clear();
+    cur_arcs_buf_.clear();
 
     //Token tok(StdWeight::One().Value(), NULL, 0);
     //addOneToken2<<<1,1,0,stream_comp>>>(current_tokens_lookup_d, cur_toks_, tok, start_state, lat_toks_vec_);
@@ -1321,23 +1379,18 @@ template<typename T>
       TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
     uint32_t frame=num_frames_decoded_%prune_interval_;
     uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
-    cudaStreamSynchronize(stream_comp);
-    allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
-    //allocator.prefetch_allocated_to_host_since_last(stream_comp); //to access token in CPU
-    
-    //prev_toks_.copy_all_to_host(stream_comp);
-    cur_toks_.copy_data_to_host(stream_comp);
-    * prev_toks = &prev_toks_;
-    * cur_toks = &cur_toks_;
-
-    //lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
-
+    //1 frame before prune
+    bool to_prune = ((num_frames_decoded_-1)%prune_interval_==0);
+    cudaStreamSynchronize(stream_comp); 
+    cur_toks_buf_.pushback_data_to_host(cur_toks_, num_frames_decoded_, stream_comp);
     for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].copy_data_to_host(stream_comp);  
-    }   
-    *cur_arcs_=lat_arcs_sub_vec_;
-
-    cudaStreamSynchronize(stream_comp);
+      cur_arcs_buf_.pushback_data_to_host(lat_arcs_sub_vec_[i], num_frames_decoded_, stream_comp);
+    }
+    cudaStreamSynchronize(stream_comp); //need to finish this as lat_arcs_sub_vec_ will be cleared (TODO: use 2 so that we dont need to finish this)
+    //garrentee last frame is finished, but not the current frame
+    if (to_prune) {
+      allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
+    }
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
