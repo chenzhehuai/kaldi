@@ -354,7 +354,8 @@ typedef CudaVector<TokenState> TokenVector;
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
   void PreProcessLattices(TokenVector** cur_toks_,
-      TokenVector** prev_toks_, LatLinkVector** cur_arcs_);
+      TokenVector** prev_toks_, LatLinkVector** cur_arcs_,
+      LatLinkVector** prev_arcs_, bool islast);
   void PreProcessTokens();
 
   /// This will decode until there are no more frames ready in the decodable
@@ -425,6 +426,7 @@ typedef CudaVector<TokenState> TokenVector;
 
   LatLinkVector* lat_arcs_vec_;
   LatLinkVector* lat_arcs_sub_vec_;
+  LatLinkVector* lat_arcs_sub_vec_prev_;
 
 
 

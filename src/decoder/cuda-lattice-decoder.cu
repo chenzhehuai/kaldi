@@ -581,13 +581,15 @@ template<typename T>
     //lattice TODO: should use manage
     cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(prune_interval_)); 
     cudaMallocManaged((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
+    cudaMallocManaged((void**)&lat_arcs_sub_vec_prev_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
     for (int i=0; i < prune_interval_; i++) {
       lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
       bytes_cudaMalloc += lat_arcs_vec_[i].getCudaMallocBytes();
     }
     for (int i=0; i < config.sub_vec_num; i++) {
       lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
-      bytes_cudaMalloc += lat_arcs_sub_vec_[i].getCudaMallocBytes();
+      lat_arcs_sub_vec_prev_[i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
+      bytes_cudaMalloc += lat_arcs_sub_vec_[i].getCudaMallocBytes()*2;
     }
 
     cudaStreamSynchronize(stream_comp);
@@ -608,10 +610,12 @@ template<typename T>
     }
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].free();
+      lat_arcs_sub_vec_prev_[i].free();
     }
     //free(lat_arcs_vec_);
     cudaFreeHost(lat_arcs_vec_);
     cudaFree(lat_arcs_sub_vec_);
+    cudaFree(lat_arcs_sub_vec_prev_);
     allocator.finalize();
 
     cudaFreeHost(loglikelihoods_h);
@@ -670,6 +674,7 @@ template<typename T>
     *cutoff = INFINITY;
   }
   void CudaLatticeDecoder::ClearArcVector() {
+    std::swap(lat_arcs_sub_vec_prev_, lat_arcs_sub_vec_);
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].clear(stream_comp);  
     }
@@ -683,6 +688,7 @@ template<typename T>
     for (int i=0; i < prune_interval_; i++) {
       lat_arcs_vec_[i].clear(stream_comp);
     }
+    ClearArcVector();    
     ClearArcVector();    
     allocator.reset();
     int threads=64;
@@ -1318,26 +1324,19 @@ template<typename T>
   }
 
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
-      TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
-    uint32_t frame=num_frames_decoded_%prune_interval_;
-    uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
+      TokenVector** prev_toks, LatLinkVector** cur_arcs_,
+      LatLinkVector** prev_arcs_, bool islast) {
     cudaStreamSynchronize(stream_comp);
     allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
-    //allocator.prefetch_allocated_to_host_since_last(stream_comp); //to access token in CPU
-    
-    //prev_toks_.copy_all_to_host(stream_comp);
     cur_toks_.copy_data_to_host(stream_comp);
     * prev_toks = &prev_toks_;
     * cur_toks = &cur_toks_;
-
-    //lat_arcs_vec_[frame].copy_all_to_host(stream_comp);
-
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].copy_data_to_host(stream_comp);  
     }   
     *cur_arcs_=lat_arcs_sub_vec_;
-
-    cudaStreamSynchronize(stream_comp);
+    *prev_arcs_=lat_arcs_sub_vec_prev_;
+    if (islast) cudaStreamSynchronize(stream_comp); //else overlap CPU&GPU
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;

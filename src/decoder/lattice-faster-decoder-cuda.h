@@ -177,7 +177,7 @@ class LatticeFasterDecoderCuda {
 
   typedef HashList<StateId, Token*>::Elem Elem;
   void ProcessLattices(cuTokenVector& cur_toks_,
-  cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_);
+  cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_, LatLinkVector*& prev_arcs_);
   void FinalizeDecoding();
 
 
@@ -278,6 +278,7 @@ class LatticeFasterDecoderCuda {
   cuTokenVector* cur_toks_;
   cuTokenVector* prev_toks_;
   LatLinkVector* cur_arcs_;  
+  LatLinkVector* prev_arcs_;  
 
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.
