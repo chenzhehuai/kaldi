@@ -574,13 +574,13 @@ template<typename T>
     cudaMalloc((void**)&loglikelihoods_old_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
 
     verbose=config.verbose;
-    prune_interval_=config.prune_interval;
+    prune_interval_=1; //config.prune_interval;
     sub_vec_num_=config.sub_vec_num;
 
     //lattice TODO: should use manage
-    cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(config.prune_interval)); 
+    cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(prune_interval_)); 
     cudaMallocManaged((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
-    for (int i=0; i < config.prune_interval; i++) {
+    for (int i=0; i < prune_interval_; i++) {
       lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
       bytes_cudaMalloc += lat_arcs_vec_[i].getCudaMallocBytes();
     }

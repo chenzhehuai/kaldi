@@ -95,20 +95,30 @@ int main(int argc, char *argv[]) {
     kaldi::int64 frame_count = 0;
     int num_success = 0, num_fail = 0;
 
+    double elapsed = 0;
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
       Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
 
-      CuDevice::Instantiate().SelectGpuId("yes");
-      CuDevice::Instantiate().AllowMultithreading();
+      //cuInit(0);
+      cudaDeviceReset();
+      //CuDevice::Instantiate().SelectGpuId("yes");
+      cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+      //cudaSetDeviceFlags(cudaDeviceScheduleYield);
+      //cudaSetDeviceFlags(cudaDeviceScheduleSpin);
+      uint flags;
+      cudaGetDeviceFlags(&flags);
+      KALDI_VLOG(3)<<flags;
+      //assert(flags&cudaDeviceScheduleBlockingSync);
+      //CuDevice::Instantiate().AllowMultithreading();
 
       CudaFst decode_fst_cuda;
       decode_fst_cuda.initialize(*decode_fst);
-      timer.Reset();
 
       {
         LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
+        timer.Reset();
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
           std::string utt = loglike_reader.Key();
@@ -134,12 +144,12 @@ int main(int argc, char *argv[]) {
           } else num_fail++;
         }
       }
+      elapsed = timer.Elapsed();
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
       KALDI_ERR<< "unfinished";
     }
 
-    double elapsed = timer.Elapsed();
     KALDI_LOG << "Time taken "<< elapsed
               << "s: real-time factor assuming 100 frames/sec is "
               << (elapsed*100.0/frame_count);
