@@ -36,6 +36,12 @@ DEVICE void release_semaphore(volatile int *lock){
     (*(ret+threadIdx.x))++;
     (*(mutex+threadIdx.x*blockIdx.x))++;
   }
+  template<int blockDimx, int blockDimy>
+  inline DEVICE void myread(int *ret, volatile int *mutex) {
+    (*(ret+threadIdx.x));
+    (*(mutex+threadIdx.x*blockIdx.x));
+  }
+
 
   template<int blockDimx, int blockDimy>
   inline DEVICE void myadd2(int *ret, volatile int *mutex) {
@@ -52,6 +58,12 @@ DEVICE void release_semaphore(volatile int *lock){
     release_semaphore((int*)(mutex));
   }
 
+  __global__ void callmyread(int *ret, int *mutex) {
+  //myadd2<32,2>(ret, mutex);
+  myread<320,1>(ret, mutex);
+  //myadd<32,2>(ret, mutex);
+  }
+
   __global__ void callmyadd(int *ret, int *mutex) {
   //myadd2<32,2>(ret, mutex);
   myadd<100,1>(ret, mutex);
@@ -63,11 +75,11 @@ int main() {
   //int blocks=7;
   int *mutex=0;
   int *ret=0, ret_h=0;
-  int n =1e9;
+  int n =1e8;
   int *v_man;
   int32_t device;
   kaldi::Timer timer;
-  double t1,t2,t0,t3,t2_1,t0_1;
+  double t1,t2,t0,t3,t2_1,t0_1,t2_2;
 
   cudaGetDevice(&device);
   cudaMallocManaged((void**)&v_man,sizeof(int)*n);  
@@ -121,6 +133,15 @@ int main() {
   for (int i=0;i<n;i++) int k=v_man[i];
   t2_1=timer.Elapsed();
 
+  callmyread<<<300,320>>>(ret, v_man);
+  cudaCheckError();
+
+  //time
+  timer.Reset();
+  for (int i=0;i<n;i++) int k=v_man[i];
+  t2_2=timer.Elapsed();
+
+
   callmyadd<<<100,320>>>(ret, v_man);
   cudaCheckError();
 
@@ -133,7 +154,7 @@ int main() {
   t3=timer.Elapsed();
 
 
-  std::cout << " nop "<<t0<< " re "<<t0_1<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" pf "<<t3<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
+  std::cout << " nop "<<t0<< " re "<<t0_1<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" read "<<t2_2<<" pf "<<t3<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
     
   cudaFree(v_man);
 }
