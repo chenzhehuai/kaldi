@@ -400,7 +400,7 @@ template<typename T>
       Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
-      token->arc_index_= -1;
+      token->frame= -1;
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
@@ -422,9 +422,9 @@ template<typename T>
       Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
-      token->arc_index_ = -1;
+      token->frame= -1;
       StateId state=cur_toks[i].state;
-      cur_toks[i].token->arc_index_=-1; //clear it as they has been saved in CPU; btw, lat_arcs_sub_vec_ is clearred in PreProcessTokens
+      //cur_toks[i].token->arc_index_=-1; //clear it as they has been saved in CPU; btw, lat_arcs_sub_vec_ is clearred in PreProcessTokens
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
@@ -447,6 +447,11 @@ template<typename T>
 #ifdef MEMADVISE
     cudaMemPrefetchAsync(tokens_allocation+front,sizeof(Token)*count,device,stream);  
 #endif
+  }
+
+  void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host_force(cudaStream_t stream) {
+    if (!*front_h) return;
+    cudaMemcpyAsync(tokens_allocation, tokens_allocation,sizeof(Token)* *front_h,cudaMemcpyDeviceToHost, stream);
   }
 
   void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host(cudaStream_t stream) {
@@ -667,6 +672,7 @@ template<typename T>
       0, NULL, -1, false, false, 0);
     Token tok(0, NULL);
     *cur_tok = tok;
+    cur_tok->frame=params.frame;
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -1020,6 +1026,7 @@ template<typename T>
                 //else
                 //  *cur_tok=next_tok;
                 cur_tok->cost_=next_tok.cost_;
+                cur_tok->frame=params.frame;
 
               }
               release_semaphore((int*)&params.token_locks[nextstate]);
@@ -1079,6 +1086,7 @@ template<typename T>
                 //else
                 //  *cur_tok=next_tok;
                 cur_tok->cost_=next_tok.cost_;
+                cur_tok->frame=params.frame;
 
               (*modified) = true;                                                                            //mark as updated
               }
@@ -1277,7 +1285,8 @@ template<typename T>
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
     cudaStreamSynchronize(stream_comp);
-    //allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
+    allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
+    //cudaStreamSynchronize(stream_copy); // make sure it prefetch all of the last frame, to test whether next frame still need to fetch: if so, it shows that i) prev_tok still be modi. or ii) if any of the range mod, need to re-fetch
     cur_toks_.copy_data_to_host(stream_copy);
     * prev_toks = &prev_toks_;
     * cur_toks = &cur_toks_;
@@ -1293,8 +1302,8 @@ template<typename T>
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
-    allocator.prefetch_allocated_to_host(stream_copy); //debug
-    cudaStreamSynchronize(stream_copy);
+    //cudaStreamSynchronize(stream_comp);
+    //allocator.prefetch_allocated_to_host(stream_copy); //debug
     cudaStreamSynchronize(stream_copy);
     * prev_toks = &prev_toks_;
     * cur_toks = NULL;
@@ -1343,6 +1352,7 @@ template<typename T>
       
     cudaEventSynchronize(event_pt); //throttle
     cudaEventRecord(event_pt,stream_comp);
+
 
 
     nvtxRangePop();
