@@ -1294,6 +1294,7 @@ template<typename T>
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
     allocator.prefetch_allocated_to_host(stream_comp); //debug
+    cudaStreamSynchronize(stream_comp);
     cudaStreamSynchronize(stream_copy);
     * prev_toks = &prev_toks_;
     * cur_toks = NULL;
