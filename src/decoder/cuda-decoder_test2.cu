@@ -63,7 +63,7 @@ int main() {
   //int blocks=7;
   int *mutex=0;
   int *ret=0, ret_h=0;
-  int n =1e8;
+  int n =1e9;
   int *v_man;
   int32_t device;
   kaldi::Timer timer;
