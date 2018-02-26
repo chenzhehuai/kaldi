@@ -516,7 +516,7 @@ template<typename T>
 
   DEVICE inline void CudaLatticeDecoder::TokenAllocator::advanceFront(uint32_t num) {
     int front = *front_d + num;
-    //assert(front<size);
+    assert(front<size);
     
     *front_d=front;
     *front_h=front;
@@ -720,56 +720,6 @@ template<typename T>
   }
 
   void CudaLatticeDecoder::PreFinalizeDecoding() { 
-    //cur_toks_.copy_all_to_host(stream_comp);
-    //cudaStreamSynchronize(stream_comp);
-  }
-
-  void CudaLatticeDecoder::AdvanceDecoding(DecodableInterface *decodable,
-      int32 max_num_frames) {
-    printf("AdvanceDecoding\n");
-
-    nvtxRangePushA("AdvanceDecoding");
-    KALDI_ASSERT(num_frames_decoded_ >= 0 &&
-        "You must call InitDecoding() before AdvanceDecoding()");
-    int32 num_frames_ready = decodable->NumFramesReady();
-    // num_frames_ready must be >= num_frames_decoded, or else
-    // the number of frames ready must have decreased (which doesn't
-    // make sense) or the decodable object changed between calls
-    // (which isn't allowed).
-    KALDI_ASSERT(num_frames_ready >= num_frames_decoded_);
-    int32 target_frames_decoded = num_frames_ready;
-    if (max_num_frames >= 0)
-      target_frames_decoded = std::min(target_frames_decoded,
-          num_frames_decoded_ + max_num_frames);
-
-    ComputeLogLikelihoods(decodable);
-
-    int threads=64;
-    int blocks=DIV_ROUND_UP(total_threads,threads);
-    
-    while (num_frames_decoded_ < target_frames_decoded) {
-
-      if (verbose > 4) KALDI_LOG << num_frames_decoded_<<std::endl;
-#ifndef MEMADVISE
-      //no need to prefetch if we have done a memadvise
-      allocator.prefetch_next_to_device(cudaStreamPerThread);
-#endif
-
-      cur_toks_.swap(prev_toks_);
-      
-      ProcessTokens();
-      
-      //computes log likelihoods for the next frame
-      ComputeLogLikelihoods(decodable);
-      
-    }   
-    
-
-    cur_toks_.copy_all_to_host(stream_comp);
-    cudaStreamSynchronize(stream_comp);
-
-    printf("AdvanceDecoding Done\n");
-    nvtxRangePop();
   }
 
   bool CudaLatticeDecoder::ReachedFinal() const {
@@ -1323,20 +1273,32 @@ template<typename T>
     nvtxRangePop();
   }
 
-  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
+  void CudaLatticeDecoder::PostProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
     cudaStreamSynchronize(stream_comp);
-    allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
-    cur_toks_.copy_data_to_host(stream_comp);
+    //allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
+    cur_toks_.copy_data_to_host(stream_copy);
     * prev_toks = &prev_toks_;
     * cur_toks = &cur_toks_;
     for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].copy_data_to_host(stream_comp);  
+      lat_arcs_sub_vec_[i].copy_data_to_host(stream_copy);  
     }   
     *cur_arcs_=lat_arcs_sub_vec_;
     *prev_arcs_=lat_arcs_sub_vec_prev_;
-    if (islast) cudaStreamSynchronize(stream_comp); //else overlap CPU&GPU
+    if (islast) 
+      cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
+  }
+
+  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
+      TokenVector** prev_toks, LatLinkVector** cur_arcs_,
+      LatLinkVector** prev_arcs_, bool islast) {
+    allocator.prefetch_allocated_to_host(stream_comp); //debug
+    cudaStreamSynchronize(stream_copy);
+    * prev_toks = &prev_toks_;
+    * cur_toks = NULL;
+    *cur_arcs_=NULL;
+    *prev_arcs_=lat_arcs_sub_vec_prev_;
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
@@ -1348,9 +1310,9 @@ template<typename T>
     
     cur_toks_.swap(prev_toks_);
    
-    if (num_frames_decoded_ > 1) {
-      uint32_t frame=num_frames_decoded_%prune_interval_;
-      lat_arcs_vec_[frame].clear();
+    {
+      //uint32_t frame=num_frames_decoded_%prune_interval_;
+      //lat_arcs_vec_[frame].clear();
       ClearArcVector();
     }
   }

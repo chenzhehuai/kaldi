@@ -78,14 +78,14 @@ void LatticeFasterDecoderCuda::dbg(cuToken *i) {
     active_toks_map_[i] = active_toks_[num_frames_decoded_-1].toks;
 }
 int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
-      LatLinkVector*& cur_arcs_) {
+      LatLinkVector*& cur_arcs) {
   //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   //copy lat_arcs_sub_vec_ to lat_arcs_vec_
   const CudaFst& cu_fst = decoder_.fst_;
   int num_arcs=0;
   for (int i = 0; i < config_.sub_vec_num; i++) {
-    for ( int j = 0; j < cur_arcs_[i].size(); j++) {
-      LatLink& arc_d_h = cur_arcs_[i][j];
+    for ( int j = 0; j < cur_arcs[i].size(); j++) {
+      LatLink& arc_d_h = cur_arcs[i][j];
       assert(arc_d_h.arc_id<cu_fst.arc_count);
       BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
       int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
@@ -141,6 +141,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.InitDecoding();
   decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, 0);
   //ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_, prev_arcs_); //only process last frame
+  decoder_.PostProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, 0);
 
   decoder_.ComputeLogLikelihoods(decodable);
   num_frames_decoded_++;
@@ -157,6 +158,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     double t2 = timer.Elapsed();
     ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_, prev_arcs_);
     if (last_frame) {
+      decoder_.PostProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, last_frame);
       std::swap(cur_toks_, prev_toks_);
       std::swap(cur_arcs_, prev_arcs_);
       num_frames_decoded_++;
@@ -165,6 +167,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
       std::swap(cur_arcs_, prev_arcs_);
     }
     double t3 = timer.Elapsed();
+    decoder_.PostProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, last_frame);
     //active_toks_.resize(active_toks_.size()+1);
     decoder_.PostProcessTokens();
     if (last_frame) {

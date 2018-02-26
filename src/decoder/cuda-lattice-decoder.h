@@ -353,18 +353,14 @@ typedef CudaVector<TokenState> TokenVector;
   void ClearArcVector();
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
+  void PostProcessLattices(TokenVector** cur_toks_,
+      TokenVector** prev_toks_, LatLinkVector** cur_arcs_,
+      LatLinkVector** prev_arcs_, bool islast);
   void PreProcessLattices(TokenVector** cur_toks_,
       TokenVector** prev_toks_, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast);
   void PreProcessTokens();
 
-  /// This will decode until there are no more frames ready in the decodable
-  /// object, but if max_num_frames is >= 0 it will decode no more than
-  /// that many frames.  If it returns false, then no tokens are alive,
-  /// which is a kind of error state.
-  void AdvanceDecoding(DecodableInterface *decodable,
-                         int32 max_num_frames = -1);
-  
   /// Returns the number of frames already decoded.  
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
 
