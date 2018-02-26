@@ -67,7 +67,7 @@ int main() {
   int *v_man;
   int32_t device;
   kaldi::Timer timer;
-  double t1,t2,t0,t3,t2_1;
+  double t1,t2,t0,t3,t2_1,t0_1;
 
   cudaGetDevice(&device);
   cudaMallocManaged((void**)&v_man,sizeof(int)*n);  
@@ -86,6 +86,10 @@ int main() {
   timer.Reset();
   for (int i=0;i<n;i++)  s0+=v_man[i];
   t0=timer.Elapsed();
+  timer.Reset();
+  for (int i=0;i<n;i++)  v_man[i];
+  t0_1=timer.Elapsed();
+
   /*
   //time
   timer.Reset();
@@ -129,7 +133,7 @@ int main() {
   t3=timer.Elapsed();
 
 
-  std::cout << " nop "<<t0<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" pf "<<t3<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
+  std::cout << " nop "<<t0<< " re "<<t0_1<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" pf "<<t3<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
     
   cudaFree(v_man);
 }
