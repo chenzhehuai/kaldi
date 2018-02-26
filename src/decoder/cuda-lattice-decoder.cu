@@ -1293,8 +1293,8 @@ template<typename T>
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
-    allocator.prefetch_allocated_to_host(stream_comp); //debug
-    cudaStreamSynchronize(stream_comp);
+    allocator.prefetch_allocated_to_host(stream_copy); //debug
+    cudaStreamSynchronize(stream_copy);
     cudaStreamSynchronize(stream_copy);
     * prev_toks = &prev_toks_;
     * cur_toks = NULL;
