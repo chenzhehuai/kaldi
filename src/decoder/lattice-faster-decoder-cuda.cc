@@ -100,6 +100,7 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
   return num_arcs;
 }
 BaseFloat LatticeFasterDecoderCuda::get_cost(int i) {
+  assert((*prev_toks_)[i].token->frame==num_frames_decoded_-1);
   return (*prev_toks_)[i].token->cost_;
 }
 LatticeFasterDecoderCuda::cuToken*  LatticeFasterDecoderCuda::get_cutok(int i) {

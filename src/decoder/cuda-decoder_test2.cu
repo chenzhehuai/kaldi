@@ -76,10 +76,10 @@ int main() {
   int *mutex=0;
   int *ret=0, ret_h=0;
   int n =1e8;
-  int *v_man;
+  int *v_man, *vv;
   int32_t device;
   kaldi::Timer timer;
-  double t1,t2,t0,t3,t2_1,t0_1,t2_2;
+  double t1,t2,t0,t3,t2_1,t0_1,t2_2,t4,t5;
 
   cudaGetDevice(&device);
   cudaMallocManaged((void**)&v_man,sizeof(int)*n);  
@@ -89,6 +89,9 @@ int main() {
   cudaMemAdvise(v_man,sizeof(int)*n,cudaMemAdviseSetPreferredLocation,device);
   cudaMemAdvise(ret,sizeof(int)*n,cudaMemAdviseSetPreferredLocation,device);
   cudaMemPrefetchAsync(v_man,sizeof(int)*n,device);  //force pages to allocate now
+  cudaMallocManaged((void**)&vv,sizeof(int)*n);  
+  cudaMemAdvise(vv,sizeof(int)*n,cudaMemAdviseSetPreferredLocation,device);
+  cudaMemPrefetchAsync(vv,sizeof(int)*n,device);  //force pages to allocate now
 
   callmyadd<<<100,320>>>(ret, v_man);
   cudaCheckError();
@@ -153,8 +156,23 @@ int main() {
   for (int i=0;i<n;i++)  s+=v_man[i];
   t3=timer.Elapsed();
 
+  cudaMemPrefetchAsync(vv, sizeof(int)* n,cudaCpuDeviceId,NULL); 
 
-  std::cout << " nop "<<t0<< " re "<<t0_1<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" read "<<t2_2<<" pf "<<t3<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
+  //time
+  timer.Reset();
+  for (int i=0;i<n;i++)  v_man[i];
+  t4=timer.Elapsed();
+
+  cudaMemPrefetchAsync(v_man, sizeof(int)* n,cudaCpuDeviceId,NULL); 
+
+  //time
+  timer.Reset();
+  for (int i=0;i<n;i++)  v_man[i];
+  t5=timer.Elapsed();
+
+
+  std::cout << " nop "<<t0<< " re "<<t0_1<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" read "<<t2_2<<" pf "<<t3<<" other "<<t4<<" repf "<<t5<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
     
   cudaFree(v_man);
+  cudaFree(vv);
 }

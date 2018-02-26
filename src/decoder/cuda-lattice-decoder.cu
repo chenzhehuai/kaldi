@@ -1284,8 +1284,8 @@ template<typename T>
   void CudaLatticeDecoder::PostProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
-    cudaStreamSynchronize(stream_comp);
-    allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
+    //cudaStreamSynchronize(stream_comp);
+    //allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
     //cudaStreamSynchronize(stream_copy); // make sure it prefetch all of the last frame, to test whether next frame still need to fetch: if so, it shows that i) prev_tok still be modi. or ii) if any of the range mod, need to re-fetch
     cur_toks_.copy_data_to_host(stream_copy);
     * prev_toks = &prev_toks_;
@@ -1302,8 +1302,8 @@ template<typename T>
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
-    //cudaStreamSynchronize(stream_comp);
-    //allocator.prefetch_allocated_to_host(stream_copy); //debug
+    cudaStreamSynchronize(stream_comp);
+    allocator.prefetch_allocated_to_host(stream_copy); //debug
     cudaStreamSynchronize(stream_copy);
     * prev_toks = &prev_toks_;
     * cur_toks = NULL;
