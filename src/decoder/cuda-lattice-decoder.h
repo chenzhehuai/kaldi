@@ -37,6 +37,7 @@
 #include "lat/kaldi-lattice.h"
 #include "itf/decodable-itf.h"
 
+#define FORCE_PREFETCH_TOK
 
 namespace kaldi {
   
@@ -381,6 +382,7 @@ typedef CudaVector<TokenState> TokenVector;
       CudaVectorBuffer<LatLink>** cur_arcs_buf);
   void PreProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
       CudaVectorBuffer<LatLink>** cur_arcs_buf);
+  void Prefetch_token(cudaStream_t stream);
   void PreProcessTokens();
 
   /// This will decode until there are no more frames ready in the decodable

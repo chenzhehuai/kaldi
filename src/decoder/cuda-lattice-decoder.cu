@@ -1390,6 +1390,9 @@ template<typename T>
     }
   }
 
+  void CudaLatticeDecoder::Prefetch_token(cudaStream_t stream) {
+    allocator.prefetch_allocated_to_host(stream); //to access token in CPU
+  }
   void CudaLatticeDecoder::PreProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
       CudaVectorBuffer<LatLink>** cur_arcs_buf) {
     nvtxRangePushA("PreProcessLattices");
@@ -1403,7 +1406,9 @@ template<typename T>
     for (int i=0; i < sub_vec_num_; i++) {
       cur_arcs_buf_.pushback_data_to_host(lat_arcs_sub_vec_[i], num_frames_decoded_, stream_copy);
     }
-    if (to_prune) allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
+#ifndef FORCE_PREFETCH_TOK
+    if (to_prune) Prefetch_token(stream_copy); //to access token in CPU
+#endif
     if (to_prune) {
       cudaStreamSynchronize(stream_copy); //need to finish this as lat_arcs_sub_vec_ will be cleared (TODO: use 2 so that we dont need to finish this)
       *cur_toks_buf=&cur_toks_buf_;

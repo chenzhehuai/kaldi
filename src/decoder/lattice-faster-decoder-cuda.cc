@@ -110,6 +110,9 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   //call prune
   if ((num_frames_decoded_-1) % config_.prune_buffer_interval == 0 || last) {
     int last_fr=last?num_frames_decoded_:num_frames_decoded_-1;
+#ifdef FORCE_PREFETCH_TOK
+    decoder_.Prefetch_token(0); //force prefetch
+#endif
     for (fr_; fr_<=last_fr;fr_++) {
       //add current
       active_toks_.resize(active_toks_.size() + 1);
