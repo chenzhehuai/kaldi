@@ -1397,9 +1397,8 @@ template<typename T>
     for (int i=0; i < sub_vec_num_; i++) {
       cur_arcs_buf_.pushback_data_to_host(lat_arcs_sub_vec_[i], num_frames_decoded_, stream_copy);
     }
-    //garrentee last frame is finished, but not the current frame
+    if (to_prune) allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
     if (to_prune) {
-      allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
       cudaStreamSynchronize(stream_copy); //need to finish this as lat_arcs_sub_vec_ will be cleared (TODO: use 2 so that we dont need to finish this)
       *cur_toks_buf=&cur_toks_buf_;
       *cur_arcs_buf=&cur_arcs_buf_;
