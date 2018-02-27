@@ -148,15 +148,18 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
   double pre_time = timer.Elapsed();
 
-  double cpu_proc_time=0, gpu_proc_time=0;
+  double cpu_proc_time=0, gpu_proc_time=0, d2h_time=0;
   while( !num_frames_decoded_ - 1) {
     bool last=decodable->IsLastFrame(num_frames_decoded_ );
     double t1 = timer.Elapsed();
     decoder_.PreProcessTokens();
     decoder_.ProcessTokens();
+    double t1_2 = timer.Elapsed();
     decoder_.PreProcessLattices(&cur_toks_, &cur_arcs_);
     double t2 = timer.Elapsed();
+    nvtxRangePushA("ProcessLattices");
     ProcessLattices(*cur_toks_,  cur_arcs_, last);
+    nvtxRangePop(); 
     double t3 = timer.Elapsed();
     decoder_.PostProcessLattices(&cur_toks_, &cur_arcs_);
     decoder_.PostProcessTokens();
@@ -168,6 +171,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     
     cpu_proc_time += t3-t2;
     gpu_proc_time += t2-t1+t4-t3;
+    d2h_time+=t2-t1_2;
+
   }
 
   nvtxRangePop();
@@ -177,7 +182,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   FinalizeDecoding();
   double t6 = timer.Elapsed();
   double cpu_proc_time_f = t6-t5;
-  KALDI_VLOG(3)<<"pre_time,cpu_proc_time,cpu_proc_time_f,gpu_proc_time: "<<pre_time<<" "<<cpu_proc_time<<" "<<cpu_proc_time_f<<" "<<gpu_proc_time;
+  KALDI_VLOG(3)<<"pre_time,cpu_proc_time,cpu_proc_time_f,gpu_proc_time,d2h_time: "<<pre_time<<" "<<cpu_proc_time<<" "<<cpu_proc_time_f<<" "<<gpu_proc_time<< " " <<d2h_time;
   PrintTime();
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).

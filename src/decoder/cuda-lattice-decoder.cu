@@ -502,10 +502,12 @@ template<typename T>
   }
 
   void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host(cudaStream_t stream) {
+    nvtxRangePushA("prefetch_allocated_to_host"); 
 #ifdef MEMADVISE
     if (!*front_h) return;
     cudaMemPrefetchAsync(tokens_allocation,sizeof(Token)* *front_h,cudaCpuDeviceId,stream);  
 #endif
+    nvtxRangePop();
   }
   void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host_since_last(cudaStream_t stream) {
 #ifdef MEMADVISE
@@ -1390,6 +1392,7 @@ template<typename T>
 
   void CudaLatticeDecoder::PreProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
       CudaVectorBuffer<LatLink>** cur_arcs_buf) {
+    nvtxRangePushA("PreProcessLattices");
     //1 frame before prune_interval_
     bool to_prune = ((num_frames_decoded_)%prune_buffer_interval_==0);
     cudaStreamSynchronize(stream_comp); 
@@ -1403,6 +1406,7 @@ template<typename T>
       *cur_toks_buf=&cur_toks_buf_;
       *cur_arcs_buf=&cur_arcs_buf_;
     }
+    nvtxRangePop(); 
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
