@@ -157,6 +157,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     decoder_.ProcessTokens();
     decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, last_frame);
     double t2 = timer.Elapsed();
+    nvtxRangePushA("ProcessLattices");
     ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_, prev_arcs_);
     if (last_frame) {
       decoder_.PostProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, last_frame);
@@ -167,6 +168,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
       std::swap(cur_toks_, prev_toks_);
       std::swap(cur_arcs_, prev_arcs_);
     }
+    nvtxRangePop();
     double t3 = timer.Elapsed();
     decoder_.PostProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_, &prev_arcs_, last_frame);
     //active_toks_.resize(active_toks_.size()+1);

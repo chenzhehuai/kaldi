@@ -455,10 +455,12 @@ template<typename T>
   }
 
   void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host(cudaStream_t stream) {
+    nvtxRangePushA("prefetch_allocated_to_host"); 
 #ifdef MEMADVISE
     if (!*front_h) return;
     cudaMemPrefetchAsync(tokens_allocation,sizeof(Token)* *front_h,cudaCpuDeviceId,stream);  
 #endif
+    nvtxRangePop();
   }
   void CudaLatticeDecoder::TokenAllocator::prefetch_allocated_to_host_since_last(cudaStream_t stream) {
 #ifdef MEMADVISE
@@ -1284,7 +1286,8 @@ template<typename T>
   void CudaLatticeDecoder::PostProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
-    //cudaStreamSynchronize(stream_comp);
+    nvtxRangePushA("PostProcessLattices"); 
+    cudaStreamSynchronize(stream_comp);
     //allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
     //cudaStreamSynchronize(stream_copy); // make sure it prefetch all of the last frame, to test whether next frame still need to fetch: if so, it shows that i) prev_tok still be modi. or ii) if any of the range mod, need to re-fetch
     cur_toks_.copy_data_to_host(stream_copy);
@@ -1297,11 +1300,13 @@ template<typename T>
     *prev_arcs_=lat_arcs_sub_vec_prev_;
     if (islast) 
       cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
+    nvtxRangePop();
   }
 
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
       TokenVector** prev_toks, LatLinkVector** cur_arcs_,
       LatLinkVector** prev_arcs_, bool islast) {
+    nvtxRangePushA("PreProcessLattices"); 
     cudaStreamSynchronize(stream_comp);
     allocator.prefetch_allocated_to_host(stream_copy); //debug
     cudaStreamSynchronize(stream_copy);
@@ -1309,6 +1314,7 @@ template<typename T>
     * cur_toks = NULL;
     *cur_arcs_=NULL;
     *prev_arcs_=lat_arcs_sub_vec_prev_;
+    nvtxRangePop();
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     num_frames_decoded_++;
