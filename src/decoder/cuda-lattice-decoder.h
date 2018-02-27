@@ -195,7 +195,7 @@ struct CudaLatticeDecoderConfig {
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 
       && max_tokens_per_frame > 0 && max_tokens>0 && lattice_beam > 0.0
-                 && prune_interval > 0 && prune_interval==prune_buffer_interval);
+                 && prune_interval > 0 && prune_interval>=prune_buffer_interval && prune_interval%prune_buffer_interval==0);
   }
 };
 

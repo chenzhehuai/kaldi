@@ -1383,7 +1383,7 @@ template<typename T>
   }
   void CudaLatticeDecoder::PostProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
       CudaVectorBuffer<LatLink>** cur_arcs_buf) {
-    bool to_prune = ((num_frames_decoded_)%prune_buffer_interval_==0);
+    bool to_prune = ((num_frames_decoded_-1)%prune_buffer_interval_==0);
     if (to_prune) {
       cur_toks_buf_.clear();
       cur_arcs_buf_.clear();
@@ -1395,7 +1395,10 @@ template<typename T>
     nvtxRangePushA("PreProcessLattices");
     //1 frame before prune_interval_
     bool to_prune = ((num_frames_decoded_)%prune_buffer_interval_==0);
+    nvtxRangePushA("waitInPreProcessLattices");
+    //cudaStreamWaitEvent(stream_copy,event_pt,0); //ensure logliklihoods_d is updated before consuming
     cudaStreamSynchronize(stream_comp); 
+    nvtxRangePop(); 
     cur_toks_buf_.pushback_data_to_host(cur_toks_, num_frames_decoded_, stream_copy);
     for (int i=0; i < sub_vec_num_; i++) {
       cur_arcs_buf_.pushback_data_to_host(lat_arcs_sub_vec_[i], num_frames_decoded_, stream_copy);

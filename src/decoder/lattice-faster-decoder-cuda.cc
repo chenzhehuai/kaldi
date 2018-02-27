@@ -107,25 +107,33 @@ LatticeFasterDecoderCuda::cuToken*  LatticeFasterDecoderCuda::get_cutok(int i, i
 }
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
   LatLinkVector*& cur_arcs_, bool last) {
-
   //call prune
-  if ((num_frames_decoded_) % config_.prune_interval == 0 || last) {
-    for (fr_; fr_<=num_frames_decoded_;fr_++) {
+  if ((num_frames_decoded_-1) % config_.prune_buffer_interval == 0 || last) {
+    int last_fr=last?num_frames_decoded_:num_frames_decoded_-1;
+    for (fr_; fr_<=last_fr;fr_++) {
       //add current
       active_toks_.resize(active_toks_.size() + 1);
+      nvtxRangePushA("addTokens_ProcessLattices"); //run next GPU kernel first
       for (int i=0;i<cur_toks_.size(fr_);i++) { //always add into active_toks_map_, the newer key will replace the older
         assert(get_cutok(i, fr_));
         CreateTokAndRegister(get_cost(i, fr_), active_toks_[fr_].toks);
         dbg(i, fr_);
         num_toks_++;
       }
+      nvtxRangePop();
       //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
       //TODO: change to preproc 0,0; proc t-1,t and t,t
       int num_arcs=0;
+      nvtxRangePushA("addArcs_ProcessLattices"); //run next GPU kernel first
       num_arcs+=AddLatticeArcs(cur_arcs_->size(fr_), (*cur_arcs_)[fr_]);
+      nvtxRangePop();
     }
-    PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
   }
+  nvtxRangePushA("PruneActiveTokens"); //run next GPU kernel first
+  if ((num_frames_decoded_-1) % config_.prune_interval == 0 || last) {
+    if (!last) PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
+  }
+  nvtxRangePop();
 }
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
@@ -155,13 +163,15 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     decoder_.PreProcessTokens();
     decoder_.ProcessTokens();
     double t1_2 = timer.Elapsed();
-    decoder_.PreProcessLattices(&cur_toks_, &cur_arcs_);
     double t2 = timer.Elapsed();
-    nvtxRangePushA("ProcessLattices");
-    ProcessLattices(*cur_toks_,  cur_arcs_, last);
-    nvtxRangePop(); 
-    double t3 = timer.Elapsed();
+    ProcessLattices(*cur_toks_,  cur_arcs_, 0);
     decoder_.PostProcessLattices(&cur_toks_, &cur_arcs_);
+    decoder_.PreProcessLattices(&cur_toks_, &cur_arcs_);
+    if (last) {
+      ProcessLattices(*cur_toks_,  cur_arcs_, last);
+      decoder_.PostProcessLattices(&cur_toks_, &cur_arcs_);
+    }
+    double t3 = timer.Elapsed();
     decoder_.PostProcessTokens();
     if (decodable->IsLastFrame(num_frames_decoded_ )) break;
     //computes log likelihoods for the next frame
