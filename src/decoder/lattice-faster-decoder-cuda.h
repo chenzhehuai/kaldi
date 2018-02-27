@@ -42,9 +42,9 @@ class LatticeFasterDecoderCuda {
   typedef Arc::StateId StateId;
   typedef Arc::Weight Weight;
   typedef CudaLatticeDecoder::Token cuToken;
-  typedef CudaLatticeDecoder::TokenVector cuTokenVector;
+  typedef CudaVectorBuffer<CudaLatticeDecoder::TokenState> cuTokenVector;
   typedef CudaLatticeDecoder::LatLink LatLink;
-  typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
+  typedef CudaVectorBuffer<LatLink> LatLinkVector;
   // instantiate this class once for each thing you have to decode.
   LatticeFasterDecoderCuda(const CudaFst &fst,
                        const CudaLatticeDecoderConfig &config);
@@ -177,7 +177,7 @@ class LatticeFasterDecoderCuda {
 
   typedef HashList<StateId, Token*>::Elem Elem;
   void ProcessLattices(cuTokenVector& cur_toks_,
-  cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_);
+  LatLinkVector*& cur_arcs_, bool last);
   void FinalizeDecoding();
 
 
@@ -195,10 +195,10 @@ class LatticeFasterDecoderCuda {
                          BaseFloat delta);
   double t_PruneForwardLinks;
   void CreateTokAndRegister(BaseFloat cost, Token *&toks);
-  void dbg(cuToken *i);
-  BaseFloat get_cost(int i);
-  cuToken* get_cutok(int i);
-  int AddLatticeArcs(cuTokenVector& cur_toks_, LatLinkVector*& cur_arcs_);
+  void dbg(int i, int fr);
+  BaseFloat get_cost(int i, int fr);
+  cuToken* get_cutok(int i, int fr);
+  int AddLatticeArcs(int size, LatLink* cur_arcs_);
 
   // This function computes the final-costs for tokens active on the final
   // frame.  It outputs to final-costs, if non-NULL, a map from the Token*
@@ -274,9 +274,8 @@ class LatticeFasterDecoderCuda {
   CudaLatticeDecoder decoder_;
   std::unordered_map<CudaLatticeDecoder::Token* , Token *> active_toks_map_;  
   int num_frames_decoded_;
-
+  int fr_; //the frame has been recorded in lattice
   cuTokenVector* cur_toks_;
-  cuTokenVector* prev_toks_;
   LatLinkVector* cur_arcs_;  
 
   // There are various cleanup tasks... the the toks_ structure contains

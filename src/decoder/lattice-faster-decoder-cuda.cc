@@ -59,6 +59,7 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   StateId start_state = fst_.Start();
   KALDI_ASSERT(start_state != fst::kNoStateId);
   num_frames_decoded_=0;
+  fr_=0;
   //change to init in ProcessLattices()
   //active_toks_.resize(1);
   //Token *start_tok = new Token(0.0, 0.0, NULL, NULL);
@@ -74,67 +75,57 @@ void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost,
     Token *new_tok = new Token (cost, 0, NULL, toks);
     toks = new_tok; //add into active_toks_;
 }
-void LatticeFasterDecoderCuda::dbg(cuToken *i) {
-    active_toks_map_[i] = active_toks_[num_frames_decoded_].toks;
+void LatticeFasterDecoderCuda::dbg(int i, int fr) {
+    cuToken *tok=get_cutok(i, fr);
+    active_toks_map_[tok] = active_toks_[fr].toks;
 }
-int LatticeFasterDecoderCuda::AddLatticeArcs(cuTokenVector& cur_toks_,
-      LatLinkVector*& cur_arcs_) {
+int LatticeFasterDecoderCuda::AddLatticeArcs(int size,
+      LatLink* cur_arcs_) {
   //proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
   //copy lat_arcs_sub_vec_ to lat_arcs_vec_
   const CudaFst& cu_fst = decoder_.fst_;
   int num_arcs=0;
-  for (int i = 0; i < config_.sub_vec_num; i++) {
-    for ( int j = 0; j < cur_arcs_[i].size(); j++) {
-      LatLink& arc_d_h = cur_arcs_[i][j];
-      assert(arc_d_h.arc_id<cu_fst.arc_count);
-      BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
-      int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
-      int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
-      Token* next_tok=active_toks_map_.at(arc_d_h.next_tok);
-      Token* prev_tok=active_toks_map_.at(arc_d_h.prev_tok);
-      prev_tok->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
-                                        arc_d_h.acoustic_cost, prev_tok->links);
-      num_arcs++;
-    }
+  for ( int j = 0; j < size; j++) {
+    LatLink& arc_d_h = cur_arcs_[j];
+    assert(arc_d_h.arc_id<cu_fst.arc_count);
+    BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
+    int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
+    int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
+    Token* next_tok=active_toks_map_.at(arc_d_h.next_tok);
+    Token* prev_tok=active_toks_map_.at(arc_d_h.prev_tok);
+    prev_tok->links = new ForwardLink(next_tok, ilabel, olabel, graph_cost, 
+                                      arc_d_h.acoustic_cost, prev_tok->links);
+    num_arcs++;
   }
   return num_arcs;
 }
-BaseFloat LatticeFasterDecoderCuda::get_cost(int i) {
-  return (*cur_toks_)[i].token->cost_;
+BaseFloat LatticeFasterDecoderCuda::get_cost(int i, int fr) {
+  return get_cutok(i, fr)->cost_;
 }
-LatticeFasterDecoderCuda::cuToken*  LatticeFasterDecoderCuda::get_cutok(int i) {
-  return (*cur_toks_)[i].token;
+LatticeFasterDecoderCuda::cuToken*  LatticeFasterDecoderCuda::get_cutok(int i, int fr) {
+  return (*cur_toks_)[fr][i].token;
 }
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks_,
-  cuTokenVector& prev_toks_, LatLinkVector*& cur_arcs_) {
-  //KALDI_ASSERT(num_frames_decoded_);
-  //active_toks_map_.clear();
+  LatLinkVector*& cur_arcs_, bool last) {
 
-//  if (num_frames_decoded_==1) {//add prev
-//    active_toks_.resize(1);
-//    for (int i=0;i<prev_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
-//      assert(prev_toks_[i].token);
-//      CreateTokAndRegister(*prev_toks_[i].token, active_toks_[num_frames_decoded_-1].toks);
-//      num_toks_++;
-//    }    
-//  }
-  //add current
-  active_toks_.resize(active_toks_.size() + 1);
-  for (int i=0;i<cur_toks_.size();i++) { //always add into active_toks_map_, the newer key will replace the older
-    assert(get_cutok(i));
-    CreateTokAndRegister(get_cost(i), active_toks_[num_frames_decoded_].toks);
-    dbg(get_cutok(i));
-    num_toks_++;
-  }
-  //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
-  //TODO: change to preproc 0,0; proc t-1,t and t,t
-  int num_arcs=0, num_arcs2=0;
-  num_arcs+=AddLatticeArcs(prev_toks_, cur_arcs_);
-  for (int i=0; i<config_.sub_vec_num; i++)  num_arcs2+=cur_arcs_[i].size();
-  assert(num_arcs==num_arcs2);
   //call prune
-  if (NumFramesDecoded() % config_.prune_interval == 0)
+  if ((num_frames_decoded_) % config_.prune_interval == 0 || last) {
+    for (fr_; fr_<=num_frames_decoded_;fr_++) {
+      //add current
+      active_toks_.resize(active_toks_.size() + 1);
+      for (int i=0;i<cur_toks_.size(fr_);i++) { //always add into active_toks_map_, the newer key will replace the older
+        assert(get_cutok(i, fr_));
+        CreateTokAndRegister(get_cost(i, fr_), active_toks_[fr_].toks);
+        dbg(i, fr_);
+        num_toks_++;
+      }
+      //ERR: proc t-1,t-1; t-1,t; leave t,t and t,t+1 in the next call
+      //TODO: change to preproc 0,0; proc t-1,t and t,t
+      int num_arcs=0;
+      num_arcs+=AddLatticeArcs(cur_arcs_->size(fr_), (*cur_arcs_)[fr_]);
+    }
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
+  }
 }
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
@@ -149,8 +140,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
   InitDecoding();
   decoder_.InitDecoding();
-  decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
-  ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
+  decoder_.PreProcessLattices(&cur_toks_, &cur_arcs_);
+  ProcessLattices(*cur_toks_,  cur_arcs_, 0);
 
   decoder_.ComputeLogLikelihoods(decodable);
   num_frames_decoded_++;
@@ -158,17 +149,18 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   double pre_time = timer.Elapsed();
 
   double cpu_proc_time=0, gpu_proc_time=0;
-  while( !decodable->IsLastFrame(NumFramesDecoded() - 1)) {
+  while( !num_frames_decoded_ - 1) {
+    bool last=decodable->IsLastFrame(num_frames_decoded_ );
     double t1 = timer.Elapsed();
     decoder_.PreProcessTokens();
     decoder_.ProcessTokens();
-    decoder_.PreProcessLattices(&cur_toks_, &prev_toks_, &cur_arcs_);
+    decoder_.PreProcessLattices(&cur_toks_, &cur_arcs_);
     double t2 = timer.Elapsed();
-    ProcessLattices(*cur_toks_, *prev_toks_, cur_arcs_);
+    ProcessLattices(*cur_toks_,  cur_arcs_, last);
     double t3 = timer.Elapsed();
-    //active_toks_.resize(active_toks_.size()+1);
+    decoder_.PostProcessLattices(&cur_toks_, &cur_arcs_);
     decoder_.PostProcessTokens();
-    if (decodable->IsLastFrame(NumFramesDecoded() - 1)) break;
+    if (decodable->IsLastFrame(num_frames_decoded_ )) break;
     //computes log likelihoods for the next frame
     decoder_.ComputeLogLikelihoods(decodable);
     num_frames_decoded_++;
@@ -566,10 +558,10 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
   BaseFloat best_cost = infinity, best_cost_with_final = infinity;
 
   cuTokenVector& cur_toks=*this->cur_toks_;
-  for (int i=0;i<cur_toks.size();i++) {
-    cuToken* tok_d_h = cur_toks[i].token;
+  for (int i=0;i<cur_toks.size(num_frames_decoded_);i++) {
+    cuToken* tok_d_h = cur_toks[num_frames_decoded_][i].token;
     assert(active_toks_map_.count(tok_d_h));
-    StateId state = cur_toks[i].state;
+    StateId state = cur_toks[num_frames_decoded_][i].state;
     Token* tok = active_toks_map_.at(tok_d_h);
 
     BaseFloat final_cost = fst_.Final(state);

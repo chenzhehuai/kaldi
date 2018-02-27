@@ -124,19 +124,19 @@ class CudaVector {
 template<typename T>
 class CudaVectorBuffer {
     public:
-      T& operator[](uint32_t idx); 
+      T* operator[](int idx); 
       inline void allocate(uint32_t max_size, uint32_t max_frame);
-      inline uint32_t size(uint32_t frame) const; 
+      inline uint32_t size(int frame) const; 
       inline void free();
       inline void clear();
-      inline void clear(uint32_t frame);
+      inline void clear(int frame);
       inline void pushback_data_to_host(CudaVector<T> &iv, 
           int frame, cudaStream_t stream=0);
       inline size_t getCudaMallocBytes(); 
     private:
       uint32_t *count_h;
-      uint32_t max_size_;
-      uint32_t max_frame_;
+      int max_size_;
+      int max_frame_;
       T* mem_h;
 };
 
@@ -195,7 +195,7 @@ struct CudaLatticeDecoderConfig {
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 
       && max_tokens_per_frame > 0 && max_tokens>0 && lattice_beam > 0.0
-                 && prune_interval > 0);
+                 && prune_interval > 0 && prune_interval==prune_buffer_interval);
   }
 };
 
@@ -377,8 +377,10 @@ typedef CudaVector<TokenState> TokenVector;
   void ClearArcVector();
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
-  void PreProcessLattices(TokenVector** cur_toks_,
-      TokenVector** prev_toks_, LatLinkVector** cur_arcs_);
+  void PostProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
+      CudaVectorBuffer<LatLink>** cur_arcs_buf);
+  void PreProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
+      CudaVectorBuffer<LatLink>** cur_arcs_buf);
   void PreProcessTokens();
 
   /// This will decode until there are no more frames ready in the decodable
@@ -444,13 +446,14 @@ typedef CudaVector<TokenState> TokenVector;
   
   int verbose;
   int prune_interval_;
+  int prune_buffer_interval_;
   int sub_vec_num_;
 
 
   LatLinkVector* lat_arcs_vec_;
   LatLinkVector* lat_arcs_sub_vec_;
-  CudaVectorBuffer<Token> cur_toks_buf_;
-  CudaVectorBuffer<LatLinkVector> cur_arcs_buf_;
+  CudaVectorBuffer<TokenState> cur_toks_buf_;
+  CudaVectorBuffer<LatLink> cur_arcs_buf_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

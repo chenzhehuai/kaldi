@@ -56,6 +56,11 @@ namespace kaldi {
   template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
   template HOST DEVICE uint32_t  CudaVector<TokenState>::size() const; 
   template HOST DEVICE uint32_t  CudaVector<LatLink>::size() const; 
+  
+  template TokenState* CudaVectorBuffer<TokenState>::operator[](int idx); 
+  template LatLink* CudaVectorBuffer<LatLink>::operator[](int idx); 
+  template uint32_t  CudaVectorBuffer<TokenState>::size(int frame) const; 
+  template uint32_t  CudaVectorBuffer<LatLink>::size(int frame) const; 
 
 DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
@@ -257,9 +262,8 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
   template<typename T>
-    inline const T& CudaVectorBuffer<T>::operator[](uint32_t idx) { 
-      assert(idx<max_frame_);
-      return mem_h[(idx%max_frame_)*max_size_];
+    inline T* CudaVectorBuffer<T>::operator[](int frame) { 
+      return mem_h+((frame-1)%max_frame_)*max_size_;
     } 
   template<typename T>
     inline void CudaVectorBuffer<T>::allocate(uint32_t max_size, uint32_t max_frame) {
@@ -270,9 +274,9 @@ template<typename T>
       clear();
     }
   template<typename T>
-    inline uint32_t CudaVectorBuffer<T>::size(uint32_t frame) const 
+    inline uint32_t CudaVectorBuffer<T>::size(int frame) const 
     {
-      return count_h[frame%max_frame_];
+      return count_h[(frame-1)%max_frame_];
     }
   template<typename T>
     inline void CudaVectorBuffer<T>::free() { 
@@ -281,24 +285,24 @@ template<typename T>
     }
   template<typename T> 
     inline void CudaVectorBuffer<T>::clear() { 
-      for (int i=0; i<max_frame; i++) count_h[i]=0;
+      for (int i=0; i<max_frame_; i++) count_h[i]=0;
     }
   template<typename T> 
-    inline void CudaVectorBuffer<T>::clear(uint32_t frame) { 
-      count_h[frame%max_frame_]=0;
+    inline void CudaVectorBuffer<T>::clear(int frame) { 
+      count_h[(frame-1)%max_frame_]=0;
     }
   template<typename T>
     inline void CudaVectorBuffer<T>::pushback_data_to_host(CudaVector<T> &iv, 
-          int frame, cudaStream_t stream=0) {
-      T* mem=mem_h+size(frame)+max_size*(frame%max_frame_);
+          int frame, cudaStream_t stream) {
+      T* mem=mem_h+size(frame)+max_size_*((frame-1)%max_frame_);
       uint32_t cp_count;
       assert(size(frame)+iv.size()<=max_size_);
       iv.copy_data_to_host(mem, &cp_count, stream);
-      count_h[frame%max_frame_]+=cp_count;
+      count_h[(frame-1)%max_frame_]+=cp_count;
     }
   template<typename T>
     inline size_t CudaVectorBuffer<T>::getCudaMallocBytes() {
-      return sizeof(uint32_t)*max_frame+max_frame*max_size*sizeof(T);
+      return sizeof(uint32_t)*max_frame_+max_frame_*max_size_*sizeof(T);
     }
 
   /***************************************CudaFst Implementation*****************************************/
@@ -624,6 +628,7 @@ template<typename T>
 
     verbose=config.verbose;
     prune_interval_=1; //config.prune_interval;
+    prune_buffer_interval_=config.prune_buffer_interval;
     sub_vec_num_=config.sub_vec_num;
 
     //lattice TODO: should use manage
@@ -1374,22 +1379,30 @@ template<typename T>
     cudaCheckError();
     nvtxRangePop();
   }
-
-  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
-      TokenVector** prev_toks, LatLinkVector** cur_arcs_) {
-    uint32_t frame=num_frames_decoded_%prune_interval_;
-    uint32_t frame_prev=(num_frames_decoded_-1)%prune_interval_;
-    //1 frame before prune
-    bool to_prune = ((num_frames_decoded_-1)%prune_interval_==0);
-    cudaStreamSynchronize(stream_comp); 
-    cur_toks_buf_.pushback_data_to_host(cur_toks_, num_frames_decoded_, stream_comp);
-    for (int i=0; i < sub_vec_num_; i++) {
-      cur_arcs_buf_.pushback_data_to_host(lat_arcs_sub_vec_[i], num_frames_decoded_, stream_comp);
+  void CudaLatticeDecoder::PostProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
+      CudaVectorBuffer<LatLink>** cur_arcs_buf) {
+    bool to_prune = ((num_frames_decoded_)%prune_buffer_interval_==0);
+    if (to_prune) {
+      cur_toks_buf_.clear();
+      cur_arcs_buf_.clear();
     }
-    cudaStreamSynchronize(stream_comp); //need to finish this as lat_arcs_sub_vec_ will be cleared (TODO: use 2 so that we dont need to finish this)
+  }
+
+  void CudaLatticeDecoder::PreProcessLattices(CudaVectorBuffer<TokenState>** cur_toks_buf,
+      CudaVectorBuffer<LatLink>** cur_arcs_buf) {
+    //1 frame before prune_interval_
+    bool to_prune = ((num_frames_decoded_)%prune_buffer_interval_==0);
+    cudaStreamSynchronize(stream_comp); 
+    cur_toks_buf_.pushback_data_to_host(cur_toks_, num_frames_decoded_, stream_copy);
+    for (int i=0; i < sub_vec_num_; i++) {
+      cur_arcs_buf_.pushback_data_to_host(lat_arcs_sub_vec_[i], num_frames_decoded_, stream_copy);
+    }
     //garrentee last frame is finished, but not the current frame
     if (to_prune) {
-      allocator.prefetch_allocated_to_host(stream_comp); //to access token in CPU
+      allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
+      cudaStreamSynchronize(stream_copy); //need to finish this as lat_arcs_sub_vec_ will be cleared (TODO: use 2 so that we dont need to finish this)
+      *cur_toks_buf=&cur_toks_buf_;
+      *cur_arcs_buf=&cur_arcs_buf_;
     }
   }
   void CudaLatticeDecoder::PreProcessTokens() {
