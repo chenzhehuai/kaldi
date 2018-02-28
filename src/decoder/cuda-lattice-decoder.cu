@@ -242,6 +242,18 @@ template<typename T>
 #endif
     }
   template<typename T> 
+    HOST DEVICE inline int get_idx_from_addr(T* addr) { 
+#ifdef __CUDA_ARCH__
+      int ret=addr-mem_d;
+      assert(ret<count_d&&ret>=0);
+      return ret;
+#else
+      int ret=addr-mem_h;
+      assert(ret<count_h&&ret>=0);
+      return ret;
+#endif
+    }
+  template<typename T> 
     inline bool CudaVector<T>::empty() const { return size()==0; }
   template<typename T> 
     inline void CudaVector<T>::swap(CudaVector<T> &v) {
@@ -423,8 +435,10 @@ template<typename T>
       token->cost_ = INFINITY;
       token->prev_ = NULL;
       token->frame= -1;
-      StateId state=cur_toks[i].state;
-      //cur_toks[i].token->arc_index_=-1; //clear it as they has been saved in CPU; btw, lat_arcs_sub_vec_ is clearred in PreProcessTokens
+      //a CPU copy of cur_toks can still be used, cur_toks will be clear in PreProcessTokens 
+      //lat_arcs_sub_vec_ is clearred in PreProcessTokens
+      StateId state=cur_toks[i].state;  
+      //cur_toks[i].token->arc_index_=-1; // clear here will result in page fault in prefetch
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
@@ -543,18 +557,15 @@ template<typename T>
     total_threads = prop.maxThreadsPerMultiProcessor * prop.multiProcessorCount * config.gpu_fraction;
 
     allocator.initialize(config.max_tokens);
-
     bytes_cudaMallocManaged+=allocator.getCudaMallocManagedBytes();
-    cur_toks_.allocate(config.max_tokens_per_frame);
-    prev_toks_.allocate(config.max_tokens_per_frame);
-    bytes_cudaMalloc+=cur_toks_.getCudaMallocBytes()+prev_toks_.getCudaMallocBytes();
 
     cudaEventCreateWithFlags(&event_pt,cudaEventDisableTiming);
     cudaEventCreateWithFlags(&event_pt_old,cudaEventDisableTiming);
     cudaEventCreateWithFlags(&event_ll,cudaEventDisableTiming);
 
     cudaStreamCreateWithFlags(&stream_comp, cudaStreamNonBlocking);
-    cudaStreamCreateWithFlags(&stream_copy, cudaStreamNonBlocking);
+    for (int i; i<LAT_BUF_SIZE; i++) 
+      cudaStreamCreateWithFlags(&stream_copy[i], cudaStreamNonBlocking);    
     cudaStreamCreateWithPriority(&stream_ll, cudaStreamNonBlocking, -1);
 
     cudaMalloc(&pe_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
@@ -586,21 +597,21 @@ template<typename T>
     sub_vec_num_=config.sub_vec_num;
 
     //lattice TODO: should use manage
-    cudaMallocHost((void**)&lat_arcs_vec_,sizeof(LatLinkVector)*(prune_interval_)); 
-    cudaMallocManaged((void**)&lat_arcs_sub_vec_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
-    cudaMallocManaged((void**)&lat_arcs_sub_vec_prev_ ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
-    for (int i=0; i < prune_interval_; i++) {
-      lat_arcs_vec_[i].allocate(config.max_lat_arc_per_frame);
-      bytes_cudaMalloc += lat_arcs_vec_[i].getCudaMallocBytes();
+    
+    for (int j=0; j<LAT_BUF_SIZE; j++) {
+      cudaMallocManaged((void**)&lat_arcs_sub_vec_buf_[j] ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
+      for (int i=0; i < config.sub_vec_num; i++) {
+        lat_arcs_sub_vec_buf_[j][i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
+        bytes_cudaMalloc += lat_arcs_sub_vec_buf_[j][i].getCudaMallocBytes();
+      }  
+      toks_buf_[j].allocate(config.max_tokens_per_frame);
+      bytes_cudaMalloc+=toks_buf_[j].getCudaMallocBytes()
     }
-    for (int i=0; i < config.sub_vec_num; i++) {
-      lat_arcs_sub_vec_[i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
-      lat_arcs_sub_vec_prev_[i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
-      bytes_cudaMalloc += lat_arcs_sub_vec_[i].getCudaMallocBytes()*2;
-    }
-
+    num_frames_decoded_=0;
+    SetTokArcPointerByFrame(num_frames_decoded_);
+    
     cudaStreamSynchronize(stream_comp);
-    cudaStreamSynchronize(stream_copy);
+    cudaStreamSynchronize(stream_copy[0]);
     cudaStreamSynchronize(cudaStreamPerThread);
     //sgemm requires shared memory and we don't want cache config changing.  So set a device wide cache config.
     cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
@@ -610,19 +621,15 @@ template<typename T>
 
     printf("CUDA LatticeDecoder DESTRUCTOR\n");
 
-    cur_toks_.free();
-    prev_toks_.free();
-    for (int i=0; i < prune_interval_; i++) {
-      lat_arcs_vec_[i].free();
+    for (int j=0; j<LAT_BUF_SIZE; j++) {
+      toks_buf_[j].free();
+      for (int i=0; i < sub_vec_num_; i++) {
+        lat_arcs_sub_vec_buf_[j][i].free();
+      }
+      cudaFree(lat_arcs_sub_vec_buf_[j]);
     }
-    for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].free();
-      lat_arcs_sub_vec_prev_[i].free();
-    }
-    //free(lat_arcs_vec_);
-    cudaFreeHost(lat_arcs_vec_);
-    cudaFree(lat_arcs_sub_vec_);
-    cudaFree(lat_arcs_sub_vec_prev_);
+    
+    
     allocator.finalize();
 
     cudaFreeHost(loglikelihoods_h);
@@ -645,13 +652,14 @@ template<typename T>
     cudaEventDestroy(event_ll);
 
     cudaStreamDestroy(stream_comp);
-    cudaStreamDestroy(stream_copy);
+    for (int i; i<LAT_BUF_SIZE; i++) 
+      cudaStreamDestroy(stream_copy);
     cudaStreamDestroy(stream_ll);
 
   }
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, uint32_t j, bool add_arc, bool emit, int32_t subid) {
+    TokenState* ts, uint32_t j, bool add_arc, int32_t subid, TokenState** next_ts) {
     //TokenLookupElem lookup_elem;
     //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
@@ -659,19 +667,26 @@ template<typename T>
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      lookup_elem.tokenstate_idx =params.cur_toks.push_back(TokenState(cur_tok,nextstate));
+      lookup_elem.tokenstate_idx =params.cur_toks.push_back(TokenState(cur_tok,nextstate,total_cost));
     }
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
+    *next_ts=params.cur_toks[lookup_elem.tokenstate_idx];
     if (add_arc) {
       Token *prev_tok = ts->token;  
-      LatLink arc=LatLink(prev_tok, cur_tok, j, acoustic_cost); //duplicate arcs in NE
+      int ts_id=prev_tok->frame==params.frame?
+      params.cur_toks.get_idx_from_addr(prev_tok):
+      params.prev_toks.get_idx_from_addr(prev_tok);
+      LatLink arc=LatLink(ts_id, prev_tok->frame, 
+        lookup_elem.tokenstate_idx, params.frame,
+        j, acoustic_cost); //duplicate arcs in NE
       int32_t lat_arc_idx=params.lat_arcs_sub_vec[subid].push_back(arc);
     }
     return cur_tok;  
   }
   __global__ void addOneToken(processTokens_params params, StateId state) {
+    TokenState *next_ts=NULL;
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL, -1, false, false, 0);
+      0, NULL, -1, false, 0, &next_ts);
     Token tok(0, NULL);
     *cur_tok = tok;
     cur_tok->frame=params.frame;
@@ -681,8 +696,9 @@ template<typename T>
   __global__ void initializeCutoff(CostType *cutoff) {
     *cutoff = INFINITY;
   }
-  void CudaLatticeDecoder::ClearArcVector() {
-    std::swap(lat_arcs_sub_vec_prev_, lat_arcs_sub_vec_);
+  void CudaLatticeDecoder::ClearArcVector(LatLinkVector* lat_arcs_sub_vec_) {
+    //TODO
+    //std::swap(lat_arcs_sub_vec_prev_, lat_arcs_sub_vec_); //change to be done in PreProcessTokens
     for (int i=0; i < sub_vec_num_; i++) {
       lat_arcs_sub_vec_[i].clear(stream_comp);  
     }
@@ -691,13 +707,12 @@ template<typename T>
     printf("CUDA LatticeDecoder InitDecoding\n");
     num_frames_decoded_ = 0;
   // clean up from last time:
-    ClearToks(cur_toks_);
-    ClearToks(prev_toks_);
-    for (int i=0; i < prune_interval_; i++) {
-      lat_arcs_vec_[i].clear(stream_comp);
-    }
-    ClearArcVector();    
-    ClearArcVector();    
+    for (int i=0; i<LAT_BUF_SIZE; i++) {
+      ClearToks(toks_buf_[i]);
+      ClearArcVector(lat_arcs_sub_vec_buf_[i]);
+    }    
+    SetTokArcPointerByFrame(num_frames_decoded_);
+
     allocator.reset();
     int threads=64;
     int blocks=DIV_ROUND_UP(total_threads,threads);
@@ -718,9 +733,6 @@ template<typename T>
     initParams(params);
     addOneToken<<<1,1,0,stream_comp>>>(params, start_state);
 
-    //Token tok(StdWeight::One().Value(), NULL, 0);
-    //addOneToken2<<<1,1,0,stream_comp>>>(current_tokens_lookup_d, cur_toks_, tok, start_state, lat_toks_vec_);
-
     cudaCheckError();
 
     initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
@@ -731,8 +743,8 @@ template<typename T>
   }
 
   bool CudaLatticeDecoder::ReachedFinal() const {
-    for (int i=0;i<cur_toks_.size();i++) {
-      TokenState ts = cur_toks_[i];
+    for (int i=0;i<cur_toks_->size();i++) {
+      TokenState ts = (*cur_toks_)[i];
 
       if (ts.token->cost_ != std::numeric_limits<BaseFloat>::infinity() &&
           fst_.Final(ts.state) != StdWeight::Zero())
@@ -746,7 +758,7 @@ template<typename T>
     // as a special case, if there are no active tokens at all (e.g. some kind of
     // pruning failure), return infinity.
     CostType infinity = std::numeric_limits<CostType>::infinity();
-    if (cur_toks_.empty())
+    if ((*cur_toks_).empty())
       return infinity;
     CostType best_cost = infinity,
              best_cost_with_final = infinity;
@@ -754,8 +766,8 @@ template<typename T>
 
     //for each active token
     //compute minimum cost
-    for (int i=0;i<cur_toks_.size();i++) {
-      TokenState ts = cur_toks_[i];
+    for (int i=0;i<(*cur_toks_).size();i++) {
+      TokenState ts = (*cur_toks_)[i];
       StateId state = ts.state;
       CostType cost = ts.token->cost_;
 
@@ -782,79 +794,8 @@ template<typename T>
   // through the lattice.
   bool CudaLatticeDecoder::GetBestPath(Lattice *fst_out, bool use_final_probs) const {
     nvtxRangePushA("GetBestPath");
-
+    assert(0);
     return true;
-/*
-    fst_out->DeleteStates();
-    Token *best_tok = NULL;
-    bool is_final = ReachedFinal();
-    
-    if (!is_final) {
-      for(int i=0;i<cur_toks_.size();i++) {
-        TokenState ts = cur_toks_[i];
-        Token *tok = ts.token;
-        if(best_tok==NULL || *best_tok < *tok) {
-          best_tok = tok;
-        }
-      }
-    } else {
-      CostType infinity =std::numeric_limits<CostType>::infinity(),
-               best_cost = infinity;
-      for(int i=0;i<cur_toks_.size();i++) {
-        TokenState ts = cur_toks_[i];
-        Token  *tok = ts.token;
-        StateId state = ts.state;
-        CostType this_cost = tok->cost_ + fst_.Final(state);
-        if (this_cost != infinity && this_cost < best_cost) {
-          best_cost = this_cost;
-          best_tok = tok;
-        }
-      }
-    }
-
-    if (best_tok == NULL) {
-      nvtxRangePop();
-      return false;  // No output.
-    }
-
-    int count=0;
-
-    //for each token in reverse order
-    //add arc to list
-    std::vector<LatticeArc> arcs_reverse;  // arcs in reverse order.
-    for (Token *tok = best_tok; tok != NULL; tok = tok->prev_) {
-      count++;
-      Token &t=*tok;
-
-      uint32_t arc_idx=t.arc_index_;
-
-      LatticeArc arc(fst_.arc_ilabels_h[arc_idx], fst_.arc_olabels_h[arc_idx], LatticeWeight(fst_.arc_weights_h[arc_idx], 0), fst_.arc_nextstates_h[arc_idx]);
-
-      arcs_reverse.push_back(arc);
-    }
-    KALDI_ASSERT(arcs_reverse.back().nextstate == fst_.Start());
-    arcs_reverse.pop_back();  // that was a "fake" token... gives no info.
-
-    //for each arc in reverse
-    //generate new fst
-    StateId cur_state = fst_out->AddState();
-    fst_out->SetStart(cur_state);
-    for (ssize_t i = static_cast<ssize_t>(arcs_reverse.size())-1; i >= 0; i--) {
-      LatticeArc arc = arcs_reverse[i];
-      arc.nextstate = fst_out->AddState();
-      fst_out->AddArc(cur_state, arc);
-      cur_state = arc.nextstate;
-    }
-    if (is_final && use_final_probs)
-      fst_out->SetFinal(cur_state,
-          LatticeWeight(fst_.Final(fst_.arc_nextstates_h[best_tok->arc_index_]),
-            0.0));
-    else
-      fst_out->SetFinal(cur_state, LatticeWeight::One());
-    fst::RemoveEpsLocal(fst_out);
-    nvtxRangePop();
-    return true;
-    */
   }
 
   inline DEVICE void atomicMin(double *address, double val) {
@@ -1014,8 +955,9 @@ template<typename T>
         if(total_cost<=cutoff) 
         {
           Token next_tok =  Token(acoustic_cost+weight, tok);
+          TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, true, i%params.sub_vec_num);
+            acoustic_cost, &ts, j, true, i%params.sub_vec_num, &next_ts);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1029,7 +971,7 @@ template<typename T>
                 //  *cur_tok=next_tok;
                 cur_tok->cost_=next_tok.cost_;
                 cur_tok->frame=params.frame;
-
+                next_ts->cost_=cur_tok->cost_;
               }
               release_semaphore((int*)&params.token_locks[nextstate]);
               break;                                                                                              //exit loop as our update is done
@@ -1075,8 +1017,9 @@ template<typename T>
 
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
+          TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, false, i%params.sub_vec_num);
+            0, &ts, j, true, i%params.sub_vec_num, &next_ts);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1089,8 +1032,8 @@ template<typename T>
                 //  *cur_tok=next_tok;
                 cur_tok->cost_=next_tok.cost_;
                 cur_tok->frame=params.frame;
-
-              (*modified) = true;                                                                            //mark as updated
+                next_ts->cost_=cur_tok->cost_;
+                (*modified) = true;                                                                            //mark as updated
               }
             release_semaphore((int*)&params.token_locks[nextstate]);
               break;  //exit loop as our update is done
@@ -1208,7 +1151,7 @@ template<typename T>
   
     if(rank0) {
       //prepare for next iteration
-      params.prev_toks.clear();
+      //params.prev_toks.clear(); //change to be done in PreProcessTokens
       *params.cutoff = INFINITY;
       *params.fb_idx=0;  
       *params.pe_idx=0;
@@ -1233,11 +1176,11 @@ template<typename T>
   }
 
   void CudaLatticeDecoder::initParams(processTokens_params& params) {
-    params.prev_toks=prev_toks_;
+    params.prev_toks=(*prev_toks_);
     params.allocator=allocator;
     params.cutoff=cutoff_d;
     params.loglikelihoods=loglikelihoods_d;
-    params.cur_toks=cur_toks_;
+    params.cur_toks=(*cur_toks_);
     params.e_offsets=fst_.e_offsets_d;
     params.ne_offsets=fst_.ne_offsets_d;
     params.arc_ilabels=fst_.arc_ilabels_d;
@@ -1254,14 +1197,11 @@ template<typename T>
     params.verbose=verbose;
     params.frame=num_frames_decoded_;
     params.prune_interval = prune_interval_;
-    params.lat_arcs_vec = lat_arcs_vec_;
     params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
     params.sub_vec_num=sub_vec_num_;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
-    // Processes nonemitting arcs for one frame.  Propagates within
-    // cur_toks_.
 
     dim3 threads(32,1);
 
@@ -1282,38 +1222,36 @@ template<typename T>
     cudaCheckError();
     nvtxRangePop();
   }
-
-  void CudaLatticeDecoder::PostProcessLattices(TokenVector** cur_toks,
-      TokenVector** prev_toks, LatLinkVector** cur_arcs_,
-      LatLinkVector** prev_arcs_, bool islast) {
-    nvtxRangePushA("PostProcessLattices"); 
-    cudaStreamSynchronize(stream_comp);
-    //allocator.prefetch_allocated_to_host(stream_copy); //to access token in CPU
-    //cudaStreamSynchronize(stream_copy); // make sure it prefetch all of the last frame, to test whether next frame still need to fetch: if so, it shows that i) prev_tok still be modi. or ii) if any of the range mod, need to re-fetch
-    cur_toks_.copy_data_to_host(stream_copy);
-    * prev_toks = &prev_toks_;
-    * cur_toks = &cur_toks_;
-    for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].copy_data_to_host(stream_copy);  
-    }   
-    *cur_arcs_=lat_arcs_sub_vec_;
-    *prev_arcs_=lat_arcs_sub_vec_prev_;
-    if (islast) 
-      cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
-    nvtxRangePop();
+  void CudaLatticeDecoder::SetTokArcPointerByFrame(int frame) {
+    cur_toks_=toks_buf_[frame%3];
+    prev_toks_=toks_buf_[(frame-1)%3];
+    lat_arcs_sub_vec_=lat_arcs_sub_vec_buf_[frame%3];
+    lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%3];    
   }
-
-  void CudaLatticeDecoder::PreProcessLattices(TokenVector** cur_toks,
-      TokenVector** prev_toks, LatLinkVector** cur_arcs_,
-      LatLinkVector** prev_arcs_, bool islast) {
-    nvtxRangePushA("PreProcessLattices"); 
+  void CudaLatticeDecoder::PostProcessLattices(bool islast) {
+    nvtxRangePushA("PostProcessLattices"); 
+    //if (islast) 
+      //cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
     cudaStreamSynchronize(stream_comp);
-    allocator.prefetch_allocated_to_host(stream_copy); //debug
-    cudaStreamSynchronize(stream_copy);
-    * prev_toks = &prev_toks_;
-    * cur_toks = NULL;
-    *cur_arcs_=NULL;
-    *prev_arcs_=lat_arcs_sub_vec_prev_;
+    nvtxRangePop();
+  }  
+  void CudaLatticeDecoder::PreProcessLattices(TokenVector** pprev_toks, 
+    LatLinkVector** pprev_arcs_, bool islast, int* lat_frame, int dec_frame) {
+    nvtxRangePushA("PreProcessLattices_and_Wait"); 
+    int prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
+    int pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
+    *lat_frame=dec_frame-2; //for CPU
+
+    //stream_copy[prev_idx]
+    (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
+    for (int i=0; i < sub_vec_num_; i++) {
+      lat_arcs_sub_vec_buf_[prev_idx][i].copy_data_to_host(stream_copy[prev_idx]);  
+    }   
+
+    //stream_copy[pprev_idx]
+    cudaStreamSynchronize(stream_copy[pprev_idx]);
+    *pprev_toks = prev_toks_;
+    *pprev_arcs_=lat_arcs_sub_vec_buf_[pprev_idx];
     nvtxRangePop();
   }
   void CudaLatticeDecoder::PreProcessTokens() {
@@ -1323,13 +1261,14 @@ template<typename T>
     allocator.prefetch_next_to_device(cudaStreamPerThread);
 #endif
     //TODO prefetch here
-    
-    cur_toks_.swap(prev_toks_);
+    SetTokArcPointerByFrame(num_frames_decoded_);
+
+    //(*cur_toks_).swap((*prev_toks_));
    
     {
+      ClearToks(*cur_toks)
       //uint32_t frame=num_frames_decoded_%prune_interval_;
-      //lat_arcs_vec_[frame].clear();
-      ClearArcVector();
+      ClearArcVector(lat_arcs_sub_vec_);
     }
   }
   void CudaLatticeDecoder::ProcessTokens() {

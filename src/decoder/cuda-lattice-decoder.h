@@ -43,6 +43,9 @@ namespace kaldi {
 /** 
  * Simple Cuda Decoder
  */
+
+#define LAT_BUF_SIZE 3
+
 class CudaLatticeDecoder;
 
 class CudaFst {
@@ -103,6 +106,7 @@ class CudaVector {
       HOST DEVICE uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
       HOST DEVICE inline void clear(cudaStream_t stream=0); 
+      HOST DEVICE inline int get_idx_from_addr(T* addr); 
       inline bool empty() const;
       inline void swap(CudaVector<T> &v); 
       inline void copy_all_to_host(cudaStream_t stream=0);
@@ -222,26 +226,31 @@ struct TokenState {
   
   Token* token; //arc and labels
   StateId state;  //to state
-  volatile int arc_lock;
+  CostType cost_; //for CPU to copy lattice without prefetch allocator
   //int32_t lat_tok_idx;   //-1: havent init 
-  HOST DEVICE inline TokenState (Token *token, StateId state)
-    : token(token), state(state), arc_lock(0) { }
-  HOST DEVICE inline TokenState () : token(NULL), arc_lock(0) {};
+  HOST DEVICE inline TokenState (Token *token, StateId state, CostType cost)
+    : token(token), state(state), cost_(cost) { }
 };
 
 typedef CudaVector<TokenState> TokenVector;
 
   class  LatLink {  //300000*50*24=240MB __align__(16)
    public:
-    Token* prev_tok; 
-    Token* next_tok;  
+    //*_fr can be combined into 1 single para
+    int prev_tok_id; 
+    int prev_tok_fr;
+    int next_tok_id; 
+    int next_tok_fr; 
     int32_t arc_id;    //if <0, it's pruned, FST arcid to get Ilabel and Olabel
     // graph cost of traversing link (contains LM, etc.)
     //CostType graph_cost; //can be obtained from arc_id
     CostType acoustic_cost; // acoustic cost (pre-scaled) of traversing link
 
-     HOST DEVICE inline LatLink(Token* iprev_tok, Token* inext_tok, int32_t iarc_id, 
-      CostType iacoustic_cost): prev_tok(iprev_tok), next_tok(inext_tok),
+     HOST DEVICE inline LatLink(int iprev_tok_id, int iprev_tok_fr,     
+      int inext_tok_id, int inext_tok_fr, 
+      int32_t iarc_id, CostType iacoustic_cost):
+      prev_tok_id(iprev_tok_id), prev_tok_fr(iprev_tok_fr), 
+      next_tok_id(inext_tok_id), next_tok_fr(inext_tok_fr),
       arc_id(iarc_id),  acoustic_cost(iacoustic_cost) { }
 
   };
@@ -351,15 +360,12 @@ typedef CudaVector<TokenState> TokenVector;
   /// to call this.  You can call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance. 
   void InitDecoding(); 
-  void ClearArcVector();
+  void ClearArcVector(LatLinkVector* lat_arcs_sub_vec_);
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
-  void PostProcessLattices(TokenVector** cur_toks_,
-      TokenVector** prev_toks_, LatLinkVector** cur_arcs_,
-      LatLinkVector** prev_arcs_, bool islast);
-  void PreProcessLattices(TokenVector** cur_toks_,
-      TokenVector** prev_toks_, LatLinkVector** cur_arcs_,
-      LatLinkVector** prev_arcs_, bool islast);
+  void PostProcessLattices(bool islast);
+  void PreProcessLattices(TokenVector** pprev_toks, 
+    LatLinkVector** pprev_arcs_, bool islast, int* proc_frame, int dec_frame:);
   void PreProcessTokens();
 
   /// Returns the number of frames already decoded.  
@@ -379,6 +385,7 @@ typedef CudaVector<TokenState> TokenVector;
   void ProcessNonemitting();
   void ProcessTokens();
   void PostProcessTokens(); 
+  void SetTokArcPointerByFrame(int frame);
 
  
   //token lookup table.  Provides constant time lookup for active tokens.
@@ -386,8 +393,9 @@ typedef CudaVector<TokenState> TokenVector;
   TokenLookupElem *current_tokens_lookup_d;
 
   //Lists of active tokens to be iterated through
-  TokenVector cur_toks_;
-  TokenVector prev_toks_;
+  TokenVector* cur_toks_;
+  TokenVector* prev_toks_;
+  TokenVector toks_buf_[LAT_BUF_SIZE];
 
 
 
@@ -407,7 +415,7 @@ typedef CudaVector<TokenState> TokenVector;
   void ClearToks(TokenVector &toks);
 
   cudaEvent_t event_pt, event_pt_old, event_ll;
-  cudaStream_t stream_comp, stream_copy, stream_ll;
+  cudaStream_t stream_comp, stream_copy[LAT_BUF_SIZE], stream_ll;
 
   uint32_t total_threads;
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
@@ -421,9 +429,9 @@ typedef CudaVector<TokenState> TokenVector;
   int sub_vec_num_;
 
 
-  LatLinkVector* lat_arcs_vec_;
   LatLinkVector* lat_arcs_sub_vec_;
   LatLinkVector* lat_arcs_sub_vec_prev_;
+  LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
 
 
 

@@ -193,12 +193,9 @@ class LatticeFasterDecoderCuda {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
-  double t_PruneForwardLinks;
-  void CreateTokAndRegister(BaseFloat cost, Token *&toks);
-  void dbg(cuToken *i);
-  BaseFloat get_cost(int i);
-  cuToken* get_cutok(int i);
-  int AddLatticeArcs(cuTokenVector& cur_toks_, LatLinkVector*& cur_arcs_);
+  void CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok);
+  int AddLatticeArcs(LatLinkVector*& cur_arcs, int proc_frame);
+
 
   // This function computes the final-costs for tokens active on the final
   // frame.  It outputs to final-costs, if non-NULL, a map from the Token*
@@ -272,13 +269,16 @@ class LatticeFasterDecoderCuda {
   const CudaLatticeDecoderConfig &config_;
   int32 num_toks_; // current total #toks allocated...
   CudaLatticeDecoder decoder_;
-  std::unordered_map<CudaLatticeDecoder::Token* , Token *> active_toks_map_;  
   int num_frames_decoded_;
 
   cuTokenVector* cur_toks_;
   cuTokenVector* prev_toks_;
+  cuTokenVector* pprev_toks_;
   LatLinkVector* cur_arcs_;  
   LatLinkVector* prev_arcs_;  
+  LatLinkVector* pprev_arcs_;  
+  std::vector<Token*> active_tok_frames_;
+  std::vector<ForwardLink*> active_arc_frames_;
 
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.
