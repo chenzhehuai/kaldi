@@ -76,6 +76,7 @@ void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost,
 }
 LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int frame, int id) const {
   assert(frame<active_tok_frames_.size());  //frame 0 has idx 0
+  assert(id<active_tok_size_frames_[frame]);
   Token* tok=active_tok_frames_[frame]+id;
   assert(tok);
   return tok;
@@ -87,6 +88,7 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector*& cur_arcs, int proc_
     for ( int j = 0; j < cur_arcs[i].size(); j++) num_arcs++;
   ForwardLink* newarcs=(ForwardLink*)calloc(num_arcs, sizeof(ForwardLink));
   active_arc_frames_.push_back(newarcs);
+  active_arc_size_frames_.push_back(num_arcs);
   assert(proc_frame==active_arc_frames_.size()-1);
   for (int i = 0; i < config_.sub_vec_num; i++) {
     for ( int j = 0; j < cur_arcs[i].size(); j++) {
@@ -122,6 +124,7 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks,
   assert(proc_frame<active_toks_.size());
   Token* newtoks=(Token*)calloc(cur_toks.size(), sizeof(Token));
   active_tok_frames_.push_back(newtoks);
+  active_tok_size_frames_.push_back(cur_toks.size());
   assert(proc_frame==active_tok_frames_.size()-1); //frame 0 has idx 0
   for (int i=0;i<cur_toks.size();i++) { //always add into active_toks_map_, the newer key will replace the older
     CreateTokAndRegister(cur_toks[i].cost_, active_toks_[proc_frame].toks, newtoks+i);
@@ -356,7 +359,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
           ForwardLink *next_link = link->next;
           if (prev_link != NULL) prev_link->next = next_link;
           else tok->links = next_link;
-          delete link;
+          //delete link;
           link = next_link;  // advance link but leave prev_link the same.
           *links_pruned = true;
         } else {   // keep the link and update the tok_extra_cost if needed.
@@ -443,7 +446,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinksFinal() {
           ForwardLink *next_link = link->next;
           if (prev_link != NULL) prev_link->next = next_link;
           else tok->links = next_link;
-          delete link;
+          //delete link;
           link = next_link; // advance link but leave prev_link the same.
         } else { // keep the link and update the tok_extra_cost if needed.
           if (link_extra_cost < 0.0) { // this is just a precaution.
@@ -503,7 +506,7 @@ void LatticeFasterDecoderCuda::PruneTokensForFrame(int32 frame_plus_one) {
       // excise tok from list and delete tok.
       if (prev_tok != NULL) prev_tok->next = tok->next;
       else toks = tok->next;
-      delete tok;
+      //delete tok;
       num_toks_--;
     } else {  // fetch next Token
       prev_tok = tok;
@@ -607,6 +610,12 @@ void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at ut
   //    tok = next_tok;
   //  }
   //}
+  for (auto i:active_tok_frames_) free(i);
+  for (auto i:active_arc_frames_) free(i);
+  active_tok_size_frames_.clear();
+  active_arc_size_frames_.clear();
+  active_tok_frames_.clear();
+  active_arc_frames_.clear();
   num_toks_=0;
   active_toks_.clear();
   KALDI_ASSERT(num_toks_ == 0);

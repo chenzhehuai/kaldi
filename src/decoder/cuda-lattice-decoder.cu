@@ -564,7 +564,7 @@ template<typename T>
     cudaEventCreateWithFlags(&event_ll,cudaEventDisableTiming);
 
     cudaStreamCreateWithFlags(&stream_comp, cudaStreamNonBlocking);
-    for (int i; i<LAT_BUF_SIZE; i++) 
+    for (int i=0; i<LAT_BUF_SIZE; i++) 
       cudaStreamCreateWithFlags(&stream_copy[i], cudaStreamNonBlocking);    
     cudaStreamCreateWithPriority(&stream_ll, cudaStreamNonBlocking, -1);
 
@@ -652,7 +652,7 @@ template<typename T>
     cudaEventDestroy(event_ll);
 
     cudaStreamDestroy(stream_comp);
-    for (int i; i<LAT_BUF_SIZE; i++) 
+    for (int i=0; i<LAT_BUF_SIZE; i++) 
       cudaStreamDestroy(stream_copy[i]);
     cudaStreamDestroy(stream_ll);
 
@@ -1223,10 +1223,10 @@ template<typename T>
     nvtxRangePop();
   }
   void CudaLatticeDecoder::SetTokArcPointerByFrame(uint frame) {
-    cur_toks_=&toks_buf_[frame%3];
-    prev_toks_=&toks_buf_[(frame-1)%3];
-    lat_arcs_sub_vec_=lat_arcs_sub_vec_buf_[frame%3];
-    lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%3];    
+    cur_toks_=&toks_buf_[frame%LAT_BUF_SIZE];
+    prev_toks_=&toks_buf_[(frame-1)%LAT_BUF_SIZE];
+    lat_arcs_sub_vec_=lat_arcs_sub_vec_buf_[frame%LAT_BUF_SIZE];
+    lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%LAT_BUF_SIZE];    
   }
   void CudaLatticeDecoder::PostProcessLattices(bool islast) {
     nvtxRangePushA("PostProcessLattices"); 
