@@ -365,7 +365,7 @@ typedef CudaVector<TokenState> TokenVector;
   void PreFinalizeDecoding();
   void PostProcessLattices(bool islast);
   void PreProcessLattices(TokenVector** pprev_toks, 
-    LatLinkVector** pprev_arcs_, bool islast, int* proc_frame, int dec_frame:);
+    LatLinkVector** pprev_arcs_, bool islast, int* proc_frame, uint dec_frame);
   void PreProcessTokens();
 
   /// Returns the number of frames already decoded.  
@@ -385,7 +385,7 @@ typedef CudaVector<TokenState> TokenVector;
   void ProcessNonemitting();
   void ProcessTokens();
   void PostProcessTokens(); 
-  void SetTokArcPointerByFrame(int frame);
+  void SetTokArcPointerByFrame(uint frame);
 
  
   //token lookup table.  Provides constant time lookup for active tokens.
