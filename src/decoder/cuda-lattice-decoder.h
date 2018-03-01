@@ -143,7 +143,6 @@ public:
   T* arr_[MAX_SUB_VEC_SIZE];
   int vec_len_acc_[MAX_SUB_VEC_SIZE];
   uint32_t* vec_len_[MAX_SUB_VEC_SIZE];
-  int barrier_;
 };
 
 struct CudaLatticeDecoderConfig {

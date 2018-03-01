@@ -275,22 +275,20 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
 
-__global__ void copyArr_function(int **arr, int* vec_len_acc, uint32_t** vec_len, int *to, int psize, uint32_t* count_d, int* barrier) {
+__global__ void getCnt_function( int* vec_len_acc, uint32_t** vec_len, uint32_t* count_d, int sub_vec_num) {
+  int acc=0;
+  for (int i=0; i<sub_vec_num; i++) {
+    vec_len_acc[i]=acc;
+    acc+=*(vec_len[i]);
+  }
+  vec_len_acc[sub_vec_num]=acc;
+  *count_d=acc;
+}
+__global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psize) {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
-  int sub_vec_num=gridDim.x;
   int batch=blockDim.x;
   int i=blockIdx.x;
   int tid = threadIdx.x;
-  int acc=0;
-  if (rank0) {
-    for (int i=0; i<sub_vec_num; i++) {
-      vec_len_acc[i]=acc;
-      acc+=*(vec_len[i]);
-    }
-    vec_len_acc[sub_vec_num]=acc;
-    *count_d=acc;
-  }
-  __grid_sync_nv_internal(barrier);
   int sz = vec_len_acc[i+1]-vec_len_acc[i];
   for(; tid < sz; tid += batch) {
     memcpy(to+psize*(tid+vec_len_acc[i]),arr[i]+tid*psize,psize);
@@ -302,16 +300,17 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   int acc=0;
   int32_t device;
   cudaGetDevice(&device);
-  barrier_=0;
   for (int i=0; i<sub_vec_num; i++) {
     vec_len_[i]=in[i].count_d;
   }
-  for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
   cudaMemPrefetchAsync(vec_len_,sizeof(void*)*(sub_vec_num+1), device, st);
+  for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
   cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
+  //we have to do this first as copy_data_to_host need count_d
+  getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len_, count_d, sub_vec_num);
+  cudaStreamSynchronize(st);
   copyArr_function<<<sub_vec_num,min(1024,max_size/sub_vec_num),0,st>>>
-    ((int**)arr_,vec_len_acc_,vec_len_,(int*)mem_d,sizeof(T)/sizeof(int),count_d,
-     &barrier_);
+    ((char**)arr_,vec_len_acc_,(char*)mem_d,sizeof(T));
   this->copy_data_to_host(st);
 }
 
@@ -1308,12 +1307,13 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     *lat_frame=dec_frame-2; //for CPU
 
     //stream_copy[prev_idx]
-    (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
-    {
+    {//do this first because there is a sync inner to get count first
       LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx2];
       cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx]);
       cudaCheckError();
     }
+    (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
+
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     *pprev_toks = &toks_buf_[pprev_idx];
@@ -1321,6 +1321,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     nvtxRangePop();
   }
   void CudaLatticeDecoder::PreProcessTokens() {
+    nvtxRangePushA("PreProcessTokens"); 
     num_frames_decoded_++;
 #ifndef MEMADVISE
     //no need to prefetch if we have done a memadvise
@@ -1336,6 +1337,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
       //uint32_t frame=num_frames_decoded_%prune_interval_;
       ClearArcVector(lat_arcs_sub_vec_);
     }
+    nvtxRangePop();
   }
   void CudaLatticeDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
