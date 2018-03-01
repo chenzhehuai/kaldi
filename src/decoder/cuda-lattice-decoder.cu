@@ -224,6 +224,7 @@ template<typename T>
 #ifdef __CUDA_ARCH__
       return *count_d; 
 #else
+      assert(*count_h<max_size);
       return *count_h;
 #endif
     }
@@ -276,7 +277,10 @@ template<typename T>
 
 __global__ void copyArr_function(void **arr, int* vec_len_acc, uint32_t** vec_len, void *to, int psize, uint32_t* count_d, int* barrier) {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
-  int sub_vec_num=blockDim.x;
+  int sub_vec_num=gridDim.x;
+  int batch=blockDim.x;
+  int i=blockIdx.x;
+  int tid = threadIdx.x;
   int acc=0;
   if (rank0) {
     for (int i=0; i<sub_vec_num; i++) {
@@ -287,10 +291,8 @@ __global__ void copyArr_function(void **arr, int* vec_len_acc, uint32_t** vec_le
     *count_d=acc;
   }
   __grid_sync_nv_internal(barrier);
-  int i=blockIdx.x;
-  int tid = threadIdx.x;
   int sz = vec_len_acc[i+1]-vec_len_acc[i];
-  for(; tid < sz; tid += blockDim.x) {
+  for(; tid < sz; tid += batch) {
     memcpy(to+psize*(tid+vec_len_acc[i]),arr[i]+tid*psize,psize);
   }
 }
@@ -307,7 +309,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
   cudaMemPrefetchAsync(vec_len_,sizeof(void*)*(sub_vec_num+1), device, st);
   cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
-  copyArr_function<<<sub_vec_num,max_size/sub_vec_num,0,st>>>
+  copyArr_function<<<sub_vec_num,min(1024,max_size/sub_vec_num),0,st>>>
     ((void**)arr_,vec_len_acc_,vec_len_,(void*)mem_d,sizeof(T),count_d,
      &barrier_);
   this->copy_data_to_host(st);
@@ -683,9 +685,9 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
       if (j<LAT_BUF_SIZE-1) {
         arc_copy_buf_[j].free();
       }
-      cudaFree(arc_copy_buf_);
 
     }
+    cudaFree(arc_copy_buf_);
     
     
     allocator.finalize();
@@ -1310,11 +1312,12 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     {
       LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx2];
       cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx]);
+      cudaCheckError();
     }
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     *pprev_toks = &toks_buf_[pprev_idx];
-    *pprev_arcs_=&arc_copy_buf_[pprev_idx];
+    *pprev_arcs_=&arc_copy_buf_[pprev_idx2];
     nvtxRangePop();
   }
   void CudaLatticeDecoder::PreProcessTokens() {
