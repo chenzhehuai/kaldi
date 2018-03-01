@@ -150,7 +150,6 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.InitDecoding();
   decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, 0, &proc_lat_frame, num_frames_decoded_);
   decoder_.PostProcessLattices(0);
-
   decoder_.ComputeLogLikelihoods(decodable);
   num_frames_decoded_++;
   while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
