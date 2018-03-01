@@ -275,7 +275,7 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
 
-__global__ void copyArr_function(void **arr, int* vec_len_acc, uint32_t** vec_len, void *to, int psize, uint32_t* count_d, int* barrier) {
+__global__ void copyArr_function(int **arr, int* vec_len_acc, uint32_t** vec_len, int *to, int psize, uint32_t* count_d, int* barrier) {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   int sub_vec_num=gridDim.x;
   int batch=blockDim.x;
@@ -310,7 +310,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   cudaMemPrefetchAsync(vec_len_,sizeof(void*)*(sub_vec_num+1), device, st);
   cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
   copyArr_function<<<sub_vec_num,min(1024,max_size/sub_vec_num),0,st>>>
-    ((void**)arr_,vec_len_acc_,vec_len_,(void*)mem_d,sizeof(T),count_d,
+    ((int**)arr_,vec_len_acc_,vec_len_,(int*)mem_d,sizeof(T)/sizeof(int),count_d,
      &barrier_);
   this->copy_data_to_host(st);
 }
