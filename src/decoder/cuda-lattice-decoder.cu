@@ -667,9 +667,11 @@ template<typename T>
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      lookup_elem.tokenstate_idx =params.cur_toks.push_back(TokenState(cur_tok,nextstate,total_cost));
+      lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate,total_cost));
     }
+    //need both 2 steps below, to ensure tokenstate_idx won't run into error
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
+    __threadfence(); 
     *next_ts=&params.cur_toks[lookup_elem.tokenstate_idx];
     if (add_arc) {
       Token *prev_tok = ts->token;  
@@ -1250,7 +1252,7 @@ template<typename T>
 
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
-    *pprev_toks = prev_toks_;
+    *pprev_toks = &toks_buf_[pprev_idx];
     *pprev_arcs_=lat_arcs_sub_vec_buf_[pprev_idx];
     nvtxRangePop();
   }
