@@ -75,13 +75,13 @@ int main() {
   //int blocks=7;
   int *mutex=0;
   int *ret=0, ret_h=0;
-  int n =1e8;
-  int *v_man, *vv;
+  int n =1e5*4;
+  int *v_man, *vv, *v_man_f, *v_man_h;
   int32_t device;
   kaldi::Timer timer;
-  double t1,t2,t0,t3,t2_1,t0_1,t2_2,t4,t5;
 
   cudaGetDevice(&device);
+  /*
   cudaMallocManaged((void**)&v_man,sizeof(int)*n);  
   cudaMallocManaged((void**)&ret,sizeof(int)*n);  
   cudaMemset(v_man, 0,sizeof(int)*n);
@@ -92,7 +92,37 @@ int main() {
   cudaMallocManaged((void**)&vv,sizeof(int)*n);  
   cudaMemAdvise(vv,sizeof(int)*n,cudaMemAdviseSetPreferredLocation,device);
   cudaMemPrefetchAsync(vv,sizeof(int)*n,device);  //force pages to allocate now
+*/
 
+  int test=100;
+  cudaMalloc((void**)&v_man,sizeof(int)*n*test);  
+  cudaMalloc((void**)&v_man_f,sizeof(int)*n*test);  
+  cudaMallocHost((void**)&v_man_h,sizeof(int)*n*test);  
+  cudaCheckError();
+  cudaStream_t stream_comp;
+  cudaStreamCreateWithFlags(&stream_comp, cudaStreamNonBlocking);
+
+  timer.Reset();
+  for (int i=0; i<test;i++)
+    cudaMemcpyAsync(v_man_h+i*n,v_man_f+i*n,sizeof(int)*n,cudaMemcpyDeviceToHost, stream_comp);
+  cudaCheckError();
+  cudaStreamSynchronize(stream_comp);
+  double t1=timer.Elapsed();
+
+  timer.Reset();
+  for (int i=0; i<test;i++)
+    cudaMemcpyAsync(v_man+i*n,v_man_f+i*n,sizeof(int)*n,cudaMemcpyDeviceToDevice, stream_comp);
+  cudaStreamSynchronize(stream_comp);
+  double t2_1=timer.Elapsed();
+  cudaMemcpyAsync(v_man_h,v_man,sizeof(int)*n*test,cudaMemcpyDeviceToHost, stream_comp);
+  cudaCheckError();
+  cudaStreamSynchronize(stream_comp);
+  double t2_2=timer.Elapsed();
+
+  std::cout<<t1<<" "<<t2_1<< " "<<t2_2<<std::endl;
+  
+  return 0;
+#if 0
   callmyadd<<<100,320>>>(ret, v_man);
   cudaCheckError();
 
@@ -170,9 +200,9 @@ int main() {
   for (int i=0;i<n;i++)  v_man[i];
   t5=timer.Elapsed();
 
-
   std::cout << " nop "<<t0<< " re "<<t0_1<<" p "<<t1<<" mod "<<t2 <<" re "<<t2_1 <<" read "<<t2_2<<" pf "<<t3<<" other "<<t4<<" repf "<<t5<< " "<<ret[0] <<" "<<v_man[0]<<" "<<s0<<" "<<s<<std::endl;
-    
-  cudaFree(v_man);
-  cudaFree(vv);
+#endif
+
+  //cudaFree(v_man);
+  //cudaFree(vv);
 }

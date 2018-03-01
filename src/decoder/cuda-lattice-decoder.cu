@@ -207,6 +207,13 @@ template<typename T>
       cudaMemcpyAsync(mem_d,mem_h,*count_h*sizeof(T),cudaMemcpyHostToDevice, stream);
     }
 
+  template<typename T>
+    inline void CudaVector<T>::copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream) {
+      cudaMemcpyAsync(mem_d+*count_d*sizeof(T),mem_in_d,size*sizeof(T),cudaMemcpyDeviceToDevice, stream);
+      *count_d+=size;
+    }
+
+
 
   //Note:  This will cause page faults back and forth when we switch from host to device.
   template<typename T>
@@ -606,6 +613,10 @@ template<typename T>
       }  
       toks_buf_[j].allocate(config.max_tokens_per_frame);
       bytes_cudaMalloc+=toks_buf_[j].getCudaMallocBytes();
+      if (j<LAT_BUF_SIZE-1) {
+        arc_copy_buf_[j].allocate(config.max_lat_arc_per_frame);
+        bytes_cudaMalloc+=arc_copy_buf_[j].getCudaMallocBytes();
+      }
     }
     num_frames_decoded_=0;
     SetTokArcPointerByFrame(num_frames_decoded_);
@@ -627,6 +638,10 @@ template<typename T>
         lat_arcs_sub_vec_buf_[j][i].free();
       }
       cudaFree(lat_arcs_sub_vec_buf_[j]);
+      if (j<LAT_BUF_SIZE-1) {
+        arc_copy_buf_[j].free();
+      }
+
     }
     
     
@@ -1241,15 +1256,20 @@ template<typename T>
     LatLinkVector** pprev_arcs_, bool islast, int* lat_frame, uint dec_frame) {
     nvtxRangePushA("PreProcessLattices_and_Wait"); 
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
+    uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
     uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
+    uint pprev_idx2=(dec_frame-2)%(LAT_BUF_SIZE-1);
     *lat_frame=dec_frame-2; //for CPU
 
     //stream_copy[prev_idx]
     (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
-    for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_buf_[prev_idx][i].copy_data_to_host(stream_copy[prev_idx]);  
-    }   
-
+    {
+      LatLinkVector& cur_vec=arc_copy_buf_[prev_idx2];
+      for (int i=0; i < sub_vec_num_; i++) {
+        //TODO:
+        cur_vec.copy_data_to_device(lat_arcs_sub_vec_buf_[prev_idx][i].copy_data_to_host(stream_copy[prev_idx]);  
+      }   
+    }
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     *pprev_toks = &toks_buf_[pprev_idx];

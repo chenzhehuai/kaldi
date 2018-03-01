@@ -115,13 +115,14 @@ class CudaVector {
       inline void copy_size_to_device(cudaStream_t stream=0);
       inline void copy_data_to_host(cudaStream_t stream=0);
       inline void copy_data_to_device(cudaStream_t stream=0);
+      inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
 
       inline size_t getCudaMallocBytes(); 
-    private:
       
       uint32_t *count_d, *count_h;
       uint32_t max_size;
       T* mem_d, *mem_h;
+    private:
 };
 
 
@@ -397,8 +398,7 @@ typedef CudaVector<TokenState> TokenVector;
   TokenVector* cur_toks_;
   TokenVector* prev_toks_;
   TokenVector toks_buf_[LAT_BUF_SIZE];
-
-
+  
 
   const CudaFst fst_;
 
@@ -433,6 +433,7 @@ typedef CudaVector<TokenState> TokenVector;
   LatLinkVector* lat_arcs_sub_vec_;
   LatLinkVector* lat_arcs_sub_vec_prev_;
   LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
+  LatLinkVector arc_copy_buf_[LAT_BUF_SIZE-1];
 
 
 
