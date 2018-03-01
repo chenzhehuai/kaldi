@@ -119,21 +119,31 @@ class CudaVector {
 
       inline size_t getCudaMallocBytes(); 
       
+    public:
       uint32_t *count_d, *count_h;
       uint32_t max_size;
       T* mem_d, *mem_h;
-    private:
 };
 
 template<typename T>
-class CudaMergeVector:: public CudaVector<T> {
+class CudaMergeVector : public CudaVector<T> {
   #define MAX_SUB_VEC_SIZE 500
 public:
+  //HOST DEVICE T& operator[](uint32_t idx); 
+  //using CudaVector<T>::operator[];
+  //HOST DEVICE uint32_t size() const; 
+  //using CudaVector<T>::size;
+  using CudaVector<T>::count_d;
+  using CudaVector<T>::mem_d;
+  using CudaVector<T>::max_size;
+  
   inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st);
   
   //for arr merge to single; assume create using cudaMallocManaged
   T* arr_[MAX_SUB_VEC_SIZE];
   int vec_len_acc_[MAX_SUB_VEC_SIZE];
+  uint32_t* vec_len_[MAX_SUB_VEC_SIZE];
+  int barrier_;
 };
 
 struct CudaLatticeDecoderConfig {
@@ -378,7 +388,7 @@ typedef CudaVector<TokenState> TokenVector;
   void PreFinalizeDecoding();
   void PostProcessLattices(bool islast);
   void PreProcessLattices(TokenVector** pprev_toks, 
-    LatLinkVector** pprev_arcs_, bool islast, int* proc_frame, uint dec_frame);
+    LatLinkVectorMerge** pprev_arcs_, bool islast, int* proc_frame, uint dec_frame);
   void PreProcessTokens();
 
   /// Returns the number of frames already decoded.  
@@ -444,7 +454,7 @@ typedef CudaVector<TokenState> TokenVector;
   LatLinkVector* lat_arcs_sub_vec_;
   LatLinkVector* lat_arcs_sub_vec_prev_;
   LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
-  LatLinkVectorMerge arc_copy_buf_[LAT_BUF_SIZE-1];
+  LatLinkVectorMerge* arc_copy_buf_;
 
 
 

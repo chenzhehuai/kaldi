@@ -52,10 +52,12 @@ namespace kaldi {
   //template class CudaVector<LatToken>; 
   //template class CudaVector<LatLink>; 
   //http://en.cppreference.com/w/cpp/language/class_template
-  template HOST DEVICE LatLink& CudaMergeVector<LatLink>::operator[](uint32_t idx); 
+  template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
+  //template HOST DEVICE LatLink& CudaMergeVector<LatLink>::operator[](uint32_t idx); 
   template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
   template HOST DEVICE uint32_t  CudaVector<TokenState>::size() const; 
-  template HOST DEVICE uint32_t  CudaMergeVector<LatLink>::size() const; 
+  template HOST DEVICE uint32_t  CudaVector<LatLink>::size() const; 
+  //template HOST DEVICE uint32_t  CudaMergeVector<LatLink>::size() const; 
 
 DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
@@ -272,7 +274,19 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
 
-__global__ void copyArr_function(void **arr, int* vec_len_acc, void *to, int psize) {
+__global__ void copyArr_function(void **arr, int* vec_len_acc, uint32_t** vec_len, void *to, int psize, uint32_t* count_d, int* barrier) {
+  int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
+  int sub_vec_num=blockDim.x;
+  int acc=0;
+  if (rank0) {
+    for (int i=0; i<sub_vec_num; i++) {
+      vec_len_acc[i]=acc;
+      acc+=*(vec_len[i]);
+    }
+    vec_len_acc[sub_vec_num]=acc;
+    *count_d=acc;
+  }
+  __grid_sync_nv_internal(barrier);
   int i=blockIdx.x;
   int tid = threadIdx.x;
   int sz = vec_len_acc[i+1]-vec_len_acc[i];
@@ -281,22 +295,21 @@ __global__ void copyArr_function(void **arr, int* vec_len_acc, void *to, int psi
   }
 }
 template<typename T> 
-void CudaMergeVector::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
+void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
   //loading vec_len_acc, arr
   int acc=0;
   int32_t device;
   cudaGetDevice(&device);
-  for (int i=1; i<sub_vec_num; i++) {
-    vec_len_acc_[i]=acc;
-    acc+=*(in[i].count_d);
+  barrier_=0;
+  for (int i=0; i<sub_vec_num; i++) {
+    vec_len_[i]=in[i].count_d;
   }
-  *count_d=acc;
-  vec_len_acc_[sub_vec_num]=acc;
-  for (int i=1; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
-  cudaMemPrefetchAsync(vec_len_acc_,sizeof(void*)*(sub_vec_num+1), device, st);
+  for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
+  cudaMemPrefetchAsync(vec_len_,sizeof(void*)*(sub_vec_num+1), device, st);
   cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
   copyArr_function<<<sub_vec_num,max_size/sub_vec_num,0,st>>>
-    (arr_,vec_len_acc_,mem_d,sizeof(T));
+    ((void**)arr_,vec_len_acc_,vec_len_,(void*)mem_d,sizeof(T),count_d,
+     &barrier_);
   this->copy_data_to_host(st);
 }
 
@@ -633,6 +646,7 @@ void CudaMergeVector::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
 
     //lattice TODO: should use manage
     
+    cudaMallocManaged((void**)&arc_copy_buf_,sizeof(LatLinkVectorMerge)*(LAT_BUF_SIZE-1)); 
     for (int j=0; j<LAT_BUF_SIZE; j++) {
       cudaMallocManaged((void**)&lat_arcs_sub_vec_buf_[j] ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
       for (int i=0; i < config.sub_vec_num; i++) {
@@ -669,6 +683,7 @@ void CudaMergeVector::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
       if (j<LAT_BUF_SIZE-1) {
         arc_copy_buf_[j].free();
       }
+      cudaFree(arc_copy_buf_);
 
     }
     
@@ -1282,7 +1297,7 @@ void CudaMergeVector::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
   }
 
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** pprev_toks, 
-    CudaMergeVector** pprev_arcs_, bool islast, int* lat_frame, uint dec_frame) {
+    LatLinkVectorMerge** pprev_arcs_, bool islast, int* lat_frame, uint dec_frame) {
     nvtxRangePushA("PreProcessLattices_and_Wait"); 
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
     uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
@@ -1293,7 +1308,7 @@ void CudaMergeVector::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
     //stream_copy[prev_idx]
     (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
     {
-      CudaMergeVector& cur_vec=arc_copy_buf_[prev_idx2];
+      LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx2];
       cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx]);
     }
     //stream_copy[pprev_idx]

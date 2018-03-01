@@ -158,7 +158,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     decoder_.ProcessTokens();
     decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
       &proc_lat_frame, num_frames_decoded_);
-    ProcessLattices(*pprev_toks_, pprev_arcs_, proc_lat_frame);
+    ProcessLattices(*pprev_toks_, *pprev_arcs_, proc_lat_frame);
     decoder_.PostProcessLattices(last_frame);
     if (last_frame) {
       int copied_frame=num_frames_decoded_-1;  //has finished
@@ -166,7 +166,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
         copied_frame++;
         decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
           &proc_lat_frame, copied_frame+1);
-        ProcessLattices(*pprev_toks_, pprev_arcs_, proc_lat_frame);
+        ProcessLattices(*pprev_toks_, *pprev_arcs_, proc_lat_frame);
         decoder_.PostProcessLattices(last_frame);
       }
       assert(copied_frame==proc_lat_frame+1);
