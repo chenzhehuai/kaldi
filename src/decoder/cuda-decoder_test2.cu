@@ -76,7 +76,6 @@ int main() {
   int *mutex=0;
   int *ret=0, ret_h=0;
   int n =1e5*4;
-  int *v_man, *vv, *v_man_f, *v_man_h;
   int32_t device;
   kaldi::Timer timer;
 
@@ -95,23 +94,26 @@ int main() {
 */
 
   int test=100;
-  cudaMalloc((void**)&v_man,sizeof(int)*n*test);  
-  cudaMalloc((void**)&v_man_f,sizeof(int)*n*test);  
+  int *v_man, *vv, *v_man_f[100], *v_man_h;
+  for (int i=0; i<test;i++) {
+    cudaMalloc((void**)&v_man_f[i],sizeof(int)*n);  
+  }
   cudaMallocHost((void**)&v_man_h,sizeof(int)*n*test);  
+  cudaMalloc((void**)&v_man,sizeof(int)*n*test);  
   cudaCheckError();
   cudaStream_t stream_comp;
   cudaStreamCreateWithFlags(&stream_comp, cudaStreamNonBlocking);
 
   timer.Reset();
   for (int i=0; i<test;i++)
-    cudaMemcpyAsync(v_man_h+i*n,v_man_f+i*n,sizeof(int)*n,cudaMemcpyDeviceToHost, stream_comp);
+    cudaMemcpyAsync(v_man_h+i*n,v_man_f[i],sizeof(int)*n,cudaMemcpyDeviceToHost, stream_comp);
   cudaCheckError();
   cudaStreamSynchronize(stream_comp);
   double t1=timer.Elapsed();
 
   timer.Reset();
   for (int i=0; i<test;i++)
-    cudaMemcpyAsync(v_man+i*n,v_man_f+i*n,sizeof(int)*n,cudaMemcpyDeviceToDevice, stream_comp);
+    cudaMemcpyAsync(v_man+i*n,v_man_f[i],sizeof(int)*n,cudaMemcpyDeviceToDevice, stream_comp);
   cudaStreamSynchronize(stream_comp);
   double t2_1=timer.Elapsed();
   cudaMemcpyAsync(v_man_h,v_man,sizeof(int)*n*test,cudaMemcpyDeviceToHost, stream_comp);
