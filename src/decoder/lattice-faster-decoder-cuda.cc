@@ -157,11 +157,10 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     bool last_frame=decodable->IsLastFrame(num_frames_decoded_ - 0); //do twice process tok in the last frame
     decoder_.PreProcessTokens();
     decoder_.ProcessTokens();
-    /*decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
+    decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
       &proc_lat_frame, num_frames_decoded_);
     ProcessLattices(*pprev_toks_, pprev_arcs_, proc_lat_frame);
     decoder_.PostProcessLattices(last_frame);
-    */
     if (last_frame) {
       int copied_frame=num_frames_decoded_-1;  //has finished
       while (proc_lat_frame!=num_frames_decoded_) {
