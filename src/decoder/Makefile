@@ -20,11 +20,13 @@ ADDLIBS = ../lat/kaldi-lat.a ../hmm/kaldi-hmm.a \
           ../tree/kaldi-tree.a ../util/kaldi-util.a \
           ../matrix/kaldi-matrix.a ../base/kaldi-base.a
 
-cuda-decoder_test2.o: cuda-decoder_test2.cu
-	$(CUDATKDIR)/bin/nvcc -I../ -G -g -O3 -v -c $(CUDA_ARCH) cuda-decoder_test2.cu 
+#cuda-decoder_test2.o: cuda-decoder_test2.cu
+#	$(CUDATKDIR)/bin/nvcc -rdc=true  -I../ -G -g -O3 -v -c $(CUDA_ARCH) cuda-decoder_test2.cu -lcudadevrt
+cuda-decoder_test2: cuda-decoder_test2.cu
+	 $(CUDATKDIR)/bin/nvcc -G -g -O3 -arch=sm_70 -rdc=true cuda-decoder_test2.cu -I../ -o cuda-decoder_test2 -lcudadevrt  -lcudart
 
-cuda-decoder_test2:cuda-decoder_test2.o
-	g++ -g -O3 -o cuda-decoder_test2 $(CUDA_LDFLAGS)  $(CUDA_LDLIBS)  cuda-decoder_test2.o
+#cuda-decoder_test2:cuda-decoder_test2.o
+#	g++ -g  -O3 -o cuda-decoder_test2 $(CUDA_LDFLAGS)  $(CUDA_LDLIBS)  cuda-decoder_test2.o 
 
 
 cuda-decoder_test.o: cuda-decoder_test.cu
