@@ -18,6 +18,7 @@
 // limitations under the License.
 
 
+#include <nvToolsExt.h>
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
 #include "tree/context-dep.h"
@@ -122,6 +123,8 @@ int main(int argc, char *argv[]) {
         timer.Reset();
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
+
+  nvtxRangePushA("before_decoding");
           std::string utt = loglike_reader.Key();
           Matrix<BaseFloat> loglikes (loglike_reader.Value());
           loglike_reader.FreeCurrent();
@@ -132,6 +135,8 @@ int main(int argc, char *argv[]) {
           }
 
           DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+
+  nvtxRangePop();
 
           double like;
           if (DecodeUtteranceLatticeFasterCuda(
@@ -144,6 +149,7 @@ int main(int argc, char *argv[]) {
             num_success++;
           } else num_fail++;
         }
+
       }
       elapsed = timer.Elapsed();
       delete decode_fst; // delete this only after decoder goes out of scope.

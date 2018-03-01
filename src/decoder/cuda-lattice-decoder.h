@@ -158,6 +158,7 @@ struct CudaLatticeDecoderConfig {
     det_opts.Register(opts);
     opts->Register("cuda-verbose", &verbose, "debug log verbose.");
     opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
+    opts->Register("sub-vec-num", &sub_vec_num, "sub_vecs.");
     opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this LatticeDecoder.  "
                                                   "A single decoding cannot saturate the device.  "
                                                   "Use multiple LatticeDecoders in parallel for the best performance.");

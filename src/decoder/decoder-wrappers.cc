@@ -17,6 +17,7 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include <nvToolsExt.h>
 #include "base/timer.h"
 #include "decoder/decoder-wrappers.h"
 #include "decoder/faster-decoder.h"
@@ -227,6 +228,7 @@ bool DecodeUtteranceLatticeFasterCuda(
     }
   }
 
+  nvtxRangePushA("post_decoding");
   double likelihood;
   LatticeWeight weight;
   int32 num_frames;
@@ -294,6 +296,8 @@ bool DecodeUtteranceLatticeFasterCuda(
   KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
                 << weight.Value1() << " + " << weight.Value2();
   *like_ptr = likelihood;
+  nvtxRangePop();
+
   return true;
 }
 
