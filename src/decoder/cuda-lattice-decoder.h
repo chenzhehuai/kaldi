@@ -125,6 +125,16 @@ class CudaVector {
     private:
 };
 
+template<typename T>
+class CudaMergeVector:: public CudaVector<T> {
+  #define MAX_SUB_VEC_SIZE 500
+public:
+  inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st);
+  
+  //for arr merge to single; assume create using cudaMallocManaged
+  T* arr_[MAX_SUB_VEC_SIZE];
+  int vec_len_acc_[MAX_SUB_VEC_SIZE];
+};
 
 struct CudaLatticeDecoderConfig {
   BaseFloat beam;
@@ -262,6 +272,7 @@ typedef CudaVector<TokenState> TokenVector;
   #define GET_THDIDX(id) (id&((1<<5)-1)) //assume 32 threads
 
   typedef CudaVector<LatLink> LatLinkVector;
+  typedef CudaMergeVector<LatLink> LatLinkVectorMerge;
 
   //Preallocates tokens and allocates them in a circular buffer.
   //This allows threads to concurrently allocate/deallocate objects quickly in CUDA
@@ -433,7 +444,7 @@ typedef CudaVector<TokenState> TokenVector;
   LatLinkVector* lat_arcs_sub_vec_;
   LatLinkVector* lat_arcs_sub_vec_prev_;
   LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
-  LatLinkVector arc_copy_buf_[LAT_BUF_SIZE-1];
+  LatLinkVectorMerge arc_copy_buf_[LAT_BUF_SIZE-1];
 
 
 

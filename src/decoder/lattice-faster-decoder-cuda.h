@@ -44,7 +44,7 @@ class LatticeFasterDecoderCuda {
   typedef CudaLatticeDecoder::Token cuToken;
   typedef CudaLatticeDecoder::TokenVector cuTokenVector;
   typedef CudaLatticeDecoder::LatLink LatLink;
-  typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
+  typedef CudaLatticeDecoder::CudaMergeVector LatLinkVector;
   // instantiate this class once for each thing you have to decode.
   LatticeFasterDecoderCuda(const CudaFst &fst,
                        const CudaLatticeDecoderConfig &config);
@@ -177,7 +177,7 @@ class LatticeFasterDecoderCuda {
 
   typedef HashList<StateId, Token*>::Elem Elem;
   void ProcessLattices(cuTokenVector& cur_toks,
-  LatLinkVector*& cur_arcs, int proc_frame);
+  LatLinkVector& cur_arcs, int proc_frame);
   inline Token* ActiveToksMap(int frame, int id) const;
   void FinalizeDecoding();
 
@@ -195,7 +195,7 @@ class LatticeFasterDecoderCuda {
                          bool *links_pruned,
                          BaseFloat delta);
   void CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok);
-  int AddLatticeArcs(LatLinkVector*& cur_arcs, int proc_frame);
+  int AddLatticeArcs(LatLinkVector& cur_arcs, int proc_frame);
 
 
   // This function computes the final-costs for tokens active on the final

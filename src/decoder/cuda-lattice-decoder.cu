@@ -52,10 +52,10 @@ namespace kaldi {
   //template class CudaVector<LatToken>; 
   //template class CudaVector<LatLink>; 
   //http://en.cppreference.com/w/cpp/language/class_template
-  template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
+  template HOST DEVICE LatLink& CudaMergeVector<LatLink>::operator[](uint32_t idx); 
   template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
   template HOST DEVICE uint32_t  CudaVector<TokenState>::size() const; 
-  template HOST DEVICE uint32_t  CudaVector<LatLink>::size() const; 
+  template HOST DEVICE uint32_t  CudaMergeVector<LatLink>::size() const; 
 
 DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
@@ -271,6 +271,34 @@ template<typename T>
       std::swap(max_size,v.max_size);
     }
   /**************************************End CudaVector Implementation**********************************/
+
+__global__ void copyArr_function(void **arr, int* vec_len_acc, void *to, int psize) {
+  int i=blockIdx.x;
+  int tid = threadIdx.x;
+  int sz = vec_len_acc[i+1]-vec_len_acc[i];
+  for(; tid < sz; tid += blockDim.x) {
+    memcpy(to+psize*(tid+vec_len_acc[i]),arr[i]+tid*psize,psize);
+  }
+}
+template<typename T> 
+void CudaMergeVector::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
+  //loading vec_len_acc, arr
+  int acc=0;
+  int32_t device;
+  cudaGetDevice(&device);
+  for (int i=1; i<sub_vec_num; i++) {
+    vec_len_acc_[i]=acc;
+    acc+=*(in[i].count_d);
+  }
+  *count_d=acc;
+  vec_len_acc_[sub_vec_num]=acc;
+  for (int i=1; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
+  cudaMemPrefetchAsync(vec_len_acc_,sizeof(void*)*(sub_vec_num+1), device, st);
+  cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
+  copyArr_function<<<sub_vec_num,max_size/sub_vec_num,0,st>>>
+    (arr_,vec_len_acc_,mem_d,sizeof(T));
+  this->copy_data_to_host(st);
+}
 
   /***************************************CudaFst Implementation*****************************************/
   HOST DEVICE float CudaFst::Final(StateId state) const {
@@ -1251,9 +1279,10 @@ template<typename T>
       //cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
     cudaStreamSynchronize(stream_comp);
     nvtxRangePop();
-  }  
+  }
+
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** pprev_toks, 
-    LatLinkVector** pprev_arcs_, bool islast, int* lat_frame, uint dec_frame) {
+    CudaMergeVector** pprev_arcs_, bool islast, int* lat_frame, uint dec_frame) {
     nvtxRangePushA("PreProcessLattices_and_Wait"); 
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
     uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
@@ -1264,16 +1293,13 @@ template<typename T>
     //stream_copy[prev_idx]
     (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
     {
-      LatLinkVector& cur_vec=arc_copy_buf_[prev_idx2];
-      for (int i=0; i < sub_vec_num_; i++) {
-        //TODO:
-        cur_vec.copy_data_to_device(lat_arcs_sub_vec_buf_[prev_idx][i].copy_data_to_host(stream_copy[prev_idx]);  
-      }   
+      CudaMergeVector& cur_vec=arc_copy_buf_[prev_idx2];
+      cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx]);
     }
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     *pprev_toks = &toks_buf_[pprev_idx];
-    *pprev_arcs_=lat_arcs_sub_vec_buf_[pprev_idx];
+    *pprev_arcs_=&arc_copy_buf_[pprev_idx];
     nvtxRangePop();
   }
   void CudaLatticeDecoder::PreProcessTokens() {

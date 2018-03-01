@@ -81,42 +81,42 @@ LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int fra
   assert(tok);
   return tok;
 }
-int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector*& cur_arcs, int proc_frame) {
+int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector& cur_arcs, int proc_frame) {
   const CudaFst& cu_fst = decoder_.fst_;
   int num_arcs=0, num_arcs2=0;
-  for (int i = 0; i < config_.sub_vec_num; i++) 
-    for ( int j = 0; j < cur_arcs[i].size(); j++) num_arcs++;
+  
+  for ( int j = 0; j < cur_arcs.size(); j++) num_arcs++;
   ForwardLink* newarcs=(ForwardLink*)calloc(num_arcs, sizeof(ForwardLink));
   active_arc_frames_.push_back(newarcs);
   active_arc_size_frames_.push_back(num_arcs);
   assert(proc_frame==active_arc_frames_.size()-1);
-  for (int i = 0; i < config_.sub_vec_num; i++) {
-    for ( int j = 0; j < cur_arcs[i].size(); j++) {
-      LatLink& arc_d_h = cur_arcs[i][j];
-      assert(arc_d_h.arc_id<cu_fst.arc_count);
-      BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
-      int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
-      int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
-      Token* next_tok=ActiveToksMap(arc_d_h.next_tok_fr, arc_d_h.next_tok_id);
-      Token* prev_tok=ActiveToksMap(arc_d_h.prev_tok_fr, arc_d_h.prev_tok_id);
-      ForwardLink* newarc = newarcs+num_arcs2;
-      { 
-        newarc->next_tok=next_tok;
-        newarc->ilabel=ilabel;
-        newarc->olabel=olabel;
-        newarc->graph_cost=graph_cost;
-        newarc->acoustic_cost=arc_d_h.acoustic_cost;
-        newarc->next=prev_tok->links;
-      }
-      prev_tok->links = newarc;
-      num_arcs2++;
+  
+  for ( int j = 0; j < cur_arcs.size(); j++) {
+    LatLink& arc_d_h = cur_arcs[j];
+    assert(arc_d_h.arc_id<cu_fst.arc_count);
+    BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
+    int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
+    int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
+    Token* next_tok=ActiveToksMap(arc_d_h.next_tok_fr, arc_d_h.next_tok_id);
+    Token* prev_tok=ActiveToksMap(arc_d_h.prev_tok_fr, arc_d_h.prev_tok_id);
+    ForwardLink* newarc = newarcs+num_arcs2;
+    { 
+      newarc->next_tok=next_tok;
+      newarc->ilabel=ilabel;
+      newarc->olabel=olabel;
+      newarc->graph_cost=graph_cost;
+      newarc->acoustic_cost=arc_d_h.acoustic_cost;
+      newarc->next=prev_tok->links;
     }
+    prev_tok->links = newarc;
+    num_arcs2++;
   }
+  
   assert(num_arcs==num_arcs2);
   return num_arcs;
 }
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks,
-  LatLinkVector*& cur_arcs, int proc_frame) {
+  LatLinkVector& cur_arcs, int proc_frame) {
   //add current
   if (proc_frame<0) return;
   nvtxRangePushA("ProcessLattices");
