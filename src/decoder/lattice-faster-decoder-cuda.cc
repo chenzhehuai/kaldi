@@ -146,19 +146,22 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
   nvtxRangePushA("CudaLatticeDecoder::Decode::init_search");
   int proc_lat_frame;
-  InitDecoding();
-  decoder_.InitDecoding();
+  InitDecoding(); //CPU init
+  decoder_.InitDecoding(); //GPU init
+  //GPU transfers lattice to CPU
   decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, 0, &proc_lat_frame, num_frames_decoded_);
-  decoder_.PostProcessLattices(0);
-  decoder_.ComputeLogLikelihoods(decodable);
+  decoder_.PostProcessLattices(0); //CPU is always faster than GPU, so wait for GPU here
+  decoder_.ComputeLogLikelihoods(decodable); //get posteriors
   num_frames_decoded_++;
   while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     bool last_frame=decodable->IsLastFrame(num_frames_decoded_ - 0); //do twice process tok in the last frame
-    decoder_.PreProcessTokens();
-    decoder_.ProcessTokens();
+    decoder_.PreProcessTokens(); //clear Token&Arc vector for decoding&lattice
+    decoder_.ProcessTokens(); //GPU decoding&lattice generation
     decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
-      &proc_lat_frame, num_frames_decoded_);
+      &proc_lat_frame, num_frames_decoded_);  //GPU transfers lattice to CPU
+    //recording lattice in GPU, do pruning
     ProcessLattices(*pprev_toks_, *pprev_arcs_, proc_lat_frame);
+    //CPU is always faster than GPU, so wait for GPU here
     decoder_.PostProcessLattices(last_frame);
     if (last_frame) {
       int copied_frame=num_frames_decoded_-1;  //has finished
@@ -171,7 +174,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
       }
       assert(copied_frame==proc_lat_frame+1);
     }
-    decoder_.PostProcessTokens();
+    decoder_.PostProcessTokens();   //pre-allocate tokens to the map<state,token>
     if (last_frame) {
       KALDI_VLOG(7)<<"last frame: "<< NumFramesDecoded();
       break;
@@ -184,7 +187,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   nvtxRangePop();
   nvtxRangePushA("CudaLatticeDecoder::Decode::final");
   decoder_.PreFinalizeDecoding();
-  FinalizeDecoding();
+  FinalizeDecoding();   //final lattice pruning
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
   nvtxRangePop();
