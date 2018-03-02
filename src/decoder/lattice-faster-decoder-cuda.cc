@@ -155,7 +155,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   num_frames_decoded_++;
   while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     bool last_frame=decodable->IsLastFrame(num_frames_decoded_ - 0); //do twice process tok in the last frame
-    decoder_.PreProcessTokens(); //clear Token&Arc vector for decoding&lattice
+    decoder_.PreProcessTokens(); //clear Token&Arc vector for decoding&lattice //we can hide this func in ComputeLogLikelihoods, however, it's too fast so we might dont need to do so
     decoder_.ProcessTokens(); //GPU decoding&lattice generation
     decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
       &proc_lat_frame, num_frames_decoded_);  //GPU transfers lattice to CPU
