@@ -149,6 +149,21 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
     } 
 
   template<typename T>
+    inline void CudaVector<T>::allocate(uint32_t max_size, 
+        uint32_t* icount_h, uint32_t* icount_d) {
+      this->max_size=max_size;
+
+      count_h=icount_h;
+      count_d=icount_d;
+      cudaMemset(count_d, 0,sizeof(uint32_t));
+      *count_h=0;
+
+      cudaMalloc(&mem_d,max_size*sizeof(T));
+      cudaMallocHost(&mem_h,max_size*sizeof(T));
+    }
+
+
+  template<typename T>
     inline void CudaVector<T>::allocate(uint32_t max_size) {
       this->max_size=max_size;
 
@@ -167,10 +182,13 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
     }
 
   template<typename T>
-    inline void CudaVector<T>::free() { 
+    inline void CudaVector<T>::free(bool create_outside) { 
       cudaFree(mem_d); 
       cudaFreeHost(mem_h);
-      cudaFreeHost(count_h);
+      if (!create_outside) {
+        cudaFreeHost(count_h);
+        cudaFree(count_d); 
+      }
     }
 
 
@@ -645,14 +663,20 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     prune_interval_=1; //config.prune_interval;
     sub_vec_num_=config.sub_vec_num;
 
-    //lattice TODO: should use manage
-    
+    //lattice: should use manage
     cudaMallocManaged((void**)&arc_copy_buf_,sizeof(LatLinkVectorMerge)*(LAT_BUF_SIZE-1)); 
     for (int j=0; j<LAT_BUF_SIZE; j++) {
+      cudaMallocHost((void**)&lat_arcs_sub_vec_buf_count_[j][0],sizeof(uint32_t)*(config.sub_vec_num)); 
+      //coount bytes_cudaMalloc in the loop below
+      cudaMalloc((void**)&lat_arcs_sub_vec_buf_count_[j][1],sizeof(uint32_t)*(config.sub_vec_num)); 
+
       cudaMallocManaged((void**)&lat_arcs_sub_vec_buf_[j] ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
       for (int i=0; i < config.sub_vec_num; i++) {
-        lat_arcs_sub_vec_buf_[j][i].allocate(config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num)); //because it isn't always average
-        bytes_cudaMalloc += lat_arcs_sub_vec_buf_[j][i].getCudaMallocBytes();
+        lat_arcs_sub_vec_buf_[j][i].allocate(
+            config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num), //because it isn't always average
+            lat_arcs_sub_vec_buf_count_[j][0]+i,
+            lat_arcs_sub_vec_buf_count_[j][1]+i); 
+        bytes_cudaMalloc += lat_arcs_sub_vec_buf_[j][i].getCudaMallocBytes(); 
       }  
       toks_buf_[j].allocate(config.max_tokens_per_frame);
       bytes_cudaMalloc+=toks_buf_[j].getCudaMallocBytes();
@@ -678,13 +702,14 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     for (int j=0; j<LAT_BUF_SIZE; j++) {
       toks_buf_[j].free();
       for (int i=0; i < sub_vec_num_; i++) {
-        lat_arcs_sub_vec_buf_[j][i].free();
+        lat_arcs_sub_vec_buf_[j][i].free(true);
       }
       cudaFree(lat_arcs_sub_vec_buf_[j]);
       if (j<LAT_BUF_SIZE-1) {
         arc_copy_buf_[j].free();
       }
-
+      cudaFreeHost(lat_arcs_sub_vec_buf_count_[j][0]);
+      cudaFree(lat_arcs_sub_vec_buf_count_[j][1]);
     }
     cudaFree(arc_copy_buf_);
     
@@ -758,11 +783,19 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     *cutoff = INFINITY;
   }
   void CudaLatticeDecoder::ClearArcVector(LatLinkVector* lat_arcs_sub_vec_) {
-    //TODO
     //std::swap(lat_arcs_sub_vec_prev_, lat_arcs_sub_vec_); //change to be done in PreProcessTokens
-    for (int i=0; i < sub_vec_num_; i++) {
-      lat_arcs_sub_vec_[i].clear(stream_comp);  
+    //replaced with faster imp
+    //for (int i=0; i < sub_vec_num_; i++) {
+    //  lat_arcs_sub_vec_[i].clear(stream_comp);  
+    //}
+    int i=0;
+    for (; i<LAT_BUF_SIZE; i++) {
+      if (lat_arcs_sub_vec_buf_[i]==lat_arcs_sub_vec_) break;
     }
+    assert(i<LAT_BUF_SIZE);
+    uint32_t** cur_count_buf=lat_arcs_sub_vec_buf_count_[i];
+    cudaMemsetAsync(cur_count_buf[0],0,sub_vec_num_*sizeof(uint32_t),stream_comp);
+    cudaMemsetAsync(cur_count_buf[1],0,sub_vec_num_*sizeof(uint32_t),stream_comp);
   }
   void CudaLatticeDecoder::InitDecoding() {
     printf("CUDA LatticeDecoder InitDecoding\n");

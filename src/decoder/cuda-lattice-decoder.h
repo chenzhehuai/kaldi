@@ -102,7 +102,9 @@ class CudaVector {
       HOST DEVICE T& operator[](uint32_t idx); 
       HOST DEVICE const T& operator[](uint32_t idx) const; 
       inline void allocate(uint32_t max_size);
-      inline void free();
+      inline void allocate(uint32_t max_size, 
+        uint32_t* icount_h, uint32_t* icount_d) ;
+      inline void free(bool create_outside=false);
       HOST DEVICE uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
       HOST DEVICE inline void clear(cudaStream_t stream=0); 
@@ -453,6 +455,7 @@ typedef CudaVector<TokenState> TokenVector;
   LatLinkVector* lat_arcs_sub_vec_;
   LatLinkVector* lat_arcs_sub_vec_prev_;
   LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
+  uint32_t* lat_arcs_sub_vec_buf_count_[LAT_BUF_SIZE][2]; //0 for CPU 1 for GPU
   LatLinkVectorMerge* arc_copy_buf_;
 
 
