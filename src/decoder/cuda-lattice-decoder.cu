@@ -1018,7 +1018,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
           Token next_tok =  Token(acoustic_cost+weight, tok);
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, i%params.sub_vec_num, &next_ts);
+            acoustic_cost, &ts, j, true, (i+j)%params.sub_vec_num, &next_ts);
           
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1080,7 +1080,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
         if (next_tok.cost_ <= cutoff) {
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, j, true, i%params.sub_vec_num, &next_ts);
+            0, &ts, j, true, (i+j)%params.sub_vec_num, &next_ts);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
