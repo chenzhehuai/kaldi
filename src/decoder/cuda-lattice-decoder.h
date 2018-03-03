@@ -129,7 +129,7 @@ class CudaVector {
 
 template<typename T>
 class CudaMergeVector : public CudaVector<T> {
-  #define MAX_SUB_VEC_SIZE 500
+  #define MAX_SUB_VEC_SIZE (2048+1)
 public:
   //HOST DEVICE T& operator[](uint32_t idx); 
   //using CudaVector<T>::operator[];
@@ -139,7 +139,7 @@ public:
   using CudaVector<T>::mem_d;
   using CudaVector<T>::max_size;
   
-  inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st);
+  inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads);
   
   //for arr merge to single; assume create using cudaMallocManaged
   T* arr_[MAX_SUB_VEC_SIZE];

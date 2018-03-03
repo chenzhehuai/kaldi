@@ -118,12 +118,13 @@ int main(int argc, char *argv[]) {
       CudaFst decode_fst_cuda;
       decode_fst_cuda.initialize(*decode_fst);
 
-      {
         LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
+      {
         timer.Reset();
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
 
+  nvtxRangePushA("whole decoding");
   nvtxRangePushA("before_decoding");
           std::string utt = loglike_reader.Key();
           Matrix<BaseFloat> loglikes (loglike_reader.Value());
@@ -149,6 +150,7 @@ int main(int argc, char *argv[]) {
             num_success++;
           } else num_fail++;
         }
+  nvtxRangePop();
 
       }
       elapsed = timer.Elapsed();

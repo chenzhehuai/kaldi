@@ -313,7 +313,7 @@ __global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psi
   }
 }
 template<typename T> 
-void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
+void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads) {
   //loading vec_len_acc, arr
   int acc=0;
   int32_t device;
@@ -324,11 +324,13 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   cudaMemPrefetchAsync(vec_len_,sizeof(void*)*(sub_vec_num+1), device, st);
   for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
   cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
+  cudaCheckError();
   //we have to do this first as copy_data_to_host need count_d
   getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len_, count_d, sub_vec_num);
   cudaStreamSynchronize(st);
-  copyArr_function<<<sub_vec_num,min(512,max_size/sub_vec_num),0,st>>>
+  copyArr_function<<<sub_vec_num,min(512,min(total_threads,max_size)/sub_vec_num),0,st>>>
     ((char**)arr_,vec_len_acc_,(char*)mem_d,sizeof(T));
+  cudaCheckError();
   this->copy_data_to_host(st);
 }
 
@@ -673,7 +675,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
       cudaMallocManaged((void**)&lat_arcs_sub_vec_buf_[j] ,sizeof(LatLinkVector)*(config.sub_vec_num)); 
       for (int i=0; i < config.sub_vec_num; i++) {
         lat_arcs_sub_vec_buf_[j][i].allocate(
-            config.max_lat_arc_per_frame*(1-1.0*i/config.sub_vec_num), //because it isn't always average
+            config.max_lat_arc_per_frame*(2.0/config.sub_vec_num), //because it isn't always average
             lat_arcs_sub_vec_buf_count_[j][0]+i,
             lat_arcs_sub_vec_buf_count_[j][1]+i); 
         bytes_cudaMalloc += lat_arcs_sub_vec_buf_[j][i].getCudaMallocBytes(); 
@@ -1342,7 +1344,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     //stream_copy[prev_idx]
     {//do this first because there is a sync inner to get count first
       LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx2];
-      cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx]);
+      cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx], total_threads);
       //cudaCheckError();
     }
     (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
