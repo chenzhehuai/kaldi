@@ -104,8 +104,8 @@ int main(int argc, char *argv[]) {
 #if 0
       //cuInit(0);
       cudaDeviceReset();
-      //cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
-      cudaSetDeviceFlags(cudaDeviceScheduleYield);
+      cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+      //cudaSetDeviceFlags(cudaDeviceScheduleYield);
       //cudaSetDeviceFlags(cudaDeviceScheduleSpin);
       uint flags;
       cudaGetDeviceFlags(&flags);

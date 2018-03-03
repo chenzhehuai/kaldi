@@ -242,7 +242,7 @@ template<typename T>
 #ifdef __CUDA_ARCH__
       return *count_d; 
 #else
-      assert(*count_h<max_size);
+      //assert(*count_h<max_size);
       return *count_h;
 #endif
     }
@@ -634,6 +634,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     total_threads = prop.maxThreadsPerMultiProcessor * prop.multiProcessorCount * config.gpu_fraction;
 
     allocator.initialize(config.max_tokens);
+    cudaCheckError();
     bytes_cudaMallocManaged+=allocator.getCudaMallocManagedBytes();
 
     cudaEventCreateWithFlags(&event_pt,cudaEventDisableTiming);
@@ -654,6 +655,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     cudaMemset(ne_idx_d,0,sizeof(int));
     cudaMemset(fb_idx_d,0,sizeof(int));
     cudaMemset(barrier_d,0,sizeof(int));
+    cudaCheckError();
 
     cudaMalloc(&cutoff_d, sizeof(CostType)); bytes_cudaMalloc+=sizeof(CostType);
     cudaMalloc(&modified_d, sizeof(int)*2); bytes_cudaMalloc+=sizeof(CostType)*2;
@@ -692,6 +694,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
       bytes_cudaMalloc+=toks_buf_[j].getCudaMallocBytes();
       arc_copy_buf_[j].allocate(config.max_lat_arc_per_frame);
       bytes_cudaMalloc+=arc_copy_buf_[j].getCudaMallocBytes();
+      cudaCheckError();
       arc_copy_buf_[j].reg(lat_arcs_sub_vec_buf_[j], config.sub_vec_num, stream_copy[0]);
     }
     num_frames_decoded_=0;
@@ -1354,6 +1357,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
       cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], 
           sub_vec_num_, stream_copy[prev_idx], total_threads,
           lat_arcs_sub_vec_buf_count_[prev_idx][1]);
+      cudaMemPrefetchAsync(&cur_vec,sizeof(LatLinkVectorMerge), cudaCpuDeviceId, stream_copy[prev_idx]);
       //cudaCheckError();
     }
     (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);

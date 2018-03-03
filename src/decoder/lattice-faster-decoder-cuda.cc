@@ -17,15 +17,42 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include <nvToolsExt.h>
 #include "base/timer.h"
 #include "cuda-lattice-decoder.h"
 #include "decoder/lattice-faster-decoder-cuda.h"
 #include "lat/lattice-functions.h"
 
+#define USE_NVTX
+#ifdef USE_NVTX
+#include "nvToolsExt.h"
+const uint32_t colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
+const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+#define PUSH_RANGE(name,cid) { \
+    int color_id = cid; \
+    color_id = color_id%num_colors;\
+    nvtxEventAttributes_t eventAttrib = {0}; \
+    eventAttrib.version = NVTX_VERSION; \
+    eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+    eventAttrib.colorType = NVTX_COLOR_ARGB; \
+    eventAttrib.color = colors[color_id]; \
+    eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+    eventAttrib.message.ascii = name; \
+    nvtxRangePushEx(&eventAttrib); \
+}
+#define POP_RANGE nvtxRangePop();
+#else
+#define PUSH_RANGE(name,cid)
+#define POP_RANGE
+#endif
+
 namespace kaldi {
 
-
+#define GET_FROM_BUF(ret,buf,offset,nsize,size) { \
+    assert((nsize)+(offset)<size); \
+    ret=(buf)+(offset); \
+    offset+=(nsize); \
+}
 
 // instantiate this class once for each thing you have to decode.
 LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
@@ -35,11 +62,15 @@ LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
   //toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
   //decoder_.InitDecoding();
   //InitDecoding();
+  toks_buf_=(Token*)malloc(sizeof(Token)*config_.max_tokens);
+  arcs_buf_=(ForwardLink*)malloc(sizeof(ForwardLink)*config_.max_arcs);
 }
 
 LatticeFasterDecoderCuda::~LatticeFasterDecoderCuda() {
   //DeleteElems(toks_.Clear());
   ClearActiveTokens();
+  if (toks_buf_) free(toks_buf_);
+  if (arcs_buf_) free(arcs_buf_);
   if (delete_fst_) delete &(fst_);
 }
 
@@ -71,27 +102,30 @@ void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost,
     {
       new_tok->tot_cost=cost;
       new_tok->next=toks;
+      new_tok->extra_cost=0;
+      new_tok->links=NULL;
     }
     toks = new_tok; //add into active_toks_;
 }
-LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int frame, int id) const {
+inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int frame, int id) const {
   assert(frame<active_tok_frames_.size());  //frame 0 has idx 0
   assert(id<active_tok_size_frames_[frame]);
   Token* tok=active_tok_frames_[frame]+id;
   assert(tok);
   return tok;
 }
-int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector& cur_arcs, int proc_frame) {
+inline int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector& cur_arcs, int proc_frame) {
   const CudaFst& cu_fst = decoder_.fst_;
   int num_arcs=0, num_arcs2=0;
-  
-  for ( int j = 0; j < cur_arcs.size(); j++) num_arcs++;
-  ForwardLink* newarcs=(ForwardLink*)calloc(num_arcs, sizeof(ForwardLink));
+  num_arcs=cur_arcs.size();
+  ForwardLink* newarcs;
+  GET_FROM_BUF(newarcs,arcs_buf_,arcs_buf_used_,num_arcs,config_.max_arcs);
   active_arc_frames_.push_back(newarcs);
   active_arc_size_frames_.push_back(num_arcs);
   assert(proc_frame==active_arc_frames_.size()-1);
   
-  for ( int j = 0; j < cur_arcs.size(); j++) {
+PUSH_RANGE("arc_mod",1)
+  for ( int j = 0; j < num_arcs; j++) {
     LatLink& arc_d_h = cur_arcs[j];
     assert(arc_d_h.arc_id<cu_fst.arc_count);
     BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
@@ -111,18 +145,22 @@ int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector& cur_arcs, int proc_f
     prev_tok->links = newarc;
     num_arcs2++;
   }
+POP_RANGE
   
   assert(num_arcs==num_arcs2);
   return num_arcs;
 }
+
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks,
   LatLinkVector& cur_arcs, int proc_frame) {
   //add current
   if (proc_frame<0) return;
-  nvtxRangePushA("ProcessLattices");
+PUSH_RANGE("ProcessLattices",3)
+PUSH_RANGE("tok",4)
   active_toks_.resize(active_toks_.size() + 1);
   assert(proc_frame<active_toks_.size());
-  Token* newtoks=(Token*)calloc(cur_toks.size(), sizeof(Token));
+  Token* newtoks;
+  GET_FROM_BUF(newtoks,toks_buf_,toks_buf_used_,cur_toks.size(),config_.max_tokens);
   active_tok_frames_.push_back(newtoks);
   active_tok_size_frames_.push_back(cur_toks.size());
   assert(proc_frame==active_tok_frames_.size()-1); //frame 0 has idx 0
@@ -131,12 +169,13 @@ void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks,
     num_toks_++;
   }
   KALDI_VLOG(7)<<NumFramesDecoded()<<" "<<cur_toks.size();
+POP_RANGE
   int num_arcs=0;
   num_arcs+=AddLatticeArcs(cur_arcs, proc_frame);
   //call prune
   if (NumFramesDecoded() % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
-  nvtxRangePop();
+POP_RANGE
 }
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
@@ -612,14 +651,21 @@ void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at ut
   //    tok = next_tok;
   //  }
   //}
-  for (auto i:active_tok_frames_) free(i);
-  for (auto i:active_arc_frames_) free(i);
+  //for (auto i:active_tok_frames_) free(i);
+  //for (auto i:active_arc_frames_) free(i);
   active_tok_size_frames_.clear();
+  active_tok_size_frames_.reserve(2000);
   active_arc_size_frames_.clear();
+  active_arc_size_frames_.reserve(2000);
   active_tok_frames_.clear();
+  active_tok_frames_.reserve(2000);
   active_arc_frames_.clear();
+  active_arc_frames_.reserve(2000);
   num_toks_=0;
   active_toks_.clear();
+  active_toks_.reserve(2000);
+  arcs_buf_used_=0;
+  toks_buf_used_=0;
   KALDI_ASSERT(num_toks_ == 0);
 }
 

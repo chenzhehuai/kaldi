@@ -279,6 +279,10 @@ class LatticeFasterDecoderCuda {
   std::vector<int> active_tok_size_frames_;
   std::vector<ForwardLink*> active_arc_frames_;
   std::vector<int> active_arc_size_frames_;
+  Token* toks_buf_; //as GPU is so fast, we have to need this
+  int toks_buf_used_;
+  ForwardLink* arcs_buf_; //as GPU is so fast, we have to need this
+  int arcs_buf_used_;
 
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.

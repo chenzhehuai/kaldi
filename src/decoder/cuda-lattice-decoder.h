@@ -39,7 +39,7 @@
 
 
 namespace kaldi {
-  
+
 /** 
  * Simple Cuda Decoder
  */
@@ -155,6 +155,7 @@ struct CudaLatticeDecoderConfig {
   uint32_t max_lat_tok_per_frame;
   uint32_t max_lat_arc_per_frame;
   uint32_t max_tokens;
+  uint32_t max_arcs;
   int32_t prune_interval;
   BaseFloat lattice_beam;
   bool determinize_lattice;
@@ -166,10 +167,11 @@ struct CudaLatticeDecoderConfig {
   
   CudaLatticeDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
-                       max_tokens_per_frame(900000),
+                       max_tokens_per_frame(100000),
                        max_lat_tok_per_frame(100000),
                        max_lat_arc_per_frame(300000),
                        max_tokens(60000000),
+                       max_arcs(180000000),
                        prune_interval(25),
                        lattice_beam(10.0),
                        determinize_lattice(true),
@@ -188,6 +190,9 @@ struct CudaLatticeDecoderConfig {
     opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Maximum tokens used per frame.  If decoding exceeds this resutls are undefined.");
     opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
                                                         "  If actual usaged exceeds this the results are undefined.");
+    opts->Register("max-tokens-allocated", &max_arcs, "Total number of arcs allocated.  This controls how many tokens are allocated to the entire decoding process."
+                                                        "  If actual usaged exceeds this the results are undefined.");
+
     opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam.  Larger->slower, "
                    "and deeper lattices");
     opts->Register("prune-interval", &prune_interval, "Interval (in frames) at "
