@@ -40,6 +40,7 @@
 #include <cub/util_allocator.cuh>
 #include <cub/device/device_reduce.cuh>
 #include "test/test_util.h"
+#include "base/timer.h"
 using namespace cub;
 //---------------------------------------------------------------------
 // Globals, constants and typedefs
@@ -55,6 +56,7 @@ void Initialize(
 {
     for (int i = 0; i < num_items; ++i)
         h_in[i] = i;
+    h_in[100]=1e9;
     if (g_verbose)
     {
         printf("Input:\n");
@@ -83,9 +85,10 @@ int v=h_in[0];
 //---------------------------------------------------------------------
 int main(int argc, char** argv)
 {
-    int num_items = 150;
+    uint64_t num_items = 1e9;
     // Initialize command line
     CommandLineArgs args(argc, argv);
+  kaldi::Timer timer;
     g_verbose = args.CheckCmdLineFlag("v");
     args.GetCmdLineArgument("n", num_items);
     // Print usage
@@ -108,7 +111,10 @@ int main(int argc, char** argv)
     int  h_reference;
     // Initialize problem and solution
     Initialize(h_in, num_items);
+    
+    timer.Reset();
     Solve(h_in, h_reference, num_items);
+  double t0=timer.Elapsed();
     // Allocate problem device arrays
     int *d_in = NULL;
     CubDebugExit(g_allocator.DeviceAllocate((void**)&d_in, sizeof(int) * num_items));
@@ -121,15 +127,19 @@ typedef cub::KeyValuePair <int, int> otype;
     // Request and allocate temporary storage
     void            *d_temp_storage = NULL;
     size_t          temp_storage_bytes = 0;
+    timer.Reset();
     CubDebugExit(DeviceReduce::ArgMax(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items));
     CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes));
+  double t1=timer.Elapsed();
     // Run
-    CubDebugExit(DeviceReduce::ArgMax(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items));
+    DeviceReduce::ArgMax(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items);
+  double t2=timer.Elapsed()-t1;
+  double t3=timer.Elapsed()-t2;
     // Check for correctness (and display results, if specified)
     int compare = CompareDeviceResults(&h_reference, &d_out->key, 1, g_verbose, g_verbose);
     int v_h;
     cudaMemcpy(&v_h,&d_out->key,sizeof(int),cudaMemcpyDeviceToHost);
-    printf("%i\n",v_h);
+    printf("%i %i %f %f %f\n",v_h, temp_storage_bytes,t0,t1,t2);
     printf("\t%s", compare ? "FAIL" : "PASS");
     AssertEquals(0, compare);
     // Cleanup
