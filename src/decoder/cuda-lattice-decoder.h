@@ -139,12 +139,13 @@ public:
   using CudaVector<T>::mem_d;
   using CudaVector<T>::max_size;
   
-  inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads);
+  inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads, uint32_t* count_vec_d=NULL);
+  inline void reg(CudaVector<T>*in, int sub_vec_num, cudaStream_t st);
   
   //for arr merge to single; assume create using cudaMallocManaged
-  T* arr_[MAX_SUB_VEC_SIZE];
+  T* arr_[MAX_SUB_VEC_SIZE]; //add cache here
   int vec_len_acc_[MAX_SUB_VEC_SIZE];
-  uint32_t* vec_len_[MAX_SUB_VEC_SIZE];
+  uint32_t* vec_len_[MAX_SUB_VEC_SIZE]; //discard since 9cc21bbd868906d06d40d1b230d61690a584927e
 };
 
 struct CudaLatticeDecoderConfig {

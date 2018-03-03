@@ -293,11 +293,11 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
 
-__global__ void getCnt_function( int* vec_len_acc, uint32_t** vec_len, uint32_t* count_d, int sub_vec_num) {
+__global__ void getCnt_function( int* vec_len_acc, uint32_t* vec_len, uint32_t* count_d, int sub_vec_num) {
   int acc=0;
   for (int i=0; i<sub_vec_num; i++) {
     vec_len_acc[i]=acc;
-    acc+=*(vec_len[i]);
+    acc+=(vec_len[i]);
   }
   vec_len_acc[sub_vec_num]=acc;
   *count_d=acc;
@@ -313,23 +313,31 @@ __global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psi
   }
 }
 template<typename T> 
-void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads) {
+void CudaMergeVector<T>::reg(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
+    int32_t device;
+    cudaGetDevice(&device);
+    for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
+    arr_[sub_vec_num]=NULL;
+    cudaMemPrefetchAsync(arr_,sizeof(T*)*(sub_vec_num+1), device, st);
+    cudaCheckError();
+}
+
+template<typename T> 
+void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads, uint32_t* count_vec_d) {
   //loading vec_len_acc, arr
   int acc=0;
-  int32_t device;
-  cudaGetDevice(&device);
-  for (int i=0; i<sub_vec_num; i++) {
-    vec_len_[i]=in[i].count_d;
+  uint32_t* vec_len;
+  T** arr;
+  if (count_vec_d) vec_len=count_vec_d;
+  else {
+    KALDI_ERR<<"unsupported since 9cc21bbd868906d06d40d1b230d61690a584927e";
   }
-  cudaMemPrefetchAsync(vec_len_,sizeof(void*)*(sub_vec_num+1), device, st);
-  for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
-  cudaMemPrefetchAsync(arr_,sizeof(void*)*(sub_vec_num+1), device, st);
-  cudaCheckError();
+  arr=arr_;
   //we have to do this first as copy_data_to_host need count_d
-  getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len_, count_d, sub_vec_num);
+  getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len, count_d, sub_vec_num);
   cudaStreamSynchronize(st);
   copyArr_function<<<sub_vec_num,min(512,min(total_threads,max_size)/sub_vec_num),0,st>>>
-    ((char**)arr_,vec_len_acc_,(char*)mem_d,sizeof(T));
+    ((char**)arr,vec_len_acc_,(char*)mem_d,sizeof(T));
   cudaCheckError();
   this->copy_data_to_host(st);
 }
@@ -666,7 +674,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     sub_vec_num_=config.sub_vec_num;
 
     //lattice: should use manage
-    cudaMallocManaged((void**)&arc_copy_buf_,sizeof(LatLinkVectorMerge)*(LAT_BUF_SIZE-1)); 
+    cudaMallocManaged((void**)&arc_copy_buf_,sizeof(LatLinkVectorMerge)*(LAT_BUF_SIZE)); 
     for (int j=0; j<LAT_BUF_SIZE; j++) {
       cudaMallocHost((void**)&lat_arcs_sub_vec_buf_count_[j][0],sizeof(uint32_t)*(config.sub_vec_num)); 
       //coount bytes_cudaMalloc in the loop below
@@ -682,10 +690,9 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
       }  
       toks_buf_[j].allocate(config.max_tokens_per_frame);
       bytes_cudaMalloc+=toks_buf_[j].getCudaMallocBytes();
-      if (j<LAT_BUF_SIZE-1) {
-        arc_copy_buf_[j].allocate(config.max_lat_arc_per_frame);
-        bytes_cudaMalloc+=arc_copy_buf_[j].getCudaMallocBytes();
-      }
+      arc_copy_buf_[j].allocate(config.max_lat_arc_per_frame);
+      bytes_cudaMalloc+=arc_copy_buf_[j].getCudaMallocBytes();
+      arc_copy_buf_[j].reg(lat_arcs_sub_vec_buf_[j], config.sub_vec_num, stream_copy[0]);
     }
     num_frames_decoded_=0;
     SetTokArcPointerByFrame(num_frames_decoded_);
@@ -707,7 +714,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
         lat_arcs_sub_vec_buf_[j][i].free(true);
       }
       cudaFree(lat_arcs_sub_vec_buf_[j]);
-      if (j<LAT_BUF_SIZE-1) {
+      if (j<LAT_BUF_SIZE) {
         arc_copy_buf_[j].free();
       }
       cudaFreeHost(lat_arcs_sub_vec_buf_count_[j][0]);
@@ -1343,8 +1350,10 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
 
     //stream_copy[prev_idx]
     {//do this first because there is a sync inner to get count first
-      LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx2];
-      cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], sub_vec_num_, stream_copy[prev_idx], total_threads);
+      LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx];
+      cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], 
+          sub_vec_num_, stream_copy[prev_idx], total_threads,
+          lat_arcs_sub_vec_buf_count_[prev_idx][1]);
       //cudaCheckError();
     }
     (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
@@ -1352,7 +1361,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     *pprev_toks = &toks_buf_[pprev_idx];
-    *pprev_arcs_=&arc_copy_buf_[pprev_idx2];
+    *pprev_arcs_=&arc_copy_buf_[pprev_idx];
     nvtxRangePop();
   }
   void CudaLatticeDecoder::PreProcessTokens() {
