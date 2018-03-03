@@ -313,16 +313,6 @@ __global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psi
   }
 }
 template<typename T> 
-void CudaMergeVector<T>::reg(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
-    int32_t device;
-    cudaGetDevice(&device);
-    for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
-    arr_[sub_vec_num]=NULL;
-    cudaMemPrefetchAsync(arr_,sizeof(T*)*(sub_vec_num+1), device, st);
-    cudaCheckError();
-}
-
-template<typename T> 
 void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads, uint32_t* count_vec_d) {
   //loading vec_len_acc, arr
   int acc=0;
@@ -341,6 +331,28 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   cudaCheckError();
   this->copy_data_to_host(st);
 }
+template<typename T> 
+void CudaMergeVector<T>::reg(CudaVector<T>*in, int sub_vec_num, cudaStream_t st) {
+    int32_t device;
+    cudaGetDevice(&device);
+    for (int i=0; i<sub_vec_num; i++) arr_[i]=in[i].mem_d;
+    arr_[sub_vec_num]=NULL;
+    cudaMemPrefetchAsync(arr_,sizeof(T*)*(sub_vec_num+1), device, st);
+    cudaCheckError();
+}
+template<typename T> 
+void CudaMergeVector<T>::allocate(uint32_t max_size) {
+    CudaVector<T>::allocate(max_size);
+    cudaMallocManaged(&arr_,MAX_SUB_VEC_SIZE*sizeof(T*));
+    cudaMalloc(&vec_len_acc_,MAX_SUB_VEC_SIZE*sizeof(int));
+}
+template<typename T> 
+void CudaMergeVector<T>::free() {
+    CudaVector<T>::free();
+    cudaFree(arr_);
+    cudaFree(vec_len_acc_);
+}
+
 
   /***************************************CudaFst Implementation*****************************************/
   HOST DEVICE float CudaFst::Final(StateId state) const {
