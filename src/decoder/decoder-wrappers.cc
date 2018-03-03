@@ -17,11 +17,12 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include <nvToolsExt.h>
+#include "nvToolsExt.h"
 #include "base/timer.h"
 #include "decoder/decoder-wrappers.h"
 #include "decoder/faster-decoder.h"
 #include "lat/lattice-functions.h"
+
 
 namespace kaldi {
 
@@ -235,7 +236,7 @@ bool DecodeUtteranceLatticeFasterCuda(
   { // First do some stuff with word-level traceback...
     VectorFst<LatticeArc> decoded;
     if (!decoder.GetBestPath(&decoded))
-      // Shouldn't really reach this point as already checked success.
+ // Shouldn't really reach this point as already checked success.
       KALDI_ERR << "Failed to get traceback for utterance " << utt;
 
     std::vector<int32> alignment;
@@ -258,7 +259,6 @@ bool DecodeUtteranceLatticeFasterCuda(
     }
     likelihood = -(weight.Value1() + weight.Value2());
   }
-
   // Get lattice, and do determinization if requested.
   Timer timer;
   Lattice lat;
@@ -288,7 +288,7 @@ bool DecodeUtteranceLatticeFasterCuda(
     lattice_writer->Write(utt, lat);
   }
     double t4 = timer.Elapsed();
-    KALDI_VLOG(3)<<"get_lat,det_lat: "<<t4;
+    KALDI_VLOG(1)<<"get_lat_det_lat: "<<t4;
 
   KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
             << (likelihood / num_frames) << " over "
