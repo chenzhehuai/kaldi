@@ -187,7 +187,9 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
       &proc_lat_frame, num_frames_decoded_);  //GPU transfers lattice to CPU
     //recording lattice in GPU, do pruning
     ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
+
     //CPU is always faster than GPU, so wait for GPU here
+    decoder_.ComputeLogLikelihoods(decodable);
     decoder_.PostProcessLattices(last_frame, num_frames_decoded_);
     if (last_frame) {
       int copied_frame=num_frames_decoded_-1;  //has finished
@@ -200,13 +202,12 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
       }
       assert(copied_frame==proc_lat_frame+1);
     }
-    decoder_.PostProcessTokens();   //pre-allocate tokens to the map<state,token>
+    //decoder_.PostProcessTokens();   //pre-allocate tokens to the map<state,token>
     if (last_frame) {
       KALDI_VLOG(7)<<"last frame: "<< NumFramesDecoded();
       break;
     }
     //computes log likelihoods for the next frame
-    decoder_.ComputeLogLikelihoods(decodable);
     num_frames_decoded_++;
   }
   assert(num_frames_decoded_==NumFramesDecoded());

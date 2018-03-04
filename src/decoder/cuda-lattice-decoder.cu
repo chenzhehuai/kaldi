@@ -19,12 +19,36 @@
 
 #include "fstext/remove-eps-local.h"
 #include <algorithm>
-#include <nvToolsExt.h>
 #include <float.h>
 #include <math.h>
 #include <cooperative_groups.h>
 #include "lattice-faster-decoder-cuda.h"
 #include "decoder/cuda-lattice-decoder.h"
+
+#define USE_NVTX
+#ifdef USE_NVTX
+#include "nvToolsExt.h"
+const uint32_t colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
+const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+#define PUSH_RANGE(name,cid) { \
+    int color_id = cid; \
+    color_id = color_id%num_colors;\
+    nvtxEventAttributes_t eventAttrib = {0}; \
+    eventAttrib.version = NVTX_VERSION; \
+    eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+    eventAttrib.colorType = NVTX_COLOR_ARGB; \
+    eventAttrib.color = colors[color_id]; \
+    eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+    eventAttrib.message.ascii = name; \
+    nvtxRangePushEx(&eventAttrib); \
+}
+#define POP_RANGE nvtxRangePop();
+#else
+#define PUSH_RANGE(name,cid)
+#define POP_RANGE
+#endif
+
 
 #define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
@@ -963,8 +987,9 @@ void CudaMergeVector<T>::free() {
   }
 
   void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableInterface *decodable) {
-    nvtxRangePushA("ComputeLogLikelihoods");
-    int32 frame = num_frames_decoded_;
+    PUSH_RANGE("ComputeLogLikelihoods",3)
+    int32 frame = num_frames_decoded_;//TODO
+    //cudaStreamSynchronize(stream_comp); //finish decoding this frame
     std::swap(loglikelihoods_h,loglikelihoods_old_h); //double buffering so we don't overwrite loglikelihoods_h before it is copied down
     std::swap(loglikelihoods_d,loglikelihoods_old_d); //double buffer
 
@@ -976,9 +1001,9 @@ void CudaMergeVector<T>::free() {
     cudaMemcpyAsync(loglikelihoods_d,loglikelihoods_h,sizeof(BaseFloat)*(fst_.max_ilabel+1),cudaMemcpyHostToDevice, stream_ll);
 
     cudaEventRecord(event_ll,stream_ll);  //mark log likelihoods are copied down to the device
-    cudaStreamWaitEvent(stream_comp,event_ll,0); //ensure logliklihoods_d is updated before consuming
+    //cudaStreamWaitEvent(stream_comp,event_ll,0); //ensure logliklihoods_d is updated before consuming; wait in ProcessTokens
 
-    nvtxRangePop();
+    POP_RANGE
   }
 
   //structs to hold kernel parameters.  Large numbers of parameters can slow down launch latency which matters when we are launching very short kernels
@@ -1280,12 +1305,7 @@ void CudaMergeVector<T>::free() {
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
           printf("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
-  }
 
-  __launch_bounds__(64,64)
-  __global__ void PostProcessTokens_cg(processTokens_params params) {
-//    auto grid = cooperative_groups::this_grid();
-    bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
   
     if(rank0) {
@@ -1301,6 +1321,12 @@ void CudaMergeVector<T>::free() {
     if(rank0) {
       params.allocator.advanceFront(params.cur_toks.size());
     }
+  }
+
+  __launch_bounds__(64,64)
+  __global__ void PostProcessTokens_cg(processTokens_params params) {
+//    auto grid = cooperative_groups::this_grid();
+    assert(0);
   }
     
   void CudaLatticeDecoder::PostProcessTokens() {
@@ -1369,7 +1395,7 @@ void CudaMergeVector<T>::free() {
     lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%LAT_BUF_SIZE];    
   }
   void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame) {
-    nvtxRangePushA("PostProcessLattices"); 
+    PUSH_RANGE("PostProcessLattices",1); 
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
     uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
     uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
@@ -1391,12 +1417,12 @@ void CudaMergeVector<T>::free() {
     //if (islast) 
       //cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
     cudaStreamSynchronize(stream_comp);
-    nvtxRangePop();
+    POP_RANGE
   }
 
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** pprev_toks, 
     void** pprev_arcs, int *num_arcs, bool islast, int* lat_frame, uint dec_frame) {
-    nvtxRangePushA("PreProcessLattices_and_Wait"); 
+    PUSH_RANGE("PreProcessLattices_and_Wait",0)
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
     uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
     uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
@@ -1417,7 +1443,7 @@ void CudaMergeVector<T>::free() {
     *pprev_toks = &toks_buf_[pprev_idx];
     *pprev_arcs=arcs_ready2cpu_[pprev_idx];
     *num_arcs=arc_copy_buf_[pprev_idx].size();
-    nvtxRangePop();
+    POP_RANGE
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     nvtxRangePushA("PreProcessTokens"); 
@@ -1439,7 +1465,7 @@ void CudaMergeVector<T>::free() {
     nvtxRangePop();
   }
   void CudaLatticeDecoder::ProcessTokens() {
-    nvtxRangePushA("ProcessTokens");
+    PUSH_RANGE("ProcessTokens",2)
     if (verbose>4) KALDI_LOG << num_frames_decoded_<<std::endl;
 
     processTokens_params params;
@@ -1467,7 +1493,7 @@ void CudaMergeVector<T>::free() {
 
 
 
-    nvtxRangePop();
+    POP_RANGE
   }
 
   void CudaLatticeDecoder::ClearToks(TokenVector &toks) {
