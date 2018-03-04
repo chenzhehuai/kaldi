@@ -330,7 +330,7 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   //we have to do this first as copy_data_to_host need count_d
   getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len, count_d, sub_vec_num);
   cudaStreamSynchronize(st);
-  copyArr_function<<<sub_vec_num,min(512,min(total_threads,max_size)/sub_vec_num),0,st>>>
+  copyArr_function<<<sub_vec_num,min(1024,min(total_threads,max_size)/sub_vec_num),0,st>>>
     ((char**)arr,vec_len_acc_,(char*)mem_d,sizeof(T));
   cudaCheckError();
   //this->copy_data_to_host(st);
@@ -951,9 +951,7 @@ void CudaMergeVector<T>::free() {
 
   void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableInterface *decodable) {
     nvtxRangePushA("ComputeLogLikelihoods");
-
     int32 frame = num_frames_decoded_;
-
     std::swap(loglikelihoods_h,loglikelihoods_old_h); //double buffering so we don't overwrite loglikelihoods_h before it is copied down
     std::swap(loglikelihoods_d,loglikelihoods_old_d); //double buffer
 

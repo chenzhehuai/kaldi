@@ -117,25 +117,22 @@ inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(
   return tok;
 }
 inline int LatticeFasterDecoderCuda::AddLatticeArcs(ForwardLink& cur_arcs, int proc_frame) {
-  int num_arcs=0, num_arcs2=0;
+  int num_arcs=0;
   num_arcs=active_arc_size_frames_[proc_frame];
   ForwardLink* newarcs=active_arc_frames_[proc_frame];
   assert(proc_frame==active_arc_frames_.size()-1);
   
 PUSH_RANGE("arc_mod",1)
   for ( int j = 0; j < num_arcs; j++) {
-    ForwardLink* newarc = newarcs+num_arcs2;
+    ForwardLink* newarc = newarcs+j;
     { 
       newarc->next_tok=ActiveToksMap(newarc->next_tok); //LatLink.p1
       Token* prev_tok=ActiveToksMap(newarc->next); //LatLink.p2
       newarc->next=prev_tok->links;
       prev_tok->links = newarc;
     }
-    num_arcs2++;
   }
 POP_RANGE
-  
-  assert(num_arcs==num_arcs2);
   return num_arcs;
 }
 
