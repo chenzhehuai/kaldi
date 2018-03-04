@@ -306,12 +306,23 @@ __global__ void getCnt_function( int* vec_len_acc, uint32_t* vec_len, uint32_t* 
   vec_len_acc[sub_vec_num]=acc;
   *count_d=acc;
 }
-__global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psize) {
+__global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psize, uint32_t* vec_len, uint32_t* count_d, int sub_vec_num, int* barrier) {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   int batch=blockDim.x;
   int i=blockIdx.x;
   int tid = threadIdx.x;
+  if (rank0) {
+    int acc=0;
+    for (int i=0; i<sub_vec_num; i++) {
+      vec_len_acc[i]=acc;
+      acc+=(vec_len[i]);
+    }
+    vec_len_acc[sub_vec_num]=acc;
+    *count_d=acc;
+  }
+  __grid_sync_nv_internal(barrier);
   int sz = vec_len_acc[i+1]-vec_len_acc[i];
+
   for(; tid < sz; tid += batch) {
     memcpy(to+psize*(tid+vec_len_acc[i]),arr[i]+tid*psize,psize);
   }
@@ -328,10 +339,10 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   }
   arr=arr_;
   //we have to do this first as copy_data_to_host need count_d
-  getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len, count_d, sub_vec_num);
-  cudaStreamSynchronize(st);
+  //getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len, count_d, sub_vec_num);
+  //cudaStreamSynchronize(st);
   copyArr_function<<<sub_vec_num,min(1024,min(total_threads,max_size)/sub_vec_num),0,st>>>
-    ((char**)arr,vec_len_acc_,(char*)mem_d,sizeof(T));
+    ((char**)arr,vec_len_acc_,(char*)mem_d,sizeof(T), vec_len, count_d, sub_vec_num, barrier_);
   cudaCheckError();
   //this->copy_data_to_host(st);
 }
@@ -349,6 +360,8 @@ void CudaMergeVector<T>::allocate(uint32_t max_size) {
     CudaVector<T>::allocate(max_size);
     cudaMallocManaged(&arr_,MAX_SUB_VEC_SIZE*sizeof(T*));
     cudaMalloc(&vec_len_acc_,MAX_SUB_VEC_SIZE*sizeof(int));
+    cudaMalloc(&barrier_,sizeof(int));
+    cudaMemset(barrier_,0,sizeof(int32)); 
 }
 template<typename T> 
 void CudaMergeVector<T>::free() {

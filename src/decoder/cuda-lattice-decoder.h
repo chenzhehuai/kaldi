@@ -147,6 +147,7 @@ public:
   //for arr merge to single; assume create using cudaMallocManaged
   T** arr_; //add cache here
   int *vec_len_acc_;
+  int* barrier_;
 };
 
 struct CudaLatticeDecoderConfig {
