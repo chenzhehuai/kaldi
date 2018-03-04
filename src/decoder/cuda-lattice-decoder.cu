@@ -1384,7 +1384,7 @@ void CudaMergeVector<T>::free() {
       arcs_ready2cpu_[prev_idx]=arcs_buf_+arcs_buf_used_;
       arcs_buf_used_+=cur_vec.size();
       //cudaCheckError();
-      (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], false);
+      (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], NULL, false);
     }
 
 
