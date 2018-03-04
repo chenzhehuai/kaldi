@@ -176,7 +176,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.InitDecoding(); //GPU init
   //GPU transfers lattice to CPU
   decoder_.PreProcessLattices(&pprev_toks_, (void **)&pprev_arcs_, &cur_num_arcs, 0, &proc_lat_frame, num_frames_decoded_);
-  decoder_.PostProcessLattices(0); //CPU is always faster than GPU, so wait for GPU here
+  decoder_.PostProcessLattices(0, num_frames_decoded_); //CPU is always faster than GPU, so wait for GPU here
   decoder_.ComputeLogLikelihoods(decodable); //get posteriors
   num_frames_decoded_++;
   while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
@@ -188,7 +188,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     //recording lattice in GPU, do pruning
     ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
     //CPU is always faster than GPU, so wait for GPU here
-    decoder_.PostProcessLattices(last_frame);
+    decoder_.PostProcessLattices(last_frame, num_frames_decoded_);
     if (last_frame) {
       int copied_frame=num_frames_decoded_-1;  //has finished
       while (proc_lat_frame!=num_frames_decoded_) {
@@ -196,7 +196,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
         decoder_.PreProcessLattices(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
           &proc_lat_frame, copied_frame+1);
         ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
-        decoder_.PostProcessLattices(last_frame);
+        decoder_.PostProcessLattices(last_frame, copied_frame+1);
       }
       assert(copied_frame==proc_lat_frame+1);
     }

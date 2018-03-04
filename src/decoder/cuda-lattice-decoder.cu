@@ -218,11 +218,11 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
     }
   
 template<typename T>
-    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream, void* to_buf) {
+    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream, void* to_buf, bool copy_size) {
       if (!to_buf) {
         to_buf=mem_h;
       }
-      cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
+      if (copy_size) cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
       cudaMemcpyAsync(to_buf,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
     }
 
@@ -1355,8 +1355,26 @@ void CudaMergeVector<T>::free() {
     lat_arcs_sub_vec_=lat_arcs_sub_vec_buf_[frame%LAT_BUF_SIZE];
     lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%LAT_BUF_SIZE];    
   }
-  void CudaLatticeDecoder::PostProcessLattices(bool islast) {
+  void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame) {
     nvtxRangePushA("PostProcessLattices"); 
+    uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
+    uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
+    uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
+    uint pprev_idx2=(dec_frame-2)%(LAT_BUF_SIZE-1);
+ 
+    {//do this first because there is a sync inner to get count first
+      //cudaMemPrefetchAsync(&cur_vec,sizeof(LatLinkVectorMerge), cudaCpuDeviceId, stream_copy[prev_idx]);
+      cudaStreamSynchronize(stream_copy[prev_idx]);
+      LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx];
+      cur_vec.copy_data_to_host(stream_copy[prev_idx], arcs_buf_+arcs_buf_used_, false);
+      assert(arcs_buf_used_+cur_vec.size()<=max_arcs_);
+      arcs_ready2cpu_[prev_idx]=arcs_buf_+arcs_buf_used_;
+      arcs_buf_used_+=cur_vec.size();
+      //cudaCheckError();
+      (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], false);
+    }
+
+
     //if (islast) 
       //cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
     cudaStreamSynchronize(stream_comp);
@@ -1371,23 +1389,15 @@ void CudaMergeVector<T>::free() {
     uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
     uint pprev_idx2=(dec_frame-2)%(LAT_BUF_SIZE-1);
     *lat_frame=dec_frame-2; //for CPU
-
-    //stream_copy[prev_idx]
-    {//do this first because there is a sync inner to get count first
+    {
       LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx];
       cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], 
           sub_vec_num_, stream_copy[prev_idx], total_threads,
           lat_arcs_sub_vec_buf_count_[prev_idx][1]);
       cudaCheckError();
-      //cudaMemPrefetchAsync(&cur_vec,sizeof(LatLinkVectorMerge), cudaCpuDeviceId, stream_copy[prev_idx]);
-      cur_vec.copy_data_to_host(stream_copy[prev_idx], arcs_buf_+arcs_buf_used_);
-      assert(arcs_buf_used_+cur_vec.size()<=max_arcs_);
-      arcs_ready2cpu_[prev_idx]=arcs_buf_+arcs_buf_used_;
-      arcs_buf_used_+=cur_vec.size();
-      //cudaCheckError();
+      cur_vec.copy_size_to_host(stream_copy[prev_idx]);
+      (toks_buf_[prev_idx]).copy_size_to_host(stream_copy[prev_idx]);
     }
-    (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx]);
-
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     cudaCheckError();

@@ -115,7 +115,7 @@ class CudaVector {
       inline void copy_all_to_device(cudaStream_t stream=0);
       inline void copy_size_to_host(cudaStream_t stream=0);
       inline void copy_size_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_host(cudaStream_t stream=0, void* to_buf=NULL);
+      inline void copy_data_to_host(cudaStream_t stream=0, void* to_buf=NULL, bool copy_size=true);
       inline void copy_data_to_device(cudaStream_t stream=0);
       inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
 
@@ -400,7 +400,7 @@ typedef CudaVector<TokenState> TokenVector;
   void ClearArcVector(LatLinkVector* lat_arcs_sub_vec_);
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding();
-  void PostProcessLattices(bool islast);
+  void PostProcessLattices(bool islast, uint dec_frame);
   void PreProcessLattices(TokenVector** pprev_toks, 
     void** buf_arcs, int *num_arcs, bool islast, int* lat_frame, uint dec_frame);
   void PreProcessTokens();
