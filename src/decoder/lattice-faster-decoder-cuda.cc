@@ -18,7 +18,6 @@
 // limitations under the License.
 
 #include "base/timer.h"
-#include "cuda-lattice-decoder.h"
 #include "decoder/lattice-faster-decoder-cuda.h"
 #include "lat/lattice-functions.h"
 
@@ -63,14 +62,12 @@ LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
   //decoder_.InitDecoding();
   //InitDecoding();
   toks_buf_=(Token*)malloc(sizeof(Token)*config_.max_tokens);
-  arcs_buf_=(ForwardLink*)malloc(sizeof(ForwardLink)*config_.max_arcs);
 }
 
 LatticeFasterDecoderCuda::~LatticeFasterDecoderCuda() {
   //DeleteElems(toks_.Clear());
   ClearActiveTokens();
   if (toks_buf_) free(toks_buf_);
-  if (arcs_buf_) free(arcs_buf_);
   if (delete_fst_) delete &(fst_);
 }
 
@@ -107,6 +104,11 @@ void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost,
     }
     toks = new_tok; //add into active_toks_;
 }
+inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(void* p) const {
+  int frame, id;
+  DECODE_TOK_ADDR(frame, id, p);
+  return ActiveToksMap(frame,id);
+}
 inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int frame, int id) const {
   assert(frame<active_tok_frames_.size());  //frame 0 has idx 0
   assert(id<active_tok_size_frames_[frame]);
@@ -114,35 +116,21 @@ inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(
   assert(tok);
   return tok;
 }
-inline int LatticeFasterDecoderCuda::AddLatticeArcs(LatLinkVector& cur_arcs, int proc_frame) {
-  const CudaFst& cu_fst = decoder_.fst_;
+inline int LatticeFasterDecoderCuda::AddLatticeArcs(ForwardLink& cur_arcs, int proc_frame) {
   int num_arcs=0, num_arcs2=0;
-  num_arcs=cur_arcs.size();
-  ForwardLink* newarcs;
-  GET_FROM_BUF(newarcs,arcs_buf_,arcs_buf_used_,num_arcs,config_.max_arcs);
-  active_arc_frames_.push_back(newarcs);
-  active_arc_size_frames_.push_back(num_arcs);
+  num_arcs=active_arc_size_frames_[proc_frame];
+  ForwardLink* newarcs=active_arc_frames_[proc_frame];
   assert(proc_frame==active_arc_frames_.size()-1);
   
 PUSH_RANGE("arc_mod",1)
   for ( int j = 0; j < num_arcs; j++) {
-    LatLink& arc_d_h = cur_arcs[j];
-    assert(arc_d_h.arc_id<cu_fst.arc_count);
-    BaseFloat graph_cost=cu_fst.arc_weights_h[arc_d_h.arc_id];
-    int32 ilabel=cu_fst.arc_ilabels_h[arc_d_h.arc_id];
-    int32 olabel=cu_fst.arc_olabels_h[arc_d_h.arc_id];
-    Token* next_tok=ActiveToksMap(arc_d_h.next_tok_fr, arc_d_h.next_tok_id);
-    Token* prev_tok=ActiveToksMap(arc_d_h.prev_tok_fr, arc_d_h.prev_tok_id);
     ForwardLink* newarc = newarcs+num_arcs2;
     { 
-      newarc->next_tok=next_tok;
-      newarc->ilabel=ilabel;
-      newarc->olabel=olabel;
-      newarc->graph_cost=graph_cost;
-      newarc->acoustic_cost=arc_d_h.acoustic_cost;
+      newarc->next_tok=ActiveToksMap(newarc->next_tok); //LatLink.p1
+      Token* prev_tok=ActiveToksMap(newarc->next); //LatLink.p2
       newarc->next=prev_tok->links;
+      prev_tok->links = newarc;
     }
-    prev_tok->links = newarc;
     num_arcs2++;
   }
 POP_RANGE
@@ -152,7 +140,7 @@ POP_RANGE
 }
 
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks,
-  LatLinkVector& cur_arcs, int proc_frame) {
+  ForwardLink& cur_arcs, int num_arcs, int proc_frame) {
   //add current
   if (proc_frame<0) return;
 PUSH_RANGE("ProcessLattices",3)
@@ -170,8 +158,9 @@ PUSH_RANGE("tok",4)
   }
   KALDI_VLOG(7)<<NumFramesDecoded()<<" "<<cur_toks.size();
 POP_RANGE
-  int num_arcs=0;
-  num_arcs+=AddLatticeArcs(cur_arcs, proc_frame);
+  active_arc_frames_.push_back(&cur_arcs);
+  active_arc_size_frames_.push_back(num_arcs);
+  AddLatticeArcs(cur_arcs, proc_frame);
   //call prune
   if (NumFramesDecoded() % config_.prune_interval == 0)
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
@@ -185,10 +174,11 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
   nvtxRangePushA("CudaLatticeDecoder::Decode::init_search");
   int proc_lat_frame;
+  int cur_num_arcs;
   InitDecoding(); //CPU init
   decoder_.InitDecoding(); //GPU init
   //GPU transfers lattice to CPU
-  decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, 0, &proc_lat_frame, num_frames_decoded_);
+  decoder_.PreProcessLattices(&pprev_toks_, (void **)&pprev_arcs_, &cur_num_arcs, 0, &proc_lat_frame, num_frames_decoded_);
   decoder_.PostProcessLattices(0); //CPU is always faster than GPU, so wait for GPU here
   decoder_.ComputeLogLikelihoods(decodable); //get posteriors
   num_frames_decoded_++;
@@ -196,19 +186,19 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     bool last_frame=decodable->IsLastFrame(num_frames_decoded_ - 0); //do twice process tok in the last frame
     decoder_.PreProcessTokens(); //clear Token&Arc vector for decoding&lattice //we can hide this func in ComputeLogLikelihoods, however, it's too fast so we might dont need to do so
     decoder_.ProcessTokens(); //GPU decoding&lattice generation
-    decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
+    decoder_.PreProcessLattices(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
       &proc_lat_frame, num_frames_decoded_);  //GPU transfers lattice to CPU
     //recording lattice in GPU, do pruning
-    ProcessLattices(*pprev_toks_, *pprev_arcs_, proc_lat_frame);
+    ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
     //CPU is always faster than GPU, so wait for GPU here
     decoder_.PostProcessLattices(last_frame);
     if (last_frame) {
       int copied_frame=num_frames_decoded_-1;  //has finished
       while (proc_lat_frame!=num_frames_decoded_) {
         copied_frame++;
-        decoder_.PreProcessLattices(&pprev_toks_, &pprev_arcs_, last_frame, 
+        decoder_.PreProcessLattices(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
           &proc_lat_frame, copied_frame+1);
-        ProcessLattices(*pprev_toks_, *pprev_arcs_, proc_lat_frame);
+        ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
         decoder_.PostProcessLattices(last_frame);
       }
       assert(copied_frame==proc_lat_frame+1);
@@ -664,7 +654,6 @@ void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at ut
   num_toks_=0;
   active_toks_.clear();
   active_toks_.reserve(2000);
-  arcs_buf_used_=0;
   toks_buf_used_=0;
   KALDI_ASSERT(num_toks_ == 0);
 }

@@ -87,7 +87,7 @@ class CudaFst {
     //non-zeros (Size arc_count+1)
     BaseFloat *arc_weights_h, *arc_weights_d;
     StateId *arc_nextstates_h, *arc_nextstates_d;
-    int32 *arc_ilabels_h, *arc_ilabels_d;
+    int32 *arc_ilabels_h, *arc_ilabels_d, *arc_olabels_d;
     int32 *arc_olabels_h;
 
     //final costs
@@ -115,7 +115,7 @@ class CudaVector {
       inline void copy_all_to_device(cudaStream_t stream=0);
       inline void copy_size_to_host(cudaStream_t stream=0);
       inline void copy_size_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_host(cudaStream_t stream=0);
+      inline void copy_data_to_host(cudaStream_t stream=0, void* to_buf=NULL);
       inline void copy_data_to_device(cudaStream_t stream=0);
       inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
 
@@ -264,24 +264,30 @@ struct TokenState {
 
 typedef CudaVector<TokenState> TokenVector;
 
+#define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx))
+#define DECODE_TOK_ADDR(frame,idx,v) { \
+    frame=(((uint64)v)>>32); \
+    idx=(((uint64)v)&(((uint64)1<<32)-1)); \
+}
   class  LatLink {  //300000*50*24=240MB __align__(16)
    public:
+     //below value are totally the same to ForwardLink, which enable memcpy
     //*_fr can be combined into 1 single para
-    int prev_tok_id; 
-    int prev_tok_fr;
-    int next_tok_id; 
-    int next_tok_fr; 
-    int32_t arc_id;    //if <0, it's pruned, FST arcid to get Ilabel and Olabel
-    // graph cost of traversing link (contains LM, etc.)
-    //CostType graph_cost; //can be obtained from arc_id
-    CostType acoustic_cost; // acoustic cost (pre-scaled) of traversing link
+    void *p1; //    int next_tok_id;  int next_tok_fr; 
+    int32 ilabel;
+    int32 olabel;
+    float graph_cost;
+    float acoustic_cost; // acoustic cost (pre-scaled) of traversing link
+    void *p2; //    int prev_tok_id;    int prev_tok_fr;
 
      HOST DEVICE inline LatLink(int iprev_tok_id, int iprev_tok_fr,     
       int inext_tok_id, int inext_tok_fr, 
-      int32_t iarc_id, CostType iacoustic_cost):
-      prev_tok_id(iprev_tok_id), prev_tok_fr(iprev_tok_fr), 
-      next_tok_id(inext_tok_id), next_tok_fr(inext_tok_fr),
-      arc_id(iarc_id),  acoustic_cost(iacoustic_cost) { }
+      int32 iilabel, int32 iolabel, float igraph_cost, 
+      float iacoustic_cost): ilabel(iilabel), olabel(iolabel),
+      graph_cost(igraph_cost), acoustic_cost(iacoustic_cost) {
+        p1=(void*)ENCODE_TOK_ADDR(inext_tok_fr,inext_tok_id);
+        p2=(void*)ENCODE_TOK_ADDR(iprev_tok_fr,iprev_tok_id);
+      }
 
   };
 
@@ -396,7 +402,7 @@ typedef CudaVector<TokenState> TokenVector;
   void PreFinalizeDecoding();
   void PostProcessLattices(bool islast);
   void PreProcessLattices(TokenVector** pprev_toks, 
-    LatLinkVectorMerge** pprev_arcs_, bool islast, int* proc_frame, uint dec_frame);
+    void** buf_arcs, int *num_arcs, bool islast, int* lat_frame, uint dec_frame);
   void PreProcessTokens();
 
   /// Returns the number of frames already decoded.  
@@ -457,6 +463,7 @@ typedef CudaVector<TokenState> TokenVector;
   int verbose;
   int prune_interval_;
   int sub_vec_num_;
+  int max_arcs_;
 
 
   LatLinkVector* lat_arcs_sub_vec_;
@@ -464,6 +471,9 @@ typedef CudaVector<TokenState> TokenVector;
   LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
   uint32_t* lat_arcs_sub_vec_buf_count_[LAT_BUF_SIZE][2]; //0 for CPU 1 for GPU
   LatLinkVectorMerge* arc_copy_buf_;
+  LatLink* arcs_buf_; //as GPU is so fast, we have to need this; assume cpuLatLink has same size as LatLink
+  LatLink* arcs_ready2cpu_[LAT_BUF_SIZE]; //from arcs_buf_
+  int arcs_buf_used_;
 
 
 
