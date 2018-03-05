@@ -71,7 +71,7 @@ class FasterDecoder {
 
   void SetOptions(const FasterDecoderOptions &config) { config_ = config; }
 
-  ~FasterDecoder() { ClearToks(toks_.Clear()); }
+  ~FasterDecoder() { ClearToks(toks_.Clear());  }
 
   void Decode(DecodableInterface *decodable);
 
@@ -110,6 +110,7 @@ class FasterDecoder {
     // "cost_" and prev->cost_.
     Token *prev_;
     int32 ref_count_;
+    int stack;
     // if you are looking for weight_ here, it was removed and now we just have
     // cost_, which corresponds to ConvertToCost(weight_).
     double cost_;
@@ -121,6 +122,7 @@ class FasterDecoder {
       } else {
         cost_ = arc.weight.Value() + ac_cost;
       }
+      stack=0;
     }
     inline Token(const Arc &arc, Token *prev):
         arc_(arc), prev_(prev), ref_count_(1) {
@@ -130,6 +132,7 @@ class FasterDecoder {
       } else {
         cost_ = arc.weight.Value();
       }
+      stack=0;
     }
     inline bool operator < (const Token &other) {
       return cost_ > other.cost_;
@@ -176,6 +179,15 @@ class FasterDecoder {
 
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
+
+  int c1_PE_;
+  int c2_PE_;
+  int c3_PE_;
+  int c2_0_PE_;
+  int c2_1_PE_;
+  int c2_2_PE_;
+  int c2_3_PE_;
+  int c2_4_PE_;
 
   // It might seem unclear why we call ClearToks(toks_.Clear()).
   // There are two separate cleanup tasks we need to do at when we start a new file.

@@ -19,6 +19,30 @@
 // limitations under the License.
 
 #include "decoder/faster-decoder.h"
+#define USE_NVTX
+#ifdef USE_NVTX
+#include "nvToolsExt.h"
+
+const uint32_t colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
+const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+#define PUSH_RANGE(name,cid) { \
+      int color_id = cid; \
+      color_id = color_id%num_colors;\
+      nvtxEventAttributes_t eventAttrib = {0}; \
+      eventAttrib.version = NVTX_VERSION; \
+      eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+      eventAttrib.colorType = NVTX_COLOR_ARGB; \
+      eventAttrib.color = colors[color_id]; \
+      eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+      eventAttrib.message.ascii = name; \
+      nvtxRangePushEx(&eventAttrib); \
+}
+#define POP_RANGE nvtxRangePop();
+#else
+#define PUSH_RANGE(name,cid)
+#define POP_RANGE
+#endif
 
 namespace kaldi {
 
@@ -222,6 +246,7 @@ void FasterDecoder::PossiblyResizeHash(size_t num_toks) {
 
 // ProcessEmitting returns the likelihood cutoff used.
 double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
+  PUSH_RANGE("ProcessEmitting",0)
   int32 frame = num_frames_decoded_;
   Elem *last_toks = toks_.Clear();
   size_t tok_cnt;
@@ -261,6 +286,7 @@ double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
   // 'owned' is a complex thing here; the point is we need to call TokenDelete
   // on each elem 'e' to let toks_ know we're done with them.
   for (Elem *e = last_toks, *e_tail; e != NULL; e = e_tail) {  // loop this way
+    c3_PE_++;
     // n++;
     // because we delete "e" as we go.
     StateId state = e->key;
@@ -299,19 +325,35 @@ double FasterDecoder::ProcessEmitting(DecodableInterface *decodable) {
     toks_.Delete(e);
   }
   num_frames_decoded_++;
+  POP_RANGE
   return next_weight_cutoff;
 }
 
 // TODO: first time we go through this, could avoid using the queue.
 void FasterDecoder::ProcessNonemitting(double cutoff) {
   // Processes nonemitting arcs for one frame. 
+  PUSH_RANGE("ProcessNonemitting",0)
   KALDI_ASSERT(queue_.empty());
-  for (const Elem *e = toks_.GetList(); e != NULL;  e = e->tail)
+  for (const Elem *e = toks_.GetList(); e != NULL;  e = e->tail) {
+    c1_PE_++;
     queue_.push_back(e->key);
+    e->val->stack=0;
+  }
+  int has_loop=0, m_loop=0;
   while (!queue_.empty()) {
+    c2_PE_++;
     StateId state = queue_.back();
     queue_.pop_back();
+    //debug
     Token *tok = toks_.Find(state)->val;  // would segfault if state not
+    if (tok->stack==0) c2_0_PE_++;
+    else if (tok->stack==1) c2_1_PE_++;
+    else  {
+      c2_2_PE_++;
+      has_loop=1;
+      m_loop=std::max(tok->stack,m_loop);
+    }
+    tok->stack++;
     // in toks_ but this can't happen.
     if (tok->cost_ > cutoff) { // Don't bother processing successors.
       continue;
@@ -323,6 +365,7 @@ void FasterDecoder::ProcessNonemitting(double cutoff) {
       const Arc &arc = aiter.Value();
       if (arc.ilabel == 0) {  // propagate nonemitting only...
         Token *new_tok = new Token(arc, tok);
+        new_tok->stack=tok->stack;
         if (new_tok->cost_ > cutoff) {  // prune
           Token::TokenDelete(new_tok);
         } else {
@@ -343,6 +386,12 @@ void FasterDecoder::ProcessNonemitting(double cutoff) {
       }
     }
   }
+  if (has_loop==1) {
+    c2_3_PE_++;
+    c2_4_PE_+=m_loop;
+
+  }
+  POP_RANGE
 }
 
 void FasterDecoder::ClearToks(Elem *list) {
@@ -351,6 +400,10 @@ void FasterDecoder::ClearToks(Elem *list) {
     e_tail = e->tail;
     toks_.Delete(e);
   }
+  KALDI_WARN<<c1_PE_<<" "<<c2_PE_<<" " << c3_PE_;
+  KALDI_WARN<<c2_0_PE_<<" "<<c2_1_PE_<<" " << c2_2_PE_<<" "<<c2_3_PE_<< " "<< c2_4_PE_;
+
+	c1_PE_=c2_PE_=c3_PE_=c2_0_PE_=c2_1_PE_=c2_2_PE_=c2_3_PE_=c2_4_PE_=0;
 }
 
 } // end namespace kaldi.
