@@ -45,6 +45,8 @@ cuda-decoder_test:cuda-decoder_test.o
 thrust_test: thrust_test.cu
 	$(CUDATKDIR)/bin/nvcc -g -G -O3 $(CUDA_ARCH) thrust_test.cu -I../ $(CUDA_INCLUDE) -lcudart  -o thrust_test
 
+cub_test3: cub_test3.cu
+	$(CUDATKDIR)/bin/nvcc $(CUDAOPTS) $(CUDA_ARCH) cub_test3.cu -I../ $(CUDA_INCLUDE) -lcudart  -o cub_test3
 cub_test2: cub_test2.cu
 	$(CUDATKDIR)/bin/nvcc -g -G -O3 $(CUDA_ARCH) cub_test2.cu -I../ $(CUDA_INCLUDE) -lcudart  -o cub_test2
 cub_test: cub_test.cu
