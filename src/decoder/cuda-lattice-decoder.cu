@@ -759,9 +759,10 @@ void CudaMergeVector<T>::free() {
     cudaMalloc((void**)&tok2scansum_numarc_d,sizeof(int32_t)*(config.max_tokens_per_frame)); 
     max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
     cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
-    cudaMalloc((void**)&arc2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
+    cudaMalloc((void**)&tid2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
+    d_temp_storage=NULL;
     cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, max_arcs_per_frame_search_);
+        tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
     cudaMalloc((void**)&d_temp_storage,sizeof(int32_t)*(temp_storage_bytes)); 
 
     num_frames_decoded_=0;
@@ -793,7 +794,7 @@ void CudaMergeVector<T>::free() {
     cudaFree(arc_copy_buf_);
     cudaFreeHost(arcs_buf_);
     
-    cudaFree(arc2tok_d);
+    cudaFree(tid2tok_d);
     cudaFree(tid2arc_d);
     cudaFree(tok2scansum_numarc_d);
     
@@ -1075,11 +1076,11 @@ void CudaMergeVector<T>::free() {
 
         if(total_cost<local_cutoff)
           local_cutoff = total_cost;
+        int arc_i=j-start;
+        int idx=params.tok2scansum_numarc[i]+arc_i;
+        params.tid2arc[idx]=j;
+        params.tid2tok[idx]=i;
       }
-      int arc_i=j-start;
-      int idx=params.tok2scansum_numarc[i]+arc_i;
-      params.tid2arc[idx]=j;
-      params.arc2tok[j]=i;
     }
 
     //TODO reduce inside block first?
@@ -1096,13 +1097,21 @@ void CudaMergeVector<T>::free() {
     int tid=blockIdx.x*blockDimx+threadIdx.x;
 
     CostType cutoff=*params.cutoff;
-    int32 size = params.tok2scansum_numarc[params.prev_toks.size()-1];
+    assert(params.prev_toks.size());
+    int32 size = params.tok2scansum_numarc[params.prev_toks.size()];
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
+    if(tid==0) { //thread 0 nominated to get new token
+      if (params.verbose>3) {
+        printf("E: %i\n", size);
+      }
+      assert(size<=params.max_arcs_per_frame_search);
+    }
+
     while(true) {
       //i=__shfl_sync(0xffffffff,i,0);
       if(tid>=size) break;
       int j=params.tid2arc[tid];
-      int i=params.arc2tok[j];
+      int i=params.tid2tok[tid];
       TokenState& ts = params.prev_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
@@ -1361,9 +1370,10 @@ void CudaMergeVector<T>::free() {
     params.prune_interval = prune_interval_;
     params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
     params.sub_vec_num=sub_vec_num_;
-    params.arc2tok=arc2tok_d;
+    params.tid2tok=tid2tok_d;
     params.tok2scansum_numarc=tok2scansum_numarc_d;
     params.tid2arc=tid2arc_d;
+    params.max_arcs_per_frame_search=max_arcs_per_frame_search_;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1447,13 +1457,26 @@ void CudaMergeVector<T>::free() {
   void CudaLatticeDecoder::PreProcessTokens() {
     nvtxRangePushA("PreProcessTokens"); 
     //before reset, we should update tid2arc_d for the next frame
+    num_frames_decoded_++;
     if (num_frames_decoded_) {
       cur_toks_->copy_size_to_host(0);
-      cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size());
+      cudaStreamSynchronize(0);
+      size_t tmp_len;
+      cub::DeviceScan::ExclusiveSum(NULL, tmp_len, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
+      cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
+      if (verbose>3) {
+        int* tmp_h;
+        cudaMallocHost((void**)&tmp_h,sizeof(int)*10); 
+        cudaMemcpy(tmp_h,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
+        KALDI_WARN<<cur_toks_->size()<<" "<<tmp_len;
+        KALDI_WARN<<tmp_h[0]<<" "<<tmp_h[1]<<" "<<tmp_h[2];
+        cudaFreeHost(tmp_h);
+      }
+      cudaCheckError();
     }
 
-    num_frames_decoded_++;
 #ifndef MEMADVISE
     //no need to prefetch if we have done a memadvise
     allocator.prefetch_next_to_device(cudaStreamPerThread);
