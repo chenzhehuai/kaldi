@@ -755,6 +755,14 @@ void CudaMergeVector<T>::free() {
       cudaCheckError();
       arc_copy_buf_[j].reg(lat_arcs_sub_vec_buf_[j], config.sub_vec_num, stream_copy[0]);
     }
+    cudaMalloc((void**)&tok2scansum_numarc_d,sizeof(int32_t)*(config.max_tokens_per_frame)); 
+    max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
+    cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
+    cudaMalloc((void**)&arc2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
+    DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, max_arcs_per_frame_search_);
+    cudaMalloc((void**)&d_temp_storage,sizeof(int32_t)*(temp_storage_bytes)); 
+
     num_frames_decoded_=0;
     SetTokArcPointerByFrame(num_frames_decoded_);
     
@@ -784,6 +792,9 @@ void CudaMergeVector<T>::free() {
     cudaFree(arc_copy_buf_);
     cudaFreeHost(arcs_buf_);
     
+    cudaFree(arc2tok_d);
+    cudaFree(tid2arc_d);
+    cudaFree(tok2scansum_numarc_d);
     
     allocator.finalize();
 
@@ -828,11 +839,17 @@ void CudaMergeVector<T>::free() {
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
     __threadfence(); 
     *next_ts=&params.cur_toks[lookup_elem.tokenstate_idx];
+    //we shouldnt do tid2arc in frame 0
     if (add_arc) {
       Token *prev_tok = ts->token;  
       int ts_id=prev_tok->frame==params.frame?
       params.cur_toks.get_idx_from_addr(ts):
       params.prev_toks.get_idx_from_addr(ts);
+      if (prev_tok->frame!=params.frame) {
+        uint32_t* arc_offset=params.e_offsets;
+        tok2scansum_numarc_d[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
+          -arc_offset[nextstate];
+      }
       LatLink arc=LatLink(ts_id, prev_tok->frame, 
         lookup_elem.tokenstate_idx, params.frame,
         params.arc_ilabels[j], params.arc_olabels[j],
@@ -1010,7 +1027,7 @@ void CudaMergeVector<T>::free() {
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void findBestCutoff_function(processTokens_params params) {
+  inline DEVICE void findBestCutoff_tid2arc_function(processTokens_params params) {
 
     int threadIdxy = threadIdx.x / blockDimx;
 
@@ -1059,6 +1076,10 @@ void CudaMergeVector<T>::free() {
         if(total_cost<local_cutoff)
           local_cutoff = total_cost;
       }
+      int arc_i=j-start;
+      int idx=params.tok2scansum_numarc[i]+arc_i;
+      params.tid2arc[idx]=j;
+      params.arc2tok[j]=i;
     }
 
     //TODO reduce inside block first?
@@ -1072,78 +1093,53 @@ void CudaMergeVector<T>::free() {
   template<int blockDimx, int blockDimy>
   inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
     int threadIdxy = threadIdx.x / blockDimx;
-    
-    auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
+    int tid=blockIdx.x*blockDimx+threadIdx.x;
 
     CostType cutoff=*params.cutoff;
-    int32 size = params.prev_toks.size();
+    int32 size = params.tok2scansum_numarc[params.prev_toks.size()-1];
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) {
-      int i;
-      if(group.thread_rank()==0) { //thread 0 nominated to get new token
-        i=atomicAdd(params.pe_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
-      }
-      i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
-      if(i>=size) break;
-
+      if(tid>=size) break;
+      int j=tid2arc[tid];
+      int i=arc2tok[j];
       TokenState& ts = params.prev_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
 
-      uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
-      int32 ilabel, ilabel_next;  //prefetch ilabel since it leads to a dependent load
+      int32 ilabel=params.arc_ilabels[j];  //prefetch ilabel since it leads to a dependent load
+      BaseFloat acoustic_cost = -params.loglikelihoods[ilabel];  //TODO can I prefetch this?  
+      BaseFloat weight = params.arc_weights[j];
+      StateId nextstate = params.arc_nextstates[j];
 
-      int j=start+group.thread_rank();
+      CostType total_cost = tok->cost_ + weight + acoustic_cost;
 
-      if(j<finish) {
-        ilabel_next = params.arc_ilabels[j];
-      }
-      int nextj;
+      if(total_cost<=cutoff) 
+      {
+        Token next_tok =  Token(acoustic_cost+weight, tok);
+        TokenState *next_ts=NULL;
+        Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
+          acoustic_cost, &ts, j, true, (i+j)%params.sub_vec_num, &next_ts);
+        
+        volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
-      for(j;j<finish;j=nextj) {
-        nextj = j+blockDimx;
+        while(*cur_tokv < next_tok) {   //check if we need to update
+        acquire_semaphore((int*)&params.token_locks[nextstate]);
+            if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
 
-        ilabel = ilabel_next;
-
-        if(nextj<finish) {
-          ilabel_next = params.arc_ilabels[nextj];//prefetch ilabel since it leads to a dependent load 
-        }
-        BaseFloat acoustic_cost = -params.loglikelihoods[ilabel];  //TODO can I prefetch this?  
-        BaseFloat weight = params.arc_weights[j];
-        StateId nextstate = params.arc_nextstates[j];
-
-        CostType total_cost = tok->cost_ + weight + acoustic_cost;
-
-        if(total_cost<=cutoff) 
-        {
-          Token next_tok =  Token(acoustic_cost+weight, tok);
-          TokenState *next_ts=NULL;
-          Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            acoustic_cost, &ts, j, true, (i+j)%params.sub_vec_num, &next_ts);
-          
-          volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
-
-          while(*cur_tokv < next_tok) {   //check if we need to update
-          acquire_semaphore((int*)&params.token_locks[nextstate]);
-              if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
-
-                //if(sizeof(Token)==16)
-                //  store16(cur_tok,&next_tok);                                                                       //update token
-                //else
-                //  *cur_tok=next_tok;
-                cur_tok->cost_=next_tok.cost_;
-                cur_tok->frame=params.frame;
-                next_ts->cost_=cur_tok->cost_;
-              }
-              release_semaphore((int*)&params.token_locks[nextstate]);
-              break;                                                                                              //exit loop as our update is done
-          } //end while
-        } //end total_cost<=cutoff
-      } //end arc loop
+              //if(sizeof(Token)==16)
+              //  store16(cur_tok,&next_tok);                                                                       //update token
+              //else
+              //  *cur_tok=next_tok;
+              cur_tok->cost_=next_tok.cost_;
+              cur_tok->frame=params.frame;
+              next_ts->cost_=cur_tok->cost_;
+            }
+            release_semaphore((int*)&params.token_locks[nextstate]);
+            break;                                                                                              //exit loop as our update is done
+        } //end while
+      } //end total_cost<=cutoff
+      tid+=blockDimx;
     } //end token loop
   }
   
@@ -1260,7 +1256,7 @@ void CudaMergeVector<T>::free() {
     if(rank0&&params.verbose>4)  
     {p++;printf("S: %i\n",p);}
 
-    findBestCutoff_function<32,2>(params);
+    findBestCutoff_tid2arc_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
    
@@ -1273,7 +1269,7 @@ void CudaMergeVector<T>::free() {
     *modified1 = false;
     CostType cutoff=*params.cutoff;
 
-    processEmittingTokens_function<32,2>(params);
+    processEmittingTokens_function<64,1>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
   
@@ -1365,6 +1361,9 @@ void CudaMergeVector<T>::free() {
     params.prune_interval = prune_interval_;
     params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
     params.sub_vec_num=sub_vec_num_;
+    params.arc2tok=arc2tok_d;
+    params.tok2scansum_numarc=tok2scansum_numarc_d;
+    params.tid2arc=tid2arc_d;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1447,6 +1446,12 @@ void CudaMergeVector<T>::free() {
   }
   void CudaLatticeDecoder::PreProcessTokens() {
     nvtxRangePushA("PreProcessTokens"); 
+    //before reset, we should update tid2arc_d for the next frame
+    if (num_frames_decoded_) {
+      DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size());
+    }
+
     num_frames_decoded_++;
 #ifndef MEMADVISE
     //no need to prefetch if we have done a memadvise

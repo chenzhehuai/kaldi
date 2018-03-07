@@ -354,6 +354,9 @@ typedef CudaVector<TokenState> TokenVector;
     int *ne_idx;
     int *fb_idx;
     int *barrier;
+    int *tok2scansum_numarc;
+    int *tid2arc;
+    int *arc2tok;
 
     //debug
     int verbose;
@@ -434,7 +437,12 @@ typedef CudaVector<TokenState> TokenVector;
   TokenVector* cur_toks_;
   TokenVector* prev_toks_;
   TokenVector toks_buf_[LAT_BUF_SIZE];
-  
+ 
+  int32_t tid2arc_d;
+  int32_t arc2tok_d;
+  int32_t tok2scansum_numarc_d;
+  void* d_temp_storage;
+  int32_t temp_storage_bytes;
 
   const CudaFst fst_;
 
@@ -465,6 +473,7 @@ typedef CudaVector<TokenState> TokenVector;
   int prune_interval_;
   int sub_vec_num_;
   int max_arcs_;
+  int max_arcs_per_frame_search_;
 
 
   LatLinkVector* lat_arcs_sub_vec_;
