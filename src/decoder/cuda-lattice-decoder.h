@@ -438,11 +438,11 @@ typedef CudaVector<TokenState> TokenVector;
   TokenVector* prev_toks_;
   TokenVector toks_buf_[LAT_BUF_SIZE];
  
-  int32_t tid2arc_d;
-  int32_t arc2tok_d;
-  int32_t tok2scansum_numarc_d;
+  int* tid2arc_d;
+  int* arc2tok_d;
+  int* tok2scansum_numarc_d;
   void* d_temp_storage;
-  int32_t temp_storage_bytes;
+  size_t temp_storage_bytes;
 
   const CudaFst fst_;
 

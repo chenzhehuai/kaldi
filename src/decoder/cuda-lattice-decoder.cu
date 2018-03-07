@@ -24,6 +24,7 @@
 #include <cooperative_groups.h>
 #include "lattice-faster-decoder-cuda.h"
 #include "decoder/cuda-lattice-decoder.h"
+#include <cub/cub.cuh>
 
 #define USE_NVTX
 #ifdef USE_NVTX
@@ -759,7 +760,7 @@ void CudaMergeVector<T>::free() {
     max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
     cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
     cudaMalloc((void**)&arc2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
-    DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+    cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
         tok2scansum_numarc_d, tok2scansum_numarc_d, max_arcs_per_frame_search_);
     cudaMalloc((void**)&d_temp_storage,sizeof(int32_t)*(temp_storage_bytes)); 
 
@@ -834,6 +835,9 @@ void CudaMergeVector<T>::free() {
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
       lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate,total_cost));
+      const uint32_t* arc_offset=params.e_offsets;
+      params.tok2scansum_numarc[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
+        -arc_offset[nextstate];
     }
     //need both 2 steps below, to ensure tokenstate_idx won't run into error
     while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
@@ -845,11 +849,7 @@ void CudaMergeVector<T>::free() {
       int ts_id=prev_tok->frame==params.frame?
       params.cur_toks.get_idx_from_addr(ts):
       params.prev_toks.get_idx_from_addr(ts);
-      if (prev_tok->frame!=params.frame) {
-        uint32_t* arc_offset=params.e_offsets;
-        tok2scansum_numarc_d[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
-          -arc_offset[nextstate];
-      }
+      
       LatLink arc=LatLink(ts_id, prev_tok->frame, 
         lookup_elem.tokenstate_idx, params.frame,
         params.arc_ilabels[j], params.arc_olabels[j],
@@ -1101,8 +1101,8 @@ void CudaMergeVector<T>::free() {
     while(true) {
       //i=__shfl_sync(0xffffffff,i,0);
       if(tid>=size) break;
-      int j=tid2arc[tid];
-      int i=arc2tok[j];
+      int j=params.tid2arc[tid];
+      int i=params.arc2tok[j];
       TokenState& ts = params.prev_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
@@ -1448,8 +1448,9 @@ void CudaMergeVector<T>::free() {
     nvtxRangePushA("PreProcessTokens"); 
     //before reset, we should update tid2arc_d for the next frame
     if (num_frames_decoded_) {
-      DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size());
+      cur_toks_->copy_size_to_host(0);
+      cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size());
     }
 
     num_frames_decoded_++;

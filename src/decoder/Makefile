@@ -6,7 +6,7 @@ LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
 LDLIBS += -lnvToolsExt
 CUDAOPTS =
-#CUDAOPTS += -G -g
+CUDAOPTS += -G -g
 
 
 TESTFILES =
@@ -52,7 +52,7 @@ cub_test2: cub_test2.cu
 cub_test: cub_test.cu
 	$(CUDATKDIR)/bin/nvcc -g -O3  -Xptxas   -v -Xcudafe -#  -Xcompiler -ffloat-store -m64  $(CUDA_ARCH) cub_test.cu -I../ $(CUDA_INCLUDE) -lcudart  -o cub_test
 cuda-lattice-decoder_prelink.o: cuda-lattice-decoder.cu cuda-lattice-decoder.h
-	$(CUDATKDIR)/bin/nvcc  $(CUDAOPTS) -O3  -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS  -Xcompiler "-msse -msse2 -pthread "  -Xcompiler -fPIC -DHAVE_CUDA -o cuda-lattice-decoder_prelink.o cuda-lattice-decoder.cu -lcuda  -lcudadevrt
+	$(CUDATKDIR)/bin/nvcc  $(CUDAOPTS) -O3  -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 $(CUDA_INCLUDE) -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS  -Xcompiler "-msse -msse2 -pthread "  -Xcompiler -fPIC -DHAVE_CUDA -o cuda-lattice-decoder_prelink.o cuda-lattice-decoder.cu -lcuda  -lcudadevrt
 cuda-lattice-decoder.o: cuda-lattice-decoder_prelink.o
 	$(CUDATKDIR)/bin/nvcc $(CUDAOPTS) -O3  cuda-lattice-decoder_prelink.o -v $(CUDA_ARCH)  -dlink -o cuda-lattice-decoder.o -Xcompiler "-pthread -fPIC" #-arch=sm_70
 
