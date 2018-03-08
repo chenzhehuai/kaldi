@@ -359,6 +359,8 @@ typedef CudaVector<TokenState> TokenVector;
     int *tid2arc;
     int *tid2tok;
     int max_arcs_per_frame_search;
+    void *d_temp_storage;
+    size_t temp_storage_bytes;
 
     //debug
     int verbose;

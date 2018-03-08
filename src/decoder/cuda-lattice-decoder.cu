@@ -923,7 +923,7 @@ void CudaMergeVector<T>::free() {
 
     initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
     ProcessNonemitting();
-    cur_toks_->copy_size_to_host(stream_comp); //for PreProcessTokens
+    //cur_toks_->copy_size_to_host(stream_comp); //for PreProcessTokens
   }
 
   void CudaLatticeDecoder::PreFinalizeDecoding() { 
@@ -1266,6 +1266,14 @@ void CudaMergeVector<T>::free() {
 
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     int p=0;
+    if(rank0) {
+      cub::DeviceScan::ExclusiveSum(params.d_temp_storage, params.temp_storage_bytes, 
+        params.tok2scansum_numarc, params.tok2scansum_numarc, params.prev_toks.size()+1);
+    }
+
+
+    __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
+
     if(rank0&&params.verbose>4)  
     {p++;printf("S: %i\n",p);}
 
@@ -1330,6 +1338,8 @@ void CudaMergeVector<T>::free() {
     if(rank0) {
       params.allocator.advanceFront(params.cur_toks.size());
     }
+
+
   }
 
   __launch_bounds__(64,64)
@@ -1378,6 +1388,8 @@ void CudaMergeVector<T>::free() {
     params.tok2scansum_numarc=tok2scansum_numarc_d;
     params.tid2arc=tid2arc_d;
     params.max_arcs_per_frame_search=max_arcs_per_frame_search_;
+    params.d_temp_storage=d_temp_storage;
+    params.temp_storage_bytes=temp_storage_bytes;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1471,8 +1483,9 @@ void CudaMergeVector<T>::free() {
       //  tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
       //cudaMalloc((void**)&d_temp_storage,tmp_len); 
       //cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
-      cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1, stream_comp);
+
+      //cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+      //  tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1, stream_comp);
       //cudaFree(d_temp_storage);
       cudaCheckError();
     }
@@ -1516,7 +1529,7 @@ void CudaMergeVector<T>::free() {
     processTokens_cg<<<blocks,threads,0,stream_comp>>>(params);  //doesn't work
 #endif
     cudaCheckError();
-    cur_toks_->copy_size_to_host(stream_comp); //for PreProcessTokens
+    //cur_toks_->copy_size_to_host(stream_comp); //for PreProcessTokens
       
     cudaEventSynchronize(event_pt); //throttle
     cudaEventRecord(event_pt,stream_comp);
