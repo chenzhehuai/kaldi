@@ -757,13 +757,14 @@ void CudaMergeVector<T>::free() {
       arc_copy_buf_[j].reg(lat_arcs_sub_vec_buf_[j], config.sub_vec_num, stream_copy[0]);
     }
     cudaMalloc((void**)&tok2scansum_numarc_d,sizeof(int32_t)*(config.max_tokens_per_frame)); 
+    cudaMalloc((void**)&tok2scansum_numarc_d2,sizeof(int32_t)*(config.max_tokens_per_frame)); 
     max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
     cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
     cudaMalloc((void**)&tid2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
     d_temp_storage=NULL;
     cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
-    cudaMalloc((void**)&d_temp_storage,temp_storage_bytes)); 
+        tok2scansum_numarc_d, tok2scansum_numarc_d2, config.max_tokens_per_frame);
+    cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
 
     num_frames_decoded_=0;
     SetTokArcPointerByFrame(num_frames_decoded_);
@@ -797,6 +798,7 @@ void CudaMergeVector<T>::free() {
     cudaFree(tid2tok_d);
     cudaFree(tid2arc_d);
     cudaFree(tok2scansum_numarc_d);
+    cudaFree(tok2scansum_numarc_d2);
     
     allocator.finalize();
 
@@ -1421,6 +1423,7 @@ void CudaMergeVector<T>::free() {
       //cudaCheckError();
       (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], NULL, false);
     }
+    cudaCheckError();
 
 
     //if (islast) 
@@ -1459,16 +1462,18 @@ void CudaMergeVector<T>::free() {
     //before reset, we should update tid2arc_d for the next frame
     num_frames_decoded_++;
     if (num_frames_decoded_) {
-      cur_toks_->copy_size_to_host(0);
+      cur_toks_->copy_size_to_host(stream_comp);
       cudaStreamSynchronize(stream_comp);
       size_t tmp_len;
       assert(cur_toks_->size());
       cub::DeviceScan::ExclusiveSum(NULL, tmp_len, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
+        tok2scansum_numarc_d, tok2scansum_numarc_d2, cur_toks_->size()+1);
+      cudaMalloc((void**)&d_temp_storage,tmp_len); 
       cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
-      cudaCheckError();
-      if (verbose>3) {
+        tok2scansum_numarc_d, tok2scansum_numarc_d2, cur_toks_->size()+1);
+      cudaFree(d_temp_storage);
+      std::swap(tok2scansum_numarc_d,tok2scansum_numarc_d2);
+      if (0&&verbose>3) {
         int* tmp_h;
         cudaMallocHost((void**)&tmp_h,sizeof(int)*10); 
         cudaMemcpy(tmp_h,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);

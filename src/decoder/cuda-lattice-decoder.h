@@ -443,6 +443,7 @@ typedef CudaVector<TokenState> TokenVector;
   int* tid2arc_d;
   int* tid2tok_d;
   int* tok2scansum_numarc_d;
+  int* tok2scansum_numarc_d2;
   void* d_temp_storage;
   size_t temp_storage_bytes;
 
