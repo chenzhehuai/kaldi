@@ -26,6 +26,32 @@
 #include <float.h>
 #include <math.h>
 #include <cooperative_groups.h>
+#include <cub/cub.cuh>
+
+#define USE_NVTX
+#ifdef USE_NVTX
+#include "nvToolsExt.h"
+const uint32_t colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
+const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+#define PUSH_RANGE(name,cid) { \
+    int color_id = cid; \
+    color_id = color_id%num_colors;\
+    nvtxEventAttributes_t eventAttrib = {0}; \
+    eventAttrib.version = NVTX_VERSION; \
+    eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+    eventAttrib.colorType = NVTX_COLOR_ARGB; \
+    eventAttrib.color = colors[color_id]; \
+    eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+    eventAttrib.message.ascii = name; \
+    nvtxRangePushEx(&eventAttrib); \
+}
+#define POP_RANGE nvtxRangePop();
+#else
+#define PUSH_RANGE(name,cid)
+#define POP_RANGE
+#endif
+
 
 #define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
@@ -370,6 +396,7 @@ template<typename T>
       CudaDecoder::TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
+      elem.tokenstate_idx=-1;
       store16(&current_tokens_lookup[i], &elem);
     }
   }
@@ -391,6 +418,7 @@ template<typename T>
       CudaDecoder::TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
+      elem.tokenstate_idx=-1;
       store16(&current_tokens_lookup[state], &elem);
     }
   }
@@ -520,6 +548,15 @@ template<typename T>
     cudaMalloc((void**)&loglikelihoods_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
     cudaMalloc((void**)&loglikelihoods_old_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
 
+    cudaMalloc((void**)&tok2scansum_numarc_d,sizeof(int32_t)*(config.max_tokens_per_frame)); 
+    max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
+    cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
+    cudaMalloc((void**)&tid2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
+    d_temp_storage=NULL;
+    cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
+    cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
+
     cudaStreamSynchronize(stream_comp);
     cudaStreamSynchronize(stream_copy);
     cudaStreamSynchronize(cudaStreamPerThread);
@@ -553,6 +590,12 @@ template<typename T>
     cudaFree(cutoff_d);
     cudaFree(modified_d);
 
+    cudaFree(tid2tok_d);
+    cudaFree(tid2arc_d);
+    cudaFree(tok2scansum_numarc_d);
+    cudaFree(d_temp_storage);
+
+
     cudaEventDestroy(event_pt);
     cudaEventDestroy(event_pt_old);
     cudaEventDestroy(event_ll);
@@ -563,6 +606,35 @@ template<typename T>
 
   }
 
+  void CudaDecoder::PreProcessTokens() {
+    PUSH_RANGE("PreProcessTokens",0)
+    //before reset, we should update tid2arc_d for the next frame
+    num_frames_decoded_++;
+    if (num_frames_decoded_) {
+      //cudaStreamSynchronize(stream_comp);
+      //size_t tmp_len;
+      //assert(cur_toks_->size());
+      //cub::DeviceScan::ExclusiveSum(NULL, tmp_len, 
+      //  tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
+      //cudaMalloc((void**)&d_temp_storage,tmp_len); 
+      //cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
+      cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1, stream_comp);
+      //cudaFree(d_temp_storage);
+      cudaCheckError();
+    }
+
+#ifndef MEMADVISE
+      //no need to prefetch if we have done a memadvise
+      allocator.prefetch_next_to_device(cudaStreamPerThread);
+#endif
+
+      //TODO prefetch here
+
+    cur_toks_.swap(prev_toks_);
+
+    POP_RANGE
+  }
 
   bool CudaDecoder::Decode(DecodableInterface *decodable) {
     nvtxRangePushA("CudaDecoder::Decode");
@@ -575,14 +647,8 @@ template<typename T>
     while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
 
       if (verbose>4) KALDI_LOG << num_frames_decoded_<<std::endl;
-#ifndef MEMADVISE
-      //no need to prefetch if we have done a memadvise
-      allocator.prefetch_next_to_device(cudaStreamPerThread);
-#endif
 
-      //TODO prefetch here
-
-      cur_toks_.swap(prev_toks_);
+      PreProcessTokens();
 
       ProcessTokens();
 
@@ -596,6 +662,25 @@ template<typename T>
     nvtxRangePop();
 
     return (!cur_toks_.empty());
+  }
+
+  DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
+    StateId nextstate, CostType total_cost, CostType acoustic_cost,
+    TokenState* ts) {
+    //TokenLookupElem lookup_elem;
+    //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
+    TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
+    Token *cur_tok = lookup_elem.token;  
+    //check if token is active or not.  Double check the lock.
+    if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
+      //if havent seen, add into hash
+      lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate,total_cost));
+      const uint32_t* arc_offset=params.e_offsets;
+      params.tok2scansum_numarc[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
+        -arc_offset[nextstate];
+    }
+
+    return cur_tok;  
   }
 
   __global__ void addOneToken(CudaDecoder::TokenLookupElem *current_tokens_lookup,  CudaDecoder::TokenVector cur_toks, CudaDecoder::Token tok, CudaDecoder::StateId state) {
@@ -886,21 +971,23 @@ template<typename T>
     //debug
     int verbose;
     int frame;
+
+    int *tok2scansum_numarc;
+    int *tid2arc;
+    int *tid2tok;
+    int max_arcs_per_frame_search;
+
   };
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void findBestCutoff_function(processTokens_params params) {
-    typedef CudaDecoder::TokenState TokenState;
-    typedef CudaDecoder::Token Token; 
-    typedef CudaDecoder::StateId StateId;
-    typedef CudaDecoder::CostType CostType;
+  inline DEVICE void findBestCutoff_tid2arc_function(processTokens_params params) {
 
     int threadIdxy = threadIdx.x / blockDimx;
 
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
-    CudaDecoder::CostType local_cutoff = INFINITY;
+    CostType local_cutoff = INFINITY;
     int32 size = params.prev_toks.size(); 
 
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
@@ -918,6 +1005,7 @@ template<typename T>
       StateId state = ts.state;
 
       uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
+      assert(params.tok2scansum_numarc[i+1]-params.tok2scansum_numarc[i]==finish-start);
       
       int32 ilabel, ilabel_next;
 
@@ -938,10 +1026,14 @@ template<typename T>
         BaseFloat acoustic_cost = -params.loglikelihoods[ilabel]; //TODO can I prefetch this?
         CostType weight = params.arc_weights[j];
         
-        CudaDecoder::CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
+        CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
 
         if(total_cost<local_cutoff)
           local_cutoff = total_cost;
+        int arc_i=j-start;
+        int idx=params.tok2scansum_numarc[i]+arc_i;
+        params.tid2arc[idx]=j;
+        params.tid2tok[idx]=i;
       }
     }
 
@@ -950,6 +1042,7 @@ template<typename T>
       atomicMin(params.cutoff, local_cutoff);
     }
   }
+
 
 DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
@@ -965,100 +1058,70 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
 
   //blockDim.x threads per token
+  //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void processEmittingTokens_function(processTokens_params params) {
-    typedef CudaDecoder::TokenState TokenState;
-    typedef CudaDecoder::Token Token; 
-    typedef CudaDecoder::StateId StateId;
-    typedef CudaDecoder::CostType CostType;
-    typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
+  inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
     int threadIdxy = threadIdx.x / blockDimx;
-    
-    auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
+    int tid=blockIdx.x*blockDimx+threadIdx.x;
 
     CostType cutoff=*params.cutoff;
-    int32 size = params.prev_toks.size();
+    assert(params.prev_toks.size());
+    int32 size = params.tok2scansum_numarc[params.prev_toks.size()];
+    __grid_sync_nv_internal(params.barrier);
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
-    while(true) {
-      int i;
-      if(group.thread_rank()==0) { //thread 0 nominated to get new token
-        i=atomicAdd(params.pe_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
+    if(tid==0) { //thread 0 nominated to get new token
+      if (params.verbose>3) {
+        printf("E: %i %i\n", size, params.prev_toks.size());
       }
-      i=group.shfl(i,0);           //broadcast token index
+      assert(size<=params.max_arcs_per_frame_search);
+      assert(params.tid2tok[size-1]<=params.prev_toks.size()-1);
+    }
+    while(true) {
       //i=__shfl_sync(0xffffffff,i,0);
-      if(i>=size) break;
-
-      TokenState ts = params.prev_toks[i];
+      if(tid>=size) break;
+      int j=params.tid2arc[tid];
+      int i=params.tid2tok[tid];
+      TokenState& ts = params.prev_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
 
-      uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
-      int32 ilabel, ilabel_next;  //prefetch ilabel since it leads to a dependent load
+      int32 ilabel=params.arc_ilabels[j];  //prefetch ilabel since it leads to a dependent load
+      BaseFloat acoustic_cost = -params.loglikelihoods[ilabel];  //TODO can I prefetch this?  
+      BaseFloat weight = params.arc_weights[j];
+      StateId nextstate = params.arc_nextstates[j];
 
-      int j=start+group.thread_rank();
+      CostType total_cost = tok->cost_ + weight + acoustic_cost;
 
-      if(j<finish) {
-        ilabel_next = params.arc_ilabels[j];
-      }
-      int nextj;
+      if(total_cost<=cutoff) 
+      {
+        Token next_tok =  Token(acoustic_cost+weight, tok);
+        TokenState *next_ts=NULL;
+        Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
+          acoustic_cost, &ts);
+        
+        volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
-      for(j;j<finish;j=nextj) {
-        nextj = j+blockDimx;
+        while(*cur_tokv < next_tok) {   //check if we need to update
+        acquire_semaphore((int*)&params.token_locks[nextstate]);
+            if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
 
-        ilabel = ilabel_next;
-
-        if(nextj<finish) {
-          ilabel_next = params.arc_ilabels[nextj];
-        }
-        BaseFloat acoustic_cost = -params.loglikelihoods[ilabel];  //TODO can I prefetch this?  
-        BaseFloat weight = params.arc_weights[j];
-        StateId nextstate = params.arc_nextstates[j];
-
-        CostType total_cost = tok->cost_ + weight + acoustic_cost;
-
-        if(total_cost<=cutoff) 
-        {
-          TokenLookupElem lookup_elem;
-          load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
-          
-          Token *cur_tok = lookup_elem.token;  
-          Token next_tok =  Token(acoustic_cost+weight, tok, j);
-
-          //check if token is active or not.  Double check the lock.
-          if(lookup_elem.active==0 && atomicCAS(&params.current_tokens_lookup[nextstate].active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
-            params.cur_toks.push_back(TokenState(cur_tok,nextstate));                                             //add to cur_toks list
-          }
-
-          volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
-
-          while(*cur_tokv < next_tok) {   //check if we need to update
-          acquire_semaphore((int*)&params.token_locks[nextstate]);
-              if(*cur_tokv < next_tok) {                                                                          //recheck if we are min
-                
-                if(sizeof(Token)==16)
-                  store16(cur_tok,&next_tok);                                                                       //update token
-                else
-                  *cur_tok=next_tok;
-
-              }
-              release_semaphore((int*)&params.token_locks[nextstate]);
-              break;                                                                                              //exit loop as our update is done
-          } //end while
-        } //end total_cost<=cutoff
-      } //end arc loop
+              //if(sizeof(Token)==16)
+              //  store16(cur_tok,&next_tok);                                                                       //update token
+              //else
+              //  *cur_tok=next_tok;
+              cur_tok->cost_=next_tok.cost_;
+              cur_tok->frame=params.frame;
+            }
+            release_semaphore((int*)&params.token_locks[nextstate]);
+            break;                                                                                              //exit loop as our update is done
+        } //end while
+      } //end total_cost<=cutoff
+      tid+=blockDimx*gridDim.x;
     } //end token loop
   }
-  
+
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
-    typedef CudaDecoder::TokenState TokenState;
-    typedef CudaDecoder::Token Token; 
-    typedef CudaDecoder::StateId StateId;
-    typedef CudaDecoder::CostType CostType;
-    typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
     
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
@@ -1069,59 +1132,44 @@ DEVICE void acquire_semaphore(volatile int *lock){
       int i;
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.ne_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          printf("NE: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
       }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
       if(i>=size) break;
       
-      TokenState ts = params.cur_toks[i];
+      TokenState& ts = params.cur_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
       
-
       uint32_t start=params.ne_offsets[state], finish=params.ne_offsets[state+1];
       for(int j=start+group.thread_rank();j<finish;j+=blockDimx) {
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
-        Token next_tok = Token(weight, tok, j);
+        Token next_tok = Token(weight, tok);
+
+        CostType total_cost = tok->cost_ + weight;
 
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
-          TokenLookupElem lookup_elem;
-          load16(&lookup_elem,&params.current_tokens_lookup[nextstate]);
-          Token *cur_tok = lookup_elem.token;
-          
-          //check if token is active or not.  If not then add it to the cur_toks list.  Double check the lock.
-          if(lookup_elem.active==0 && atomicCAS(&params.current_tokens_lookup[nextstate].active,0,1)==0) {
-            params.cur_toks.push_back(TokenState(cur_tok,nextstate));
-          }
+          TokenState *next_ts=NULL;
+          Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
+            0, &ts);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
-              if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
-                if(sizeof(Token)==16)
-                  store16(cur_tok,&next_tok);                                                                       //update token
-                else
-                  *cur_tok=next_tok;
-
+              if(*cur_tokv < next_tok) {
+                cur_tok->cost_=next_tok.cost_;
+                cur_tok->frame=params.frame;
+                (*modified) = true;                                                                            //mark as updated
               }
-              
-              
-              (*modified) = true;                                                                            //mark as updated
             release_semaphore((int*)&params.token_locks[nextstate]);
               break;  //exit loop as our update is done
           } //end try update loop
         }
       }
-
-    }
-      if (params.verbose>4) printf("ED: %i %i %i \n",threadIdx.x, group.thread_rank(), blockIdx.x);
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1170,17 +1218,11 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     int p=0;
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
 
-    findBestCutoff_function<32,2>(params);
+    findBestCutoff_tid2arc_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
    
-   
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
-
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
@@ -1220,9 +1262,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
           printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
 
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
-    
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
   
     if(rank0) {
       //prepare for next iteration
@@ -1237,10 +1276,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
     if(rank0) {
       params.allocator.advanceFront(params.cur_toks.size());
     }
-
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
-    
   }
 
   void CudaDecoder::ProcessNonemitting() {
@@ -1254,20 +1289,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     processTokens_params params;
 
-    params.modified=modified_d;
-    params.cutoff=cutoff_d;
-    params.cur_toks=cur_toks_;
-    params.ne_offsets=fst_.ne_offsets_d;
-    params.arc_weights=fst_.arc_weights_d;
-    params.arc_nextstates=fst_.arc_nextstates_d;
-    params.current_tokens_lookup=current_tokens_lookup_d;
-    params.token_locks=token_locks_d;
-    params.allocator=allocator;
-    params.ne_idx=ne_idx_d;
-    params.barrier=barrier_d;
-    
-    params.verbose=verbose;
-    params.frame=num_frames_decoded_;
+    initParams(params);
 
 #if 0
     void *args[] = { (void*) &params };
@@ -1281,12 +1303,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     nvtxRangePop();
   }
 
-  void CudaDecoder::ProcessTokens() {
-    nvtxRangePushA("ProcessTokens");
-    processTokens_params params;
-    dim3 threads(64,1);
-    dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
 
+  void CudaDecoder::initParams(processTokens_params& params) {
     params.prev_toks=prev_toks_;
     params.cur_toks=cur_toks_;
     params.allocator=allocator;
@@ -1308,7 +1326,21 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.verbose=verbose;
     params.frame=num_frames_decoded_;
 
-    if (params.verbose>2&&params.frame==1) KALDI_LOG <<"# of blocks: "<<blocks.x<<std::endl;
+    params.tid2tok=tid2tok_d;
+    params.tok2scansum_numarc=tok2scansum_numarc_d;
+    params.tid2arc=tid2arc_d;
+    params.max_arcs_per_frame_search=max_arcs_per_frame_search_;    
+  }
+
+  void CudaDecoder::ProcessTokens() {
+    nvtxRangePushA("ProcessTokens");
+    processTokens_params params;
+    dim3 threads(64,1);
+    dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
+
+    initParams(params);
+
+     if (params.verbose>2&&params.frame==1) KALDI_LOG <<"# of blocks: "<<blocks.x<<std::endl;
 
      if (params.verbose>4) KALDI_LOG <<std::endl;
     cudaStreamWaitEvent(stream_comp,event_ll,0); //make sure log likelihoods are on the device before starting these kernels

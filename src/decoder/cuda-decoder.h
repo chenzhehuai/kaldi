@@ -125,12 +125,15 @@ struct CudaDecoderConfig {
   uint32_t max_tokens_per_frame;
   uint32_t max_tokens;
   int verbose;
+  uint32_t max_lat_arc_per_frame;
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
-                       max_tokens_per_frame(900000),
+                       max_tokens_per_frame(200000),
                        max_tokens(60000000),
-                       verbose(0){}
+                       verbose(0),
+                       max_lat_arc_per_frame(600000)
+                       {}
   
   void Register(OptionsItf *opts) {
     opts->Register("verbose", &verbose, "debug log verbose.");
@@ -141,6 +144,8 @@ struct CudaDecoderConfig {
     opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Maximum tokens used per frame.  If decoding exceeds this resutls are undefined.");
     opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
                                                         "  If actual usaged exceeds this the results are undefined.");
+    opts->Register("max-lat-arc-per-frame", &max_lat_arc_per_frame, "Total number of lat arc allocated.  ");
+    
   }
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 && max_tokens_per_frame > 0 && max_tokens>0);
@@ -275,7 +280,7 @@ class CudaDecoder {
   struct __align__(16) TokenLookupElem{
     Token *token;     //pointer for that token
     uint32_t active;  //tells if token has activiated or not
-    uint32_t pad;     //aligning to 16 bytes
+    volatile int32_t tokenstate_idx;     //aligning to 16 bytes
   };
   
   //token lookup table.  Provides constant time lookup for active tokens.
@@ -294,6 +299,12 @@ class CudaDecoder {
   //Lists of active tokens to be iterated through
   TokenVector cur_toks_;
   TokenVector prev_toks_;
+
+  int* tid2arc_d;
+  int* tid2tok_d;
+  int* tok2scansum_numarc_d;
+  void* d_temp_storage;
+  size_t temp_storage_bytes;
 
   const CudaFst fst_;
 
@@ -322,6 +333,8 @@ class CudaDecoder {
   
   int verbose;
   
+  int max_arcs_per_frame_search_;
+
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
 
