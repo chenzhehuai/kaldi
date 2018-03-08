@@ -1270,8 +1270,6 @@ void CudaMergeVector<T>::free() {
       cub::DeviceScan::ExclusiveSum(params.d_temp_storage, params.temp_storage_bytes, 
         params.tok2scansum_numarc, params.tok2scansum_numarc, params.prev_toks.size()+1);
     }
-
-
     __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
 
     if(rank0&&params.verbose>4)  
