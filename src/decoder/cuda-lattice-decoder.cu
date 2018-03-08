@@ -331,25 +331,37 @@ __global__ void getCnt_function( int* vec_len_acc, uint32_t* vec_len, uint32_t* 
   vec_len_acc[sub_vec_num]=acc;
   *count_d=acc;
 }
-__global__ void copyArr_function(char **arr, int* vec_len_acc, char *to, int psize, uint32_t* vec_len, uint32_t* count_d, int sub_vec_num, int* barrier) {
+struct copyArr_function_params {
+  char **arr;
+  int* vec_len_acc;
+  char *to;
+  int psize;
+  uint32_t* vec_len;
+  uint32_t* count_d;
+  int sub_vec_num;
+  int* barrier;
+copyArr_function_params(char **iarr, int* ivec_len_acc, char *ito, int ipsize, uint32_t* ivec_len, uint32_t* icount_d, int isub_vec_num, int* ibarrier):
+  arr(iarr),vec_len_acc(ivec_len_acc),to(ito),psize(ipsize),vec_len(ivec_len),count_d(icount_d),sub_vec_num(isub_vec_num),barrier(ibarrier) { }
+};
+__global__ void copyArr_function(copyArr_function_params params) {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   int batch=blockDim.x;
   int i=blockIdx.x;
   int tid = threadIdx.x;
   if (rank0) {
     int acc=0;
-    for (int i=0; i<sub_vec_num; i++) {
-      vec_len_acc[i]=acc;
-      acc+=(vec_len[i]);
+    for (int i=0; i<params.sub_vec_num; i++) {
+      params.vec_len_acc[i]=acc;
+      acc+=(params.vec_len[i]);
     }
-    vec_len_acc[sub_vec_num]=acc;
-    *count_d=acc;
+    params.vec_len_acc[params.sub_vec_num]=acc;
+    *params.count_d=acc;
   }
-  __grid_sync_nv_internal(barrier);
-  int sz = vec_len_acc[i+1]-vec_len_acc[i];
+  __grid_sync_nv_internal(params.barrier);
+  int sz = params.vec_len_acc[i+1]-params.vec_len_acc[i];
 
   for(; tid < sz; tid += batch) {
-    memcpy(to+psize*(tid+vec_len_acc[i]),arr[i]+tid*psize,psize);
+    memcpy(params.to+params.psize*(tid+params.vec_len_acc[i]),params.arr[i]+tid*params.psize,params.psize);
   }
 }
 template<typename T> 
@@ -366,8 +378,9 @@ void CudaMergeVector<T>::load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st
   //we have to do this first as copy_data_to_host need count_d
   //getCnt_function<<<1,1,0,st>>>(vec_len_acc_, vec_len, count_d, sub_vec_num);
   //cudaStreamSynchronize(st);
+  copyArr_function_params params((char**)arr,vec_len_acc_,(char*)mem_d,sizeof(T), vec_len, count_d, sub_vec_num, barrier_);
   copyArr_function<<<sub_vec_num,min(1024,min(total_threads,max_size)/sub_vec_num),0,st>>>
-    ((char**)arr,vec_len_acc_,(char*)mem_d,sizeof(T), vec_len, count_d, sub_vec_num, barrier_);
+    (params);
   cudaCheckError();
   //this->copy_data_to_host(st);
 }
