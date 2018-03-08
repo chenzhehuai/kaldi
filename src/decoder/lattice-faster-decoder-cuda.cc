@@ -119,6 +119,7 @@ inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(
 inline int LatticeFasterDecoderCuda::AddLatticeArcs(ForwardLink& cur_arcs, int proc_frame) {
   int num_arcs=0;
   num_arcs=active_arc_size_frames_[proc_frame];
+  if (config_.verbose>3) KALDI_LOG<<num_arcs;
   ForwardLink* newarcs=active_arc_frames_[proc_frame];
   assert(proc_frame==active_arc_frames_.size()-1);
   

@@ -757,14 +757,13 @@ void CudaMergeVector<T>::free() {
       arc_copy_buf_[j].reg(lat_arcs_sub_vec_buf_[j], config.sub_vec_num, stream_copy[0]);
     }
     cudaMalloc((void**)&tok2scansum_numarc_d,sizeof(int32_t)*(config.max_tokens_per_frame)); 
-    cudaMalloc((void**)&tok2scansum_numarc_d2,sizeof(int32_t)*(config.max_tokens_per_frame)); 
     max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
     cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
     cudaMalloc((void**)&tid2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
-    d_temp_storage=NULL;
-    cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d2, config.max_tokens_per_frame);
-    cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
+    //d_temp_storage=NULL;
+    //cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+    //    tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
+    //cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
 
     num_frames_decoded_=0;
     SetTokArcPointerByFrame(num_frames_decoded_);
@@ -798,7 +797,6 @@ void CudaMergeVector<T>::free() {
     cudaFree(tid2tok_d);
     cudaFree(tid2arc_d);
     cudaFree(tok2scansum_numarc_d);
-    cudaFree(tok2scansum_numarc_d2);
     
     allocator.finalize();
 
@@ -1054,6 +1052,7 @@ void CudaMergeVector<T>::free() {
       StateId state = ts.state;
 
       uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
+      assert(params.tok2scansum_numarc[i+1]-params.tok2scansum_numarc[i]==finish-start);
       
       int32 ilabel, ilabel_next;
 
@@ -1105,9 +1104,10 @@ void CudaMergeVector<T>::free() {
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     if(tid==0) { //thread 0 nominated to get new token
       if (params.verbose>3) {
-        printf("E: %i\n", size);
+        printf("E: %i %i\n", size, params.prev_toks.size());
       }
       assert(size<=params.max_arcs_per_frame_search);
+      assert(params.tid2tok[size-1]<=params.prev_toks.size()-1);
     }
     while(true) {
       //i=__shfl_sync(0xffffffff,i,0);
@@ -1150,7 +1150,7 @@ void CudaMergeVector<T>::free() {
             break;                                                                                              //exit loop as our update is done
         } //end while
       } //end total_cost<=cutoff
-      tid+=blockDimx;
+      tid+=blockDimx*gridDim.x;
     } //end token loop
   }
   
@@ -1467,20 +1467,11 @@ void CudaMergeVector<T>::free() {
       size_t tmp_len;
       assert(cur_toks_->size());
       cub::DeviceScan::ExclusiveSum(NULL, tmp_len, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d2, cur_toks_->size()+1);
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
       cudaMalloc((void**)&d_temp_storage,tmp_len); 
       cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d2, cur_toks_->size()+1);
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
       cudaFree(d_temp_storage);
-      std::swap(tok2scansum_numarc_d,tok2scansum_numarc_d2);
-      if (0&&verbose>3) {
-        int* tmp_h;
-        cudaMallocHost((void**)&tmp_h,sizeof(int)*10); 
-        cudaMemcpy(tmp_h,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
-        KALDI_WARN<<cur_toks_->size()<<" "<<tmp_len;
-        KALDI_WARN<<tmp_h[0]<<" "<<tmp_h[1]<<" "<<tmp_h[2];
-        cudaFreeHost(tmp_h);
-      }
       cudaCheckError();
     }
 
