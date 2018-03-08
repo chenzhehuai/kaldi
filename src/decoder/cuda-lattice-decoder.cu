@@ -763,7 +763,7 @@ void CudaMergeVector<T>::free() {
     d_temp_storage=NULL;
     cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
         tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
-    cudaMalloc((void**)&d_temp_storage,sizeof(int32_t)*(temp_storage_bytes)); 
+    cudaMalloc((void**)&d_temp_storage,temp_storage_bytes)); 
 
     num_frames_decoded_=0;
     SetTokArcPointerByFrame(num_frames_decoded_);
@@ -1099,6 +1099,7 @@ void CudaMergeVector<T>::free() {
     CostType cutoff=*params.cutoff;
     assert(params.prev_toks.size());
     int32 size = params.tok2scansum_numarc[params.prev_toks.size()];
+    __grid_sync_nv_internal(params.barrier);
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     if(tid==0) { //thread 0 nominated to get new token
       if (params.verbose>3) {
@@ -1106,7 +1107,6 @@ void CudaMergeVector<T>::free() {
       }
       assert(size<=params.max_arcs_per_frame_search);
     }
-
     while(true) {
       //i=__shfl_sync(0xffffffff,i,0);
       if(tid>=size) break;
@@ -1460,12 +1460,14 @@ void CudaMergeVector<T>::free() {
     num_frames_decoded_++;
     if (num_frames_decoded_) {
       cur_toks_->copy_size_to_host(0);
-      cudaStreamSynchronize(0);
+      cudaStreamSynchronize(stream_comp);
       size_t tmp_len;
+      assert(cur_toks_->size());
       cub::DeviceScan::ExclusiveSum(NULL, tmp_len, 
         tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
       cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
         tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
+      cudaCheckError();
       if (verbose>3) {
         int* tmp_h;
         cudaMallocHost((void**)&tmp_h,sizeof(int)*10); 
