@@ -619,19 +619,19 @@ template<typename T>
     PUSH_RANGE("PreProcessTokens",0)
     //before reset, we should update tid2arc_d for the next frame
     num_frames_decoded_++;
-      cudaStreamSynchronize(stream_comp);
-      assert(cur_toks_.size());
-      //if (verbose>4) {
-      //  int * tmp;
-      //cudaMallocHost((void**)&tmp,10*sizeof(int)); 
-      //cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
+      //cudaStreamSynchronize(stream_comp);
+      //assert(cur_toks_.size());
+      ////if (verbose>4) {
+      ////  int * tmp;
+      ////cudaMallocHost((void**)&tmp,10*sizeof(int)); 
+      ////cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
+      ////cudaCheckError();
+      ////KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
+      ////cudaFree(tmp);
+      ////}
+      //cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+      //  tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size()+1, stream_comp);
       //cudaCheckError();
-      //KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
-      //cudaFree(tmp);
-      //}
-      cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size()+1, stream_comp);
-      cudaCheckError();
       //if (verbose>4) {
       //  int * tmp;
       //cudaMallocHost((void**)&tmp,10*sizeof(int)); 
@@ -692,9 +692,6 @@ template<typename T>
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
       lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate));
-      const uint32_t* arc_offset=params.e_offsets;
-      params.tok2scansum_numarc[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
-        -arc_offset[nextstate];
     }
 
     return cur_tok;  
@@ -914,16 +911,19 @@ template<typename T>
     nvtxRangePop();
   }
 
-  //structs to hold kernel parameters.  Large numbers of parameters can slow down launch latency which matters when we are launching very short kernels
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void findBestCutoff_tid2arc_function(processTokens_params params) {
+  inline DEVICE void findBestCutoff_function(processTokens_params params) {
+    typedef CudaDecoder::TokenState TokenState;
+    typedef CudaDecoder::Token Token; 
+    typedef CudaDecoder::StateId StateId;
+    typedef CudaDecoder::CostType CostType;
 
     int threadIdxy = threadIdx.x / blockDimx;
 
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
-    CostType local_cutoff = INFINITY;
+    CudaDecoder::CostType local_cutoff = INFINITY;
     int32 size = params.prev_toks.size(); 
 
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
@@ -941,7 +941,6 @@ template<typename T>
       StateId state = ts.state;
 
       uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
-      assert(params.tok2scansum_numarc[i+1]-params.tok2scansum_numarc[i]==finish-start);
       
       int32 ilabel, ilabel_next;
 
@@ -962,14 +961,10 @@ template<typename T>
         BaseFloat acoustic_cost = -params.loglikelihoods[ilabel]; //TODO can I prefetch this?
         CostType weight = params.arc_weights[j];
         
-        CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
+        CudaDecoder::CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
 
         if(total_cost<local_cutoff)
           local_cutoff = total_cost;
-        int arc_i=j-start;
-        int idx=params.tok2scansum_numarc[i]+arc_i;
-        params.tid2arc[idx]=j;
-        params.tid2tok[idx]=i;
       }
     }
 
@@ -978,7 +973,6 @@ template<typename T>
       atomicMin(params.cutoff, local_cutoff);
     }
   }
-
 
 DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
@@ -994,67 +988,85 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
 
   //blockDim.x threads per token
-  //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
-  inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
+  inline DEVICE void processEmittingTokens_function(processTokens_params params) {
+    typedef CudaDecoder::TokenState TokenState;
+    typedef CudaDecoder::Token Token; 
+    typedef CudaDecoder::StateId StateId;
+    typedef CudaDecoder::CostType CostType;
+    typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
     int threadIdxy = threadIdx.x / blockDimx;
-    int tid=blockIdx.x*blockDimx+threadIdx.x;
+    
+    auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     CostType cutoff=*params.cutoff;
-    assert(params.prev_toks.size());
-    int32 size = params.tok2scansum_numarc[params.prev_toks.size()];
-    __grid_sync_nv_internal(params.barrier);
+    int32 size = params.prev_toks.size();
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
-    if(tid==0) { //thread 0 nominated to get new token
-      if (params.verbose>3) {
-        printf("E: %i %i\n", size, params.prev_toks.size());
-      }
-      assert(size<=params.max_arcs_per_frame_search);
-      assert(params.tid2tok[size-1]<=params.prev_toks.size()-1);
-    }
     while(true) {
+      int i;
+      if(group.thread_rank()==0) { //thread 0 nominated to get new token
+        i=atomicAdd(params.pe_idx,1);      //get token index
+        if (params.verbose>3 && i%1000==0) {
+          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
+        }
+      }
+      i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
-      if(tid>=size) break;
-      int j=params.tid2arc[tid];
-      int i=params.tid2tok[tid];
-      TokenState& ts = params.prev_toks[i];
+      if(i>=size) break;
+
+      TokenState ts = params.prev_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
 
-      int32 ilabel=params.arc_ilabels[j];  //prefetch ilabel since it leads to a dependent load
-      BaseFloat acoustic_cost = -params.loglikelihoods[ilabel];  //TODO can I prefetch this?  
-      BaseFloat weight = params.arc_weights[j];
-      StateId nextstate = params.arc_nextstates[j];
+      uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
+      int32 ilabel, ilabel_next;  //prefetch ilabel since it leads to a dependent load
 
-      CostType total_cost = tok->cost_ + weight + acoustic_cost;
+      int j=start+group.thread_rank();
 
-      if(total_cost<=cutoff) 
-      {
-        Token next_tok =  Token(acoustic_cost+weight, tok, j);
+      if(j<finish) {
+        ilabel_next = params.arc_ilabels[j];
+      }
+      int nextj;
+
+      for(j;j<finish;j=nextj) {
+        nextj = j+blockDimx;
+
+        ilabel = ilabel_next;
+
+        if(nextj<finish) {
+          ilabel_next = params.arc_ilabels[nextj];
+        }
+        BaseFloat acoustic_cost = -params.loglikelihoods[ilabel];  //TODO can I prefetch this?  
+        BaseFloat weight = params.arc_weights[j];
+        StateId nextstate = params.arc_nextstates[j];
+
+        CostType total_cost = tok->cost_ + weight + acoustic_cost;
+
+        if(total_cost<=cutoff) 
+        {
+      Token next_tok =  Token(acoustic_cost+weight, tok, j);
         TokenState *next_ts=NULL;
         Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
           acoustic_cost, &ts);
-        
-        volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
+          volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
-        while(*cur_tokv < next_tok) {   //check if we need to update
-        acquire_semaphore((int*)&params.token_locks[nextstate]);
-            if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
+          while(*cur_tokv < next_tok) {   //check if we need to update
+          acquire_semaphore((int*)&params.token_locks[nextstate]);
+              if(*cur_tokv < next_tok) {                                                                          //recheck if we are min
+                
+                if(sizeof(Token)==16)
+                  store16(cur_tok,&next_tok);                                                                       //update token
+                else
+                  *cur_tok=next_tok;
 
-              //if(sizeof(Token)==16)
-              //  store16(cur_tok,&next_tok);                                                                       //update token
-              //else
-              *cur_tok=next_tok;
-              //cur_tok->cost_=next_tok.cost_;
-            }
-            release_semaphore((int*)&params.token_locks[nextstate]);
-            break;                                                                                              //exit loop as our update is done
-        } //end while
-      } //end total_cost<=cutoff
-      tid+=blockDimx*gridDim.x;
+              }
+              release_semaphore((int*)&params.token_locks[nextstate]);
+              break;                                                                                              //exit loop as our update is done
+          } //end while
+        } //end total_cost<=cutoff
+      } //end arc loop
     } //end token loop
   }
-
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
     
@@ -1155,7 +1167,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     int p=0;
 
-    findBestCutoff_tid2arc_function<32,2>(params);
+    findBestCutoff_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
    
