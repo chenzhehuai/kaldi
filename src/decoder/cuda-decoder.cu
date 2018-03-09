@@ -565,6 +565,7 @@ template<typename T>
     cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
         tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
     cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
+    cudaMemset(tok2scansum_numarc_d,0,sizeof(int)*config.max_tokens_per_frame);
 
     cudaStreamSynchronize(stream_comp);
     cudaStreamSynchronize(stream_copy);
@@ -619,19 +620,19 @@ template<typename T>
     PUSH_RANGE("PreProcessTokens",0)
     //before reset, we should update tid2arc_d for the next frame
     num_frames_decoded_++;
-      cudaStreamSynchronize(stream_comp);
-      assert(cur_toks_.size());
-      //if (verbose>4) {
-      //  int * tmp;
-      //cudaMallocHost((void**)&tmp,10*sizeof(int)); 
-      //cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
-      //cudaCheckError();
-      //KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
-      //cudaFree(tmp);
-      //}
-      cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size()+1, stream_comp);
+      //cudaStreamSynchronize(stream_comp);
+      //assert(cur_toks_.size());
+      if (verbose>4) {
+        int * tmp;
+      cudaMallocHost((void**)&tmp,10*sizeof(int)); 
+      cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
       cudaCheckError();
+      KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
+      cudaFree(tmp);
+      }
+      //cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
+      //  tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size()+1, stream_comp);
+      //cudaCheckError();
       //if (verbose>4) {
       //  int * tmp;
       //cudaMallocHost((void**)&tmp,10*sizeof(int)); 
@@ -691,10 +692,20 @@ template<typename T>
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate));
       const uint32_t* arc_offset=params.e_offsets;
-      params.tok2scansum_numarc[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
+      int tokid=params.cur_toks.push_back(TokenState(cur_tok,nextstate));
+      if (tokid==0) {
+      params.tok2scansum_numarc[tokid]=arc_offset[nextstate+1]
         -arc_offset[nextstate];
+        __threadfence();
+      } else {
+        volatile int& lacc=params.tok2scansum_numarc[tokid-1];
+        while (lacc==0);
+        params.tok2scansum_numarc[tokid]=arc_offset[nextstate+1]
+        -arc_offset[nextstate]+lacc;
+        __threadfence();
+      }
+      lookup_elem.tokenstate_idx=tokid;
     }
 
     return cur_tok;  
@@ -926,6 +937,7 @@ template<typename T>
     CostType local_cutoff = INFINITY;
     int32 size = params.prev_toks.size(); 
 
+    
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) { 
       int i;
@@ -941,7 +953,7 @@ template<typename T>
       StateId state = ts.state;
 
       uint32_t start=params.e_offsets[state], finish=params.e_offsets[state+1];
-      assert(params.tok2scansum_numarc[i+1]-params.tok2scansum_numarc[i]==finish-start);
+      assert(i==0||params.tok2scansum_numarc[i]-params.tok2scansum_numarc[i-1]==finish-start);
       
       int32 ilabel, ilabel_next;
 
@@ -967,7 +979,7 @@ template<typename T>
         if(total_cost<local_cutoff)
           local_cutoff = total_cost;
         int arc_i=j-start;
-        int idx=params.tok2scansum_numarc[i]+arc_i;
+        int idx=i==0?arc_i:params.tok2scansum_numarc[i-1]+arc_i;
         params.tid2arc[idx]=j;
         params.tid2tok[idx]=i;
       }
@@ -1002,8 +1014,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     CostType cutoff=*params.cutoff;
     assert(params.prev_toks.size());
-    int32 size = params.tok2scansum_numarc[params.prev_toks.size()];
+    int32 size = params.tok2scansum_numarc[params.prev_toks.size()-1];
     __grid_sync_nv_internal(params.barrier);
+    for (;tid<params.prev_toks.size();tid+=blockDimx*gridDim.x) {
+      params.tok2scansum_numarc[tid]=0;
+    }
+    tid=blockIdx.x*blockDimx+threadIdx.x;
+    __grid_sync_nv_internal(params.barrier);
+
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     if(tid==0) { //thread 0 nominated to get new token
       if (params.verbose>3) {
@@ -1158,7 +1176,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     findBestCutoff_tid2arc_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
-   
+  
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
