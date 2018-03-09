@@ -111,13 +111,38 @@ class CudaVector {
       inline void copy_data_to_device(cudaStream_t stream=0);
 
       inline size_t getCudaMallocBytes(); 
-    private:
       
       uint32_t *count_d, *count_h;
       uint32_t max_size;
       T* mem_d, *mem_h;
+private:
+
 };
+
+template<typename T>
+class CudaMergeVector : public CudaVector<T> {
+public:
+  using CudaVector<T>::operator[];
+  using CudaVector<T>::push_back;
+  using CudaVector<T>::size;
+  using CudaVector<T>::count_d;
+  using CudaVector<T>::mem_d;
+  using CudaVector<T>::max_size;
   
+  DEVICE inline void merge(bool clear=true);
+  inline void allocate(uint32_t max_size, int sub_vec_num);
+  DEVICE inline uint32_t push_back(const T &val, const int subid); 
+  inline void free();
+  inline size_t getCudaMallocBytes(); 
+
+  //for arr merge to single; assume create using cudaMallocManaged
+  T* mem_buf_d;
+  int *mem_buf_count_d;
+  int *mem_buf_acc_count_d;
+  int* barrier_;
+  int sub_vec_num;
+};
+ 
 
 struct CudaDecoderConfig {
   BaseFloat beam;
@@ -126,13 +151,15 @@ struct CudaDecoderConfig {
   uint32_t max_tokens;
   int verbose;
   uint32_t max_lat_arc_per_frame;
+  int sub_vec_num;
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
                        max_tokens_per_frame(200000),
                        max_tokens(60000000),
                        verbose(0),
-                       max_lat_arc_per_frame(600000)
+                       max_lat_arc_per_frame(600000),
+                       sub_vec_num(1)
                        {}
   
   void Register(OptionsItf *opts) {
@@ -145,7 +172,7 @@ struct CudaDecoderConfig {
     opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
                                                         "  If actual usaged exceeds this the results are undefined.");
     opts->Register("max-lat-arc-per-frame", &max_lat_arc_per_frame, "Total number of lat arc allocated.  ");
-    
+    opts->Register("sub-vec-num", &sub_vec_num, "Total number of sub-vec for token  ");    
   }
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 && max_tokens_per_frame > 0 && max_tokens>0);
@@ -275,10 +302,11 @@ class CudaDecoder {
   struct TokenState;
   struct __align__(16) TokenLookupElem;
   typedef CudaVector<TokenState> TokenVector;
+  typedef CudaMergeVector<TokenState> TokenMergeVector;
   struct processTokens_params {
 
-    CudaDecoder::TokenVector prev_toks;
-    CudaDecoder::TokenVector cur_toks;
+    CudaDecoder::TokenMergeVector prev_toks;
+    CudaDecoder::TokenMergeVector cur_toks;
     CudaDecoder::TokenAllocator allocator;
     CudaDecoder::CostType *cutoff;
 
@@ -308,7 +336,7 @@ class CudaDecoder {
     int *tid2tok;
     int max_arcs_per_frame_search;
     uint64 *clock_buf;
-
+    int sub_vec_num_;
   };
 
 
@@ -337,8 +365,8 @@ class CudaDecoder {
  
 
   //Lists of active tokens to be iterated through
-  TokenVector cur_toks_;
-  TokenVector prev_toks_;
+  TokenMergeVector cur_toks_;
+  TokenMergeVector prev_toks_;
 
   int* tid2arc_d;
   int* tid2tok_d;
@@ -360,7 +388,7 @@ class CudaDecoder {
   int *modified_d;
 
   volatile int *token_locks_d;
-  void ClearToks(TokenVector &toks);
+  void ClearToks(TokenMergeVector &toks);
 
   cudaEvent_t event_pt, event_pt_old, event_ll;
   cudaStream_t stream_comp, stream_copy, stream_ll;

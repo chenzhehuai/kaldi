@@ -73,6 +73,7 @@ namespace kaldi {
   typedef CudaDecoder::CostType CostType;
   typedef CudaDecoder::TokenLookupElem TokenLookupElem;
   typedef CudaDecoder::TokenVector TokenVector;
+  typedef CudaDecoder::CudaMergeVector TokenMergeVector;
   typedef CudaDecoder::processTokens_params processTokens_params;
 
   template <typename T>
@@ -254,6 +255,64 @@ template<typename T>
       std::swap(max_size,v.max_size);
     }
   /**************************************End CudaVector Implementation**********************************/
+template<typename T> 
+DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
+  int tid=threadIdx.x+blockIdx.x*blockDim.x;
+  int idx=tid/(sub_vec_num);
+  int subid=tid%(sub_vec_num);
+  //int subid=threadIdx.x;
+  //int idx=blockIdx.x;
+  int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
+  int batch=blockDim.x*gridDim.x*blockDim.x/(sub_vec_num); 
+  if (rank0) {
+    assert(blockDim.x*gridDim.x%(sub_vec_num)==0);
+    int acc=0;
+    for (int i=0; i<sub_vec_num; i++) {
+      mem_buf_acc_count_d[i]=acc;
+      acc+=(mem_buf_count_d[i]);
+      if (clear) mem_buf_count_d[i]=0;
+    }
+    assert(acc<=max_size);
+    *count_d=acc;
+  }
+  __grid_sync_nv_internal(barrier_);
+  int sz = mem_buf_acc_count_d[subid+1]-mem_buf_acc_count_d[subid];
+  for(; idx < sz; idx += batch) {
+    memcpy(mem_d+(idx+mem_buf_acc_count_d[subid]),mem_buf_d+(subid*(max_size/(sub_vec_num))+tid),sizeof(T));
+  }    
+}
+
+  template<typename T> 
+    DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, const int subid) { 
+      int size=max_size/sub_vec_num;
+      uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
+      assert(idx<size);
+      mem_buf_d[subid*size+idx]=val; 
+      return idx;
+    }
+
+  template<typename T>
+    inline void CudaMergeVector<T>::allocate(uint32_t max_size, int sub_vec_num) {
+      CudaVector<T>::allocate(max_size);
+
+      this->sub_vec_num=sub_vec_num;
+      cudaMalloc(&mem_buf_d,sizeof(T)*max_size);
+      cudaMalloc(&mem_buf_count_d,sizeof(int)*sub_vec_num);
+      cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*sub_vec_num);
+      cudaMalloc(&barrier_,sizeof(int)*1);
+    }
+
+  template<typename T>
+    inline size_t CudaMergeVector<T>::getCudaMallocBytes() {
+      return CudaVector<T>::getCudaMallocBytes()+
+        sizeof(uint32_t)*(1+2*sub_vec_num)+max_size*sizeof(T);
+    }
+
+  template<typename T>
+    inline void CudaMergeVector<T>::free() { 
+      CudaVector<T>::free();
+
+    }
 
   /***************************************CudaFst Implementation*****************************************/
   HOST DEVICE inline float CudaFst::Final(StateId state) const {
@@ -417,7 +476,7 @@ template<typename T>
      }
   }
 
-  DEVICE inline void allocateNewTokens_function(CudaDecoder::TokenLookupElem *current_tokens_lookup, CudaDecoder::TokenVector cur_toks, CudaDecoder::TokenAllocator allocator) {
+  DEVICE inline void allocateNewTokens_function(CudaDecoder::TokenLookupElem *current_tokens_lookup, CudaDecoder::TokenMergeVector cur_toks, CudaDecoder::TokenAllocator allocator) {
     int32 size = cur_toks.size();
     for(int i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
       Token *token = allocator.getToken(i);
@@ -521,9 +580,10 @@ template<typename T>
     allocator.initialize(config.max_tokens);
 
     bytes_cudaMallocManaged+=allocator.getCudaMallocManagedBytes();
-    cur_toks_.allocate(config.max_tokens_per_frame);
-    prev_toks_.allocate(config.max_tokens_per_frame);
+    cur_toks_.allocate(config.max_tokens_per_frame, config.sub_vec_num);
+    prev_toks_.allocate(config.max_tokens_per_frame, config.sub_vec_num);
     bytes_cudaMalloc+=cur_toks_.getCudaMallocBytes()+prev_toks_.getCudaMallocBytes();
+    sub_vec_num_=config.sub_vec_num;
 
     cudaEventCreateWithFlags(&event_pt,cudaEventDisableTiming);
     cudaEventCreateWithFlags(&event_pt_old,cudaEventDisableTiming);
@@ -697,7 +757,7 @@ template<typename T>
 
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts) {
+    TokenState* ts, int subid, bool use_sub) {
     //TokenLookupElem lookup_elem;
     //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
@@ -705,7 +765,9 @@ template<typename T>
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate));
+      lookup_elem.tokenstate_idx=use_sub? params.cur_toks.push_back(
+        TokenState(cur_tok,nextstate),subid) : 
+        params.cur_toks.push_back(TokenState(cur_tok,nextstate));
     }
 
     return cur_tok;  
@@ -713,7 +775,7 @@ template<typename T>
 
   __global__ void addOneToken(processTokens_params params, CudaDecoder::StateId state) {
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL);
+      0, NULL,0,false);
     Token tok(0, NULL, 0);
     *cur_tok = tok;
   }
@@ -1061,7 +1123,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       Token next_tok =  Token(acoustic_cost+weight, tok, j);
         TokenState *next_ts=NULL;
         Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-          acoustic_cost, &ts);
+          acoustic_cost, &ts, (i+j)%sub_vec_num_,true);
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
@@ -1080,6 +1142,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
         } //end total_cost<=cutoff
       } //end arc loop
     } //end token loop
+    __grid_sync_nv_internal(params.barrier);
+    params.cur_toks.merge();
   }
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
@@ -1115,7 +1179,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         if (next_tok.cost_ <= cutoff) {
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts);
+            0, &ts, 0, false);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
@@ -1342,7 +1406,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     nvtxRangePop();
   }
 
-  void CudaDecoder::ClearToks(TokenVector &toks) {
+  void CudaDecoder::ClearToks(TokenMergeVector &toks) {
     //cannot acctually delete tokens as they may still be connected to active tokens
     toks.clear(stream_comp);
   }
