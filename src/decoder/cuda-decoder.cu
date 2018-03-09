@@ -263,7 +263,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
   //int subid=threadIdx.x;
   //int idx=blockIdx.x;
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
-  int batch=blockDim.x*gridDim.x*blockDim.x/(sub_vec_num); 
+  int batch=blockDim.x*gridDim.x/(sub_vec_num); 
   if (rank0) {
     assert(blockDim.x*gridDim.x%(sub_vec_num)==0);
     int acc=0;
@@ -285,11 +285,10 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
 
   template<typename T> 
     DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, const int subid) { 
-      int size=max_size/sub_vec_num;
-      assert(subid<sub_vec_num);
+      //assert(subid<sub_vec_num);
       uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
-      assert(idx<size);
-      mem_buf_d[subid*size+idx]=val; 
+      //assert(idx<sub_size);
+      mem_buf_d[subid*sub_size+idx]=val; 
       return idx;
     }
 
@@ -298,6 +297,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
       CudaVector<T>::allocate(max_size);
 
       this->sub_vec_num=sub_vec_num;
+      sub_size=max_size/sub_vec_num;
       cudaMalloc(&mem_buf_d,sizeof(T)*max_size);
       cudaMalloc(&mem_buf_count_d,sizeof(int)*(sub_vec_num+1));
       cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*(1+sub_vec_num));

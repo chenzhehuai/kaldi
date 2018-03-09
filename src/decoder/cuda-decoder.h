@@ -141,6 +141,7 @@ public:
   int *mem_buf_acc_count_d;
   int* barrier_;
   int sub_vec_num;
+  int sub_size;
 };
  
 
