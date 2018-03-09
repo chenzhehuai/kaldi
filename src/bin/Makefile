@@ -6,7 +6,7 @@ include ../kaldi.mk
 
 LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
-LDLIBS += -lnvToolsExt -lcuda 
+LDLIBS += -lnvToolsExt -lcuda
 
 BINFILES = align-equal align-equal-compiled acc-tree-stats \
         show-alignments compile-questions cluster-phones \

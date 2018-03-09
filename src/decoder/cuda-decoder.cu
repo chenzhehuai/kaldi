@@ -67,6 +67,14 @@ const int num_colors = sizeof(colors)/sizeof(uint32_t);
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 namespace kaldi {
 
+  typedef CudaDecoder::Token Token;
+  typedef CudaDecoder::StateId StateId;
+  typedef CudaDecoder::TokenState TokenState;
+  typedef CudaDecoder::CostType CostType;
+  typedef CudaDecoder::TokenLookupElem TokenLookupElem;
+  typedef CudaDecoder::TokenVector TokenVector;
+  typedef CudaDecoder::processTokens_params processTokens_params;
+
   template <typename T>
   DEVICE __forceinline__ void load16(T *a, const T *b) {
     const ulong2 *src = reinterpret_cast<const ulong2*>(b);
@@ -214,9 +222,9 @@ template<typename T>
     }
 
   template<typename T> 
-    HOST DEVICE inline void CudaVector<T>::push_back(const T &val) { 
+    HOST DEVICE inline uint32_t CudaVector<T>::push_back(const T &val) { 
 #ifdef __CUDA_ARCH__
-      //assert(*count_d<max_size);
+      assert(*count_d<max_size);
       uint32_t idx = atomicAdd(count_d,1);
       mem_d[idx]=val; 
 #else
@@ -224,6 +232,7 @@ template<typename T>
       uint32_t idx = (*count_h)++;
       mem_h[idx]=val; 
 #endif
+      return idx;
     }
   template<typename T> 
     HOST DEVICE inline void CudaVector<T>::clear(cudaStream_t stream) { 
@@ -411,11 +420,11 @@ template<typename T>
   DEVICE inline void allocateNewTokens_function(CudaDecoder::TokenLookupElem *current_tokens_lookup, CudaDecoder::TokenVector cur_toks, CudaDecoder::TokenAllocator allocator) {
     int32 size = cur_toks.size();
     for(int i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
-      CudaDecoder::Token *token = allocator.getToken(i);
+      Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
       token->prev_ = NULL;
-      CudaDecoder::StateId state=cur_toks[i].state;
-      CudaDecoder::TokenLookupElem elem;
+      StateId state=cur_toks[i].state;
+      TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
       elem.tokenstate_idx=-1;
@@ -610,19 +619,27 @@ template<typename T>
     PUSH_RANGE("PreProcessTokens",0)
     //before reset, we should update tid2arc_d for the next frame
     num_frames_decoded_++;
-    if (num_frames_decoded_) {
-      //cudaStreamSynchronize(stream_comp);
-      //size_t tmp_len;
-      //assert(cur_toks_->size());
-      //cub::DeviceScan::ExclusiveSum(NULL, tmp_len, 
-      //  tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1);
-      //cudaMalloc((void**)&d_temp_storage,tmp_len); 
-      //cub::DeviceScan::ExclusiveSum(d_temp_storage, tmp_len, 
+      cudaStreamSynchronize(stream_comp);
+      assert(cur_toks_.size());
+      //if (verbose>4) {
+      //  int * tmp;
+      //cudaMallocHost((void**)&tmp,10*sizeof(int)); 
+      //cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
+      //cudaCheckError();
+      //KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
+      //cudaFree(tmp);
+      //}
       cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_->size()+1, stream_comp);
-      //cudaFree(d_temp_storage);
+        tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size()+1, stream_comp);
       cudaCheckError();
-    }
+      //if (verbose>4) {
+      //  int * tmp;
+      //cudaMallocHost((void**)&tmp,10*sizeof(int)); 
+      //cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
+      //KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
+      //cudaFree(tmp);
+      //cudaCheckError();
+      //}
 
 #ifndef MEMADVISE
       //no need to prefetch if we have done a memadvise
@@ -674,7 +691,7 @@ template<typename T>
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate,total_cost));
+      lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate));
       const uint32_t* arc_offset=params.e_offsets;
       params.tok2scansum_numarc[lookup_elem.tokenstate_idx]=arc_offset[nextstate+1]
         -arc_offset[nextstate];
@@ -683,12 +700,11 @@ template<typename T>
     return cur_tok;  
   }
 
-  __global__ void addOneToken(CudaDecoder::TokenLookupElem *current_tokens_lookup,  CudaDecoder::TokenVector cur_toks, CudaDecoder::Token tok, CudaDecoder::StateId state) {
-
-    CudaDecoder::TokenLookupElem elem = current_tokens_lookup[state];
-    *elem.token = tok;
-    current_tokens_lookup[state].active = true;
-    cur_toks.push_back(CudaDecoder::TokenState(elem.token,state));   //add token to current token list 
+  __global__ void addOneToken(processTokens_params params, CudaDecoder::StateId state) {
+    Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
+      0, NULL);
+    Token tok(0, NULL, 0);
+    *cur_tok = tok;
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -698,6 +714,7 @@ template<typename T>
 
   void CudaDecoder::InitDecoding() {
     printf("CUDA DECODER InitDecoding\n");
+    PUSH_RANGE("InitDecoding",1)
     // clean up from last time:
     ClearToks(cur_toks_);
     ClearToks(prev_toks_);
@@ -716,9 +733,9 @@ template<typename T>
     KALDI_ASSERT(start_state != fst::kNoStateId);
 
     cudaCheckError();
-    Token tok(StdWeight::One().Value(), NULL, 0);
-    //Token tok(StdWeight::One().Value(),0, NULL, 0);
-    addOneToken<<<1,1,0,stream_comp>>>(current_tokens_lookup_d, cur_toks_, tok, start_state);
+    processTokens_params params;
+    initParams(params);
+    addOneToken<<<1,1,0,stream_comp>>>(params, start_state);
     cudaCheckError();
 
     initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
@@ -726,54 +743,8 @@ template<typename T>
     num_frames_decoded_ = 0;
     ProcessNonemitting();
 
-  }
-
-  void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
-      int32 max_num_frames) {
-    printf("AdvanceDecoding\n");
-
-    nvtxRangePushA("AdvanceDecoding");
-    KALDI_ASSERT(num_frames_decoded_ >= 0 &&
-        "You must call InitDecoding() before AdvanceDecoding()");
-    int32 num_frames_ready = decodable->NumFramesReady();
-    // num_frames_ready must be >= num_frames_decoded, or else
-    // the number of frames ready must have decreased (which doesn't
-    // make sense) or the decodable object changed between calls
-    // (which isn't allowed).
-    KALDI_ASSERT(num_frames_ready >= num_frames_decoded_);
-    int32 target_frames_decoded = num_frames_ready;
-    if (max_num_frames >= 0)
-      target_frames_decoded = std::min(target_frames_decoded,
-          num_frames_decoded_ + max_num_frames);
-
-    ComputeLogLikelihoods(decodable);
-
-    int threads=64;
-    int blocks=DIV_ROUND_UP(total_threads,threads);
-    
-    while (num_frames_decoded_ < target_frames_decoded) {
-
-      if (verbose > 4) KALDI_LOG << num_frames_decoded_<<std::endl;
-#ifndef MEMADVISE
-      //no need to prefetch if we have done a memadvise
-      allocator.prefetch_next_to_device(cudaStreamPerThread);
-#endif
-
-      cur_toks_.swap(prev_toks_);
-      
-      ProcessTokens();
-      
-      //computes log likelihoods for the next frame
-      ComputeLogLikelihoods(decodable);
-      
-    }   
-    
-
-    cur_toks_.copy_all_to_host(stream_comp);
-    cudaStreamSynchronize(stream_comp);
-
-    printf("AdvanceDecoding Done\n");
-    nvtxRangePop();
+    cur_toks_.copy_size_to_host(stream_comp); //for PreProcessTokens
+    POP_RANGE
   }
 
   bool CudaDecoder::ReachedFinal() const {
@@ -944,41 +915,6 @@ template<typename T>
   }
 
   //structs to hold kernel parameters.  Large numbers of parameters can slow down launch latency which matters when we are launching very short kernels
-  struct processTokens_params {
-
-    CudaDecoder::TokenVector prev_toks;
-    CudaDecoder::TokenVector cur_toks;
-    CudaDecoder::TokenAllocator allocator;
-    CudaDecoder::CostType *cutoff;
-
-    //never change
-    const __restrict__ uint32_t *e_offsets;
-    const __restrict__ uint32_t *ne_offsets;
-    const __restrict__ int32 *arc_ilabels;
-    const __restrict__ int32 *arc_olabels; 
-    const __restrict__ BaseFloat *arc_weights;
-    const __restrict__ CudaDecoder::StateId *arc_nextstates;
-    const __restrict__ BaseFloat *loglikelihoods;
-    CudaDecoder::TokenLookupElem *current_tokens_lookup;
-    volatile int *token_locks;
-    BaseFloat beam;
-    volatile int *modified;
-    int *pe_idx;
-    int *ne_idx;
-    int *fb_idx;
-    int *barrier;
-
-    //debug
-    int verbose;
-    int frame;
-
-    int *tok2scansum_numarc;
-    int *tid2arc;
-    int *tid2tok;
-    int max_arcs_per_frame_search;
-
-  };
-
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
   inline DEVICE void findBestCutoff_tid2arc_function(processTokens_params params) {
@@ -1094,7 +1030,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
       if(total_cost<=cutoff) 
       {
-        Token next_tok =  Token(acoustic_cost+weight, tok);
+        Token next_tok =  Token(acoustic_cost+weight, tok, j);
         TokenState *next_ts=NULL;
         Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
           acoustic_cost, &ts);
@@ -1108,9 +1044,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
               //if(sizeof(Token)==16)
               //  store16(cur_tok,&next_tok);                                                                       //update token
               //else
-              //  *cur_tok=next_tok;
-              cur_tok->cost_=next_tok.cost_;
-              cur_tok->frame=params.frame;
+              *cur_tok=next_tok;
+              //cur_tok->cost_=next_tok.cost_;
             }
             release_semaphore((int*)&params.token_locks[nextstate]);
             break;                                                                                              //exit loop as our update is done
@@ -1146,7 +1081,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
-        Token next_tok = Token(weight, tok);
+        Token next_tok = Token(weight, tok, j);
 
         CostType total_cost = tok->cost_ + weight;
 
@@ -1161,8 +1096,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {
-                cur_tok->cost_=next_tok.cost_;
-                cur_tok->frame=params.frame;
+                //cur_tok->cost_=next_tok.cost_;
+                *cur_tok=next_tok;
                 (*modified) = true;                                                                            //mark as updated
               }
             release_semaphore((int*)&params.token_locks[nextstate]);
@@ -1170,6 +1105,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
           } //end try update loop
         }
       }
+    }
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1357,7 +1293,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     cudaEventSynchronize(event_pt); //throttle
     cudaEventRecord(event_pt,stream_comp);
 
-    num_frames_decoded_++;
+
+    cur_toks_.copy_size_to_host(stream_comp); //for PreProcessTokens
 
     nvtxRangePop();
   }

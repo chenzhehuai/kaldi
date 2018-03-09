@@ -99,7 +99,7 @@ class CudaVector {
       inline void allocate(uint32_t max_size);
       inline void free();
       HOST DEVICE inline uint32_t size() const; 
-      HOST DEVICE inline void push_back(const T &val); 
+      HOST DEVICE inline uint32_t push_back(const T &val); 
       inline void clear(cudaStream_t stream=0); 
       inline bool empty() const;
       inline void swap(CudaVector<T> &v); 
@@ -205,8 +205,6 @@ class CudaDecoder {
   /// object, but if max_num_frames is >= 0 it will decode no more than
   /// that many frames.  If it returns false, then no tokens are alive,
   /// which is a kind of error state.
-  void AdvanceDecoding(DecodableInterface *decodable,
-                         int32 max_num_frames = -1);
   
   /// Returns the number of frames already decoded.  
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
@@ -272,9 +270,51 @@ class CudaDecoder {
   // ProcessEmitting decodes the frame num_frames_decoded_ of the
   // decodable object, then increments num_frames_decoded_.
   //void ProcessEmitting(DecodableInterface *decodable);
+  //
+
+  struct TokenState;
+  struct __align__(16) TokenLookupElem;
+  typedef CudaVector<TokenState> TokenVector;
+  struct processTokens_params {
+
+    CudaDecoder::TokenVector prev_toks;
+    CudaDecoder::TokenVector cur_toks;
+    CudaDecoder::TokenAllocator allocator;
+    CudaDecoder::CostType *cutoff;
+
+    //never change
+    const __restrict__ uint32_t *e_offsets;
+    const __restrict__ uint32_t *ne_offsets;
+    const __restrict__ int32 *arc_ilabels;
+    const __restrict__ int32 *arc_olabels; 
+    const __restrict__ BaseFloat *arc_weights;
+    const __restrict__ CudaDecoder::StateId *arc_nextstates;
+    const __restrict__ BaseFloat *loglikelihoods;
+    CudaDecoder::TokenLookupElem *current_tokens_lookup;
+    volatile int *token_locks;
+    BaseFloat beam;
+    volatile int *modified;
+    int *pe_idx;
+    int *ne_idx;
+    int *fb_idx;
+    int *barrier;
+
+    //debug
+    int verbose;
+    int frame;
+
+    int *tok2scansum_numarc;
+    int *tid2arc;
+    int *tid2tok;
+    int max_arcs_per_frame_search;
+
+  };
+
 
   void ProcessNonemitting();
   void ProcessTokens();
+  void PreProcessTokens();
+  void initParams(processTokens_params& params);
  
   //struct to hold pre-allocated tokens (one per state)
   struct __align__(16) TokenLookupElem{
@@ -294,7 +334,6 @@ class CudaDecoder {
     HOST DEVICE inline TokenState () : token(NULL) {};
   };
  
-  typedef CudaVector<TokenState> TokenVector;
 
   //Lists of active tokens to be iterated through
   TokenVector cur_toks_;
