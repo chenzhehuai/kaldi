@@ -336,7 +336,7 @@ class CudaDecoder {
     int *tid2tok;
     int max_arcs_per_frame_search;
     uint64 *clock_buf;
-    int sub_vec_num_;
+    int sub_vec_num;
   };
 
 
@@ -374,6 +374,7 @@ class CudaDecoder {
   void* d_temp_storage;
   size_t temp_storage_bytes;
   uint64* clock_buf_d;
+  int sub_vec_num_;
 
   const CudaFst fst_;
 
