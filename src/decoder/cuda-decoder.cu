@@ -565,6 +565,8 @@ template<typename T>
     cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
         tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
     cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
+    cudaMalloc((void**)&clock_buf_d,sizeof(int)*100); 
+    cudaMemset(clock_buf_d,0,sizeof(int)*100);
 
     cudaStreamSynchronize(stream_comp);
     cudaStreamSynchronize(stream_copy);
@@ -579,6 +581,17 @@ template<typename T>
   CudaDecoder::~CudaDecoder() {
 
     printf("CUDA DECODER DESTRUCTOR\n");
+
+    if (verbose>1) {
+      int t[20];
+      cudaMemcpy(t,clock_buf_d,sizeof(t),cudaMemcpyDeviceToHost);
+      cudaDeviceProp prop;
+      int device;
+      cudaGetDevice(&device);
+      cudaGetDeviceProperties(&prop, device);
+      for (int i=0;i<sizeof(t)/sizeof(int);i++) std::cout<<1.0/prop.clockRate*t[i]<<" ";
+      std::cout<<"\n";
+    }
 
     cur_toks_.free();
     prev_toks_.free();
@@ -603,6 +616,7 @@ template<typename T>
     cudaFree(tid2arc_d);
     cudaFree(tok2scansum_numarc_d);
     cudaFree(d_temp_storage);
+    cudaFree(clock_buf_d);
 
 
     cudaEventDestroy(event_pt);
@@ -1166,10 +1180,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     int p=0;
+    int cnt_c=0;
+    int t[20];
+    t[cnt_c]=clock();
 
     findBestCutoff_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
+    if (rank0&&params.verbose>1) { t[cnt_c+1]=clock()-t[cnt_c];cnt_c++;}
    
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
@@ -1179,6 +1197,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     processEmittingTokens_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
+    if (rank0&&params.verbose>1) { t[cnt_c+1]=clock()-t[cnt_c];cnt_c++;}
   
     int tok_E;
     if (rank0&&params.verbose>2&&params.frame%10==0) 
@@ -1204,6 +1223,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
 
     } while ((*modified0)==true);
+    if (rank0&&params.verbose>1) { t[cnt_c+1]=clock()-t[cnt_c];cnt_c++;}
 
     int itv = params.verbose>2? 1: 10;
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
@@ -1220,9 +1240,15 @@ DEVICE void acquire_semaphore(volatile int *lock){
     }
     
     __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
+    if (rank0&&params.verbose>1) { t[cnt_c+1]=clock()-t[cnt_c];cnt_c++;}
     
     if(rank0) {
       params.allocator.advanceFront(params.cur_toks.size());
+    }
+    if (rank0&&params.verbose>1) { 
+      for (int k=0; k<cnt_c;k++) {
+        params.clock_buf[k]+=t[k];
+      }
     }
   }
 
@@ -1276,6 +1302,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     params.tid2tok=tid2tok_d;
     params.tok2scansum_numarc=tok2scansum_numarc_d;
+    params.clock_buf=clock_buf_d;
     params.tid2arc=tid2arc_d;
     params.max_arcs_per_frame_search=max_arcs_per_frame_search_;    
   }
