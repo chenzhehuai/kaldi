@@ -3,8 +3,8 @@ all:
 
 include ../kaldi.mk
 
-LDFLAGS += $(CUDA_LDFLAGS) 
-LDLIBS += $(CUDA_LDLIBS) 
+LDFLAGS += $(CUDA_LDFLAGS) -fopenmp
+LDLIBS += $(CUDA_LDLIBS)  -lnvToolsExt
 CXXFLAGS += -fopenmp
 
 BINFILES = online2-wav-gmm-latgen-faster apply-cmvn-online \
