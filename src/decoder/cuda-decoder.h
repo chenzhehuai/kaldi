@@ -44,6 +44,34 @@ namespace kaldi {
  * Simple Cuda Decoder
  */
 class CudaDecoder;
+//typedef uint64_t uint64_t;
+inline DEVICE uint64_t pack (float cost, int ptr) {
+  assert (!isnan(cost));
+  assert (ptr >= 0 && ptr < 1L<<32);
+  uint32_t i_cost = *(uint32_t *)&cost;
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  else
+    i_cost = i_cost ^ 0x80000000;
+  return (uint64_t)i_cost << 32 | ptr;
+}
+
+// Unpacks a probability.
+inline DEVICE float unpack_cost (uint64_t packed) {
+  uint32_t i_cost = packed >> 32;
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0x80000000;
+  else
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  return *(float *)&i_cost;
+}
+
+// Unpacks a back-pointer.
+inline DEVICE int unpack_ptr (uint64_t packed) {
+  assert (!(packed & 0x80000000));
+  return packed & 0x7FFFFFFF;
+}
+
 
 class CudaFst {
   public:
@@ -57,6 +85,7 @@ class CudaFst {
     void finalize();
 
     inline uint32_t NumStates() const {  return numStates; }
+    inline uint32_t NumArcs() const {  return numArcs; }
     inline StateId Start() const { return start; }    
     HOST DEVICE inline float Final(StateId state) const;
     size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
@@ -64,6 +93,7 @@ class CudaFst {
     friend class CudaDecoder;
   
     unsigned int numStates;               //total number of states
+    unsigned int numArcs;               //total number of states
     StateId  start;
 
     unsigned int max_ilabel;              //the largest ilabel
@@ -129,13 +159,14 @@ public:
   using CudaVector<T>::mem_d;
   using CudaVector<T>::max_size;
   
-  DEVICE inline void merge(bool clear=true);
+  DEVICE inline void merge(void* undefined, bool clear=true);
   inline void allocate(uint32_t max_size, int sub_vec_num);
-  DEVICE inline uint32_t push_back(const T &val, const int subid); 
+  DEVICE inline uint32_t push_back(const T &val, const uint64 *val_pack, const int subid); 
   inline void free();
   inline size_t getCudaMallocBytes(); 
 
   //for arr merge to single; assume create using cudaMallocManaged
+  uint64** mem_pack_buf_d;
   T* mem_buf_d;
   int *mem_buf_count_d;
   int *mem_buf_acc_count_d;
@@ -259,7 +290,7 @@ class CudaDecoder {
       return cost_ > other.cost_;
     }
   };
-
+  
   //Preallocates tokens and allocates them in a circular buffer.
   //This allows threads to concurrently allocate/deallocate objects quickly in CUDA
   class TokenAllocator {
@@ -338,6 +369,7 @@ class CudaDecoder {
     int max_arcs_per_frame_search;
     uint64 *clock_buf;
     int sub_vec_num;
+    Token* token_per_arc;
   };
 
 
@@ -347,10 +379,10 @@ class CudaDecoder {
   void initParams(processTokens_params& params);
  
   //struct to hold pre-allocated tokens (one per state)
-  struct __align__(16) TokenLookupElem{
+  struct  TokenLookupElem{
     Token *token;     //pointer for that token
     uint32_t active;  //tells if token has activiated or not
-    volatile int32_t tokenstate_idx;     //aligning to 16 bytes
+    uint64_t token_pack;     //aligning to 16 bytes
   };
   
   //token lookup table.  Provides constant time lookup for active tokens.
@@ -368,6 +400,7 @@ class CudaDecoder {
   //Lists of active tokens to be iterated through
   TokenMergeVector cur_toks_;
   TokenMergeVector prev_toks_;
+  Token* token_per_arc_d;
 
   int* tid2arc_d;
   int* tid2tok_d;

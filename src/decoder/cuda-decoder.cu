@@ -255,8 +255,8 @@ template<typename T>
       std::swap(max_size,v.max_size);
     }
   /**************************************End CudaVector Implementation**********************************/
-template<typename T> 
-DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
+template<> 
+DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, bool clear) {
   int tid=threadIdx.x+blockIdx.x*blockDim.x;
   int idx=tid/(sub_vec_num);
   int subid=tid%(sub_vec_num);
@@ -279,16 +279,31 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
   __grid_sync_nv_internal(barrier_);
   int sz = mem_buf_acc_count_d[subid+1]-mem_buf_acc_count_d[subid];
   for(; idx < sz; idx += batch) {
-    memcpy(mem_d+(idx+mem_buf_acc_count_d[subid]),mem_buf_d+(subid*(max_size/(sub_vec_num))+idx),sizeof(T));
+    uint64_t* pack_v=mem_pack_buf_d[(subid*(max_size/(sub_vec_num))+idx)];
+    TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
+    TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
+    memcpy(to_ts,cur_ts,sizeof(TokenState));
+    Token* cur_tok=((Token *)token_per_arc)+unpack_ptr(*pack_v);
+    Token* to_tok=to_ts->token;
+    store16(to_tok, cur_tok);
+    //memcpy(to_tok,cur_tok,sizeof(T));
   }    
 }
 
+template<typename T> 
+DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
+  assert(0);
+}
+
   template<typename T> 
-    DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, const int subid) { 
+    DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, 
+                                    const uint64 *val_pack, const int subid) { 
       //assert(subid<sub_vec_num);
       uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
       //assert(idx<sub_size);
       mem_buf_d[subid*sub_size+idx]=val; 
+      mem_pack_buf_d[subid*sub_size+idx]=val_pack; 
+      mem_d[subid*sub_size+idx]=val; 
       return idx;
     }
 
@@ -298,6 +313,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
 
       this->sub_vec_num=sub_vec_num;
       sub_size=max_size/sub_vec_num;
+      cudaMalloc(&mem_pack_buf_d,sizeof(uint64_t*)*max_size);
       cudaMalloc(&mem_buf_d,sizeof(T)*max_size);
       cudaMalloc(&mem_buf_count_d,sizeof(int)*(sub_vec_num+1));
       cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*(1+sub_vec_num));
@@ -307,7 +323,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
   template<typename T>
     inline size_t CudaMergeVector<T>::getCudaMallocBytes() {
       return CudaVector<T>::getCudaMallocBytes()+
-        sizeof(uint32_t)*(1+2*(1+sub_vec_num))+max_size*sizeof(T);
+        sizeof(uint32_t)*(1+2*(1+sub_vec_num))+max_size*sizeof(uint64_t*);
     }
 
   template<typename T>
@@ -381,6 +397,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
     }
 
     arc_count=e_count+ne_count+1;
+    numArcs=arc_count;
 
     cudaMemcpyAsync(final_d,final_h,sizeof(float)*numStates,cudaMemcpyHostToDevice,cudaStreamPerThread);
     
@@ -466,7 +483,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
       CudaDecoder::TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
-      elem.tokenstate_idx=-1;
+      elem.token_pack=pack(FLT_MAX, 0);
       store16(&current_tokens_lookup[i], &elem);
     }
   }
@@ -488,7 +505,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
-      elem.tokenstate_idx=-1;
+      elem.token_pack=pack(FLT_MAX, 0);
       store16(&current_tokens_lookup[state], &elem);
     }
   }
@@ -619,17 +636,12 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
     cudaMalloc((void**)&loglikelihoods_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
     cudaMalloc((void**)&loglikelihoods_old_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
 
-    cudaMalloc((void**)&tok2scansum_numarc_d,sizeof(int32_t)*(config.max_tokens_per_frame)); 
-    max_arcs_per_frame_search_=config.max_lat_arc_per_frame*10;
-    cudaMalloc((void**)&tid2arc_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
-    cudaMalloc((void**)&tid2tok_d,sizeof(int32_t)*(max_arcs_per_frame_search_)); 
-    d_temp_storage=NULL;
-    cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
-        tok2scansum_numarc_d, tok2scansum_numarc_d, config.max_tokens_per_frame);
-    cudaMalloc((void**)&d_temp_storage,temp_storage_bytes); 
-    cudaMalloc((void**)&clock_buf_d,sizeof(uint64)*100); 
+    cudaMalloc((void**)&clock_buf_d,sizeof(uint64)*100); bytes_cudaMalloc+=sizeof(uint64)*(100);
     cudaMemset(clock_buf_d,0,sizeof(uint64)*100);
 
+    cudaMalloc((void**)&token_per_arc_d,sizeof(Token)*fst.NumArcs()); //temp solution
+    bytes_cudaMalloc+=sizeof(Token)*(fst.NumArcs());
+    
     cudaStreamSynchronize(stream_comp);
     cudaStreamSynchronize(stream_copy);
     cudaStreamSynchronize(cudaStreamPerThread);
@@ -674,11 +686,8 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
     cudaFree(cutoff_d);
     cudaFree(modified_d);
 
-    cudaFree(tid2tok_d);
-    cudaFree(tid2arc_d);
-    cudaFree(tok2scansum_numarc_d);
-    cudaFree(d_temp_storage);
     cudaFree(clock_buf_d);
+    cudaFree(token_per_arc_d);
 
 
     cudaEventDestroy(event_pt);
@@ -759,7 +768,7 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
 
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, int subid, bool use_sub) {
+    TokenState* ts, int subid, bool use_sub, uint64_t **token_pack) {
     //TokenLookupElem lookup_elem;
     //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
@@ -767,10 +776,11 @@ DEVICE inline void CudaMergeVector<T>::merge(bool clear) {
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      lookup_elem.tokenstate_idx=use_sub? params.cur_toks.push_back(
-        TokenState(cur_tok,nextstate),subid) : 
-        params.cur_toks.push_back(TokenState(cur_tok,nextstate));
+      if (use_sub) params.cur_toks.push_back(TokenState(cur_tok,nextstate), 
+        &lookup_elem.token_pack, subid);
+      else params.cur_toks.push_back(TokenState(cur_tok,nextstate));
     }
+    *token_pack=&lookup_elem.token_pack;
 
     return cur_tok;  
   }
@@ -1122,30 +1132,22 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
         if(total_cost<=cutoff) 
         {
-      Token next_tok =  Token(acoustic_cost+weight, tok, j);
-        TokenState *next_ts=NULL;
-        Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-          acoustic_cost, &ts, (i+j)%params.sub_vec_num,true);
-          volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
-
-          while(*cur_tokv < next_tok) {   //check if we need to update
-          acquire_semaphore((int*)&params.token_locks[nextstate]);
-              if(*cur_tokv < next_tok) {                                                                          //recheck if we are min
-                
-                if(sizeof(Token)==16)
-                  store16(cur_tok,&next_tok);                                                                       //update token
-                else
-                  *cur_tok=next_tok;
-
-              }
-              release_semaphore((int*)&params.token_locks[nextstate]);
-              break;                                                                                              //exit loop as our update is done
-          } //end while
+          uint64_t* token_pack;
+          Token next_tok = 
+          TokenState *next_ts=NULL;
+          //get cur_tok&token_pack addr
+          Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
+          acoustic_cost, &ts, (i+j)%params.sub_vec_num,true, &token_pack);
+          //get cur_te&new_token_pack
+          uint64_t new_token_pack=pack(total_cost, j);
+          Token* cur_te=params.token_per_arc+j;
+          store16(cur_te, &(Token(acoustic_cost+weight, tok, j)));
+          atomicMin(token_pack, new_token_pack);
         } //end total_cost<=cutoff
       } //end arc loop
     } //end token loop
     __grid_sync_nv_internal(params.barrier);
-    params.cur_toks.merge();
+    params.cur_toks.merge(params.token_per_arc);
   }
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
@@ -1376,6 +1378,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.tid2arc=tid2arc_d;
     params.max_arcs_per_frame_search=max_arcs_per_frame_search_;    
     params.sub_vec_num=sub_vec_num_;
+    params.token_per_arc=token_per_arc_d;
   }
 
   void CudaDecoder::ProcessTokens() {
