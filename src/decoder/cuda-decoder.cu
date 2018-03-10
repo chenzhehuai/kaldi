@@ -26,6 +26,7 @@
 #include <float.h>
 #include <math.h>
 #include <cooperative_groups.h>
+#include "omp.h"
 
 #define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
@@ -951,16 +952,15 @@ template<typename T>
     }
   }
 
-DEVICE void release_semaphore(volatile int *lock){
+inline DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
   __threadfence();
   }
 
 
-DEVICE void acquire_semaphore(volatile int *lock){
+inline DEVICE void acquire_semaphore(volatile int *lock){
   short cnt=0;
   while (atomicCAS((int *)lock, 0, 1) != 0) {
-    //if (++cnt==0) release_semaphore(lock); //deadlock hack
   }
   }
 

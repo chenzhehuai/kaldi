@@ -39,6 +39,8 @@ class FasterDecoderCuda {
 
   ~FasterDecoderCuda() { }
 
+  const CudaDecoder &Decoder() const { return decoder_; }
+  
   void Decode(DecodableInterface *decodable);
 
   /// GetBestPath gets the decoding traceback. If "use_final_probs" is true
