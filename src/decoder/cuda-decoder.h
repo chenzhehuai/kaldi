@@ -36,7 +36,7 @@
 #include "lat/kaldi-lattice.h"
 #include "itf/decodable-itf.h"
 #include "omp.h"
-
+#include "cuda_runtime.h"
 
 namespace kaldi {
   
@@ -161,7 +161,7 @@ public:
   
   DEVICE inline void merge(void* undefined, bool clear=true);
   inline void allocate(uint32_t max_size, int sub_vec_num);
-  DEVICE inline uint32_t push_back(const T &val, const uint64 *val_pack, const int subid); 
+  DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack, const int subid); 
   inline void free();
   inline size_t getCudaMallocBytes(); 
 

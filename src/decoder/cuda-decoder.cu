@@ -297,7 +297,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
 
   template<typename T> 
     DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, 
-                                    const uint64 *val_pack, const int subid) { 
+                                    uint64 *val_pack, const int subid) { 
       //assert(subid<sub_vec_num);
       uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
       //assert(idx<sub_size);
@@ -483,7 +483,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
       CudaDecoder::TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
-      elem.token_pack=pack(FLT_MAX, 0);
+      elem.token_pack=pack(-FLT_MAX, 0);
       store16(&current_tokens_lookup[i], &elem);
     }
   }
@@ -505,7 +505,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
-      elem.token_pack=pack(FLT_MAX, 0);
+      elem.token_pack=pack(-FLT_MAX, 0);
       store16(&current_tokens_lookup[state], &elem);
     }
   }
@@ -776,18 +776,19 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
     //check if token is active or not.  Double check the lock.
     if(lookup_elem.active==0 && atomicCAS(&lookup_elem.active,0,1)==0) {        //grab sentinal to see who gets to add to cur_toks list
       //if havent seen, add into hash
-      if (use_sub) params.cur_toks.push_back(TokenState(cur_tok,nextstate), 
+      if (use_sub) 
+        params.cur_toks.push_back(TokenState(cur_tok,nextstate), 
         &lookup_elem.token_pack, subid);
       else params.cur_toks.push_back(TokenState(cur_tok,nextstate));
     }
-    *token_pack=&lookup_elem.token_pack;
+      if (use_sub) *token_pack=&lookup_elem.token_pack;
 
     return cur_tok;  
   }
 
   __global__ void addOneToken(processTokens_params params, CudaDecoder::StateId state) {
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL,0,false);
+      0, NULL,0,false, NULL);
     Token tok(0, NULL, 0);
     *cur_tok = tok;
   }
@@ -1133,16 +1134,15 @@ DEVICE void acquire_semaphore(volatile int *lock){
         if(total_cost<=cutoff) 
         {
           uint64_t* token_pack;
-          Token next_tok = 
           TokenState *next_ts=NULL;
           //get cur_tok&token_pack addr
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
           acoustic_cost, &ts, (i+j)%params.sub_vec_num,true, &token_pack);
           //get cur_te&new_token_pack
-          uint64_t new_token_pack=pack(total_cost, j);
+          uint64_t new_token_pack=pack(-total_cost, j);
           Token* cur_te=params.token_per_arc+j;
           store16(cur_te, &(Token(acoustic_cost+weight, tok, j)));
-          atomicMin(token_pack, new_token_pack);
+          atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
         } //end total_cost<=cutoff
       } //end arc loop
     } //end token loop
@@ -1183,7 +1183,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
         if (next_tok.cost_ <= cutoff) {
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, 0, false);
+            0, &ts, 0, false, NULL);
 
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
