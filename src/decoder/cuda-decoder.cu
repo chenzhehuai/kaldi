@@ -256,7 +256,7 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
 template<> 
-DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, bool clear) {
+DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* token_per_arc_update, int num_arcs, bool clear) {
   int tid=threadIdx.x+blockIdx.x*blockDim.x;
   int idx=tid/(sub_vec_num);
   int subid=tid%(sub_vec_num);
@@ -280,10 +280,14 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, bool 
   int sz = mem_buf_acc_count_d[subid+1]-mem_buf_acc_count_d[subid];
   for(; idx < sz; idx += batch) {
     uint64_t* pack_v=mem_pack_buf_d[(subid*(max_size/(sub_vec_num))+idx)];
+    int ptr=unpack_ptr(*pack_v);
+    assert(ptr<num_arcs);
+    if (token_per_arc_update[ptr]) token_per_arc_update[ptr]=0;
+    else continue;
     TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
     TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
     memcpy(to_ts,cur_ts,sizeof(TokenState));
-    Token* cur_tok=((Token *)token_per_arc)+unpack_ptr(*pack_v);
+    Token* cur_tok=((Token *)token_per_arc)+ptr;
     Token* to_tok=to_ts->token;
     store16(to_tok, cur_tok);
     //memcpy(to_tok,cur_tok,sizeof(T));
@@ -300,7 +304,7 @@ DEVICE inline void CudaMergeVector<T>::clear_sub() {
 
 
 template<typename T> 
-DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
+DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc_update, int num_arcs, bool clear) {
   assert(0);
 }
 
@@ -338,7 +342,11 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
   template<typename T>
     inline void CudaMergeVector<T>::free() { 
       CudaVector<T>::free();
-
+      cudaFree(mem_pack_buf_d);
+      cudaFree(mem_buf_d);
+      cudaFree(mem_buf_count_d);
+      cudaFree(mem_buf_acc_count_d);
+      cudaFree(barrier_);
     }
 
   /***************************************CudaFst Implementation*****************************************/
@@ -653,6 +661,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
     cudaMemset(clock_buf_d,0,sizeof(uint64)*100);
 
     cudaMalloc((void**)&token_per_arc_d,sizeof(Token)*fst.NumArcs()); //temp solution
+    cudaMalloc((void**)&token_per_arc_update_d,sizeof(int)*fst.NumArcs()); //temp solution
+    cudaMemset(token_per_arc_update_d,0,sizeof(int)*fst.NumArcs()); //temp solution
     bytes_cudaMalloc+=sizeof(Token)*(fst.NumArcs());
     
     cudaStreamSynchronize(stream_comp);
@@ -702,6 +712,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
 
     cudaFree(clock_buf_d);
     cudaFree(token_per_arc_d);
+    cudaFree(token_per_arc_update_d);
 
 
     cudaEventDestroy(event_pt);
@@ -807,9 +818,10 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
     int j=0;
     uint64_t new_token_pack=pack(0, j);
     Token* cur_te=params.token_per_arc+j;
+    params.token_per_arc_update[j]=1;
     store16(cur_te, &(Token(0, NULL, j)));
     atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
-    params.cur_toks.merge(params.token_per_arc,false);
+    params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -1162,12 +1174,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
             store16(cur_te, &(Token(acoustic_cost+weight, tok, j)));
+            params.token_per_arc_update[j]=1;
           }
         } //end total_cost<=cutoff
       } //end arc loop
     } //end token loop
     __grid_sync_nv_internal(params.barrier);
-    params.cur_toks.merge(params.token_per_arc,false);
+    params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
   }
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
@@ -1211,13 +1224,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
             store16(cur_te, &(Token(weight, tok, j)));
+            params.token_per_arc_update[j]=1;
             (*modified) = true;
           }
         }
       }
     }
     __grid_sync_nv_internal(params.barrier);
-    params.cur_toks.merge(params.token_per_arc,false);
+    params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1410,6 +1424,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.max_arcs_per_frame_search=max_arcs_per_frame_search_;    
     params.sub_vec_num=sub_vec_num_;
     params.token_per_arc=token_per_arc_d;
+    params.token_per_arc_update=token_per_arc_update_d;
+    params.numArcs=fst_.NumArcs();
   }
 
   void CudaDecoder::ProcessTokens() {
