@@ -1235,7 +1235,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     int& cidx2=*params.cidx2;
     int tid=threadIdx.x+blockIdx.x*blockDim.x;
 
-#define AGG_IN_SEARCH
+//#define AGG_IN_SEARCH
 #ifndef AGG_IN_SEARCH 
     if (aggregate) {
       for (tid;tid<size;tid+=blockDim.x*gridDim.x) {
@@ -1245,10 +1245,11 @@ DEVICE void acquire_semaphore(volatile int *lock){
           params.ne_queue[i]=tid;
         }
       }
+      __grid_sync_nv_internal(params.barrier);
     }
 #endif
     int pidx=cidx;
-    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PNE: %i %i %i\n",params.frame, params.cur_toks.size(), cidx);
+    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PNE: %i %i %i %i\n",params.frame, params.cur_toks.size(), cidx, aggregate);
     __grid_sync_nv_internal(params.barrier);
     if (threadIdx.x==0&&blockIdx.x==0) { cidx=cidx2=0; }//clear for latter aggregate
     __grid_sync_nv_internal(params.barrier);
