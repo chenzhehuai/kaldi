@@ -1159,9 +1159,11 @@ DEVICE void acquire_semaphore(volatile int *lock){
           acoustic_cost, &ts, (i+j)%params.sub_vec_num,true, &token_pack);
           //get cur_te&new_token_pack
           uint64_t new_token_pack=pack(-total_cost, j);
-          Token* cur_te=params.token_per_arc+j;
-          store16(cur_te, &(Token(acoustic_cost+weight, tok, j)));
-          atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
+          uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
+          if (ret<new_token_pack) {
+            Token* cur_te=params.token_per_arc+j;
+            store16(cur_te, &(Token(acoustic_cost+weight, tok, j)));
+          }
         } //end total_cost<=cutoff
       } //end arc loop
     } //end token loop
@@ -1206,9 +1208,11 @@ DEVICE void acquire_semaphore(volatile int *lock){
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             0, &ts, (i+j)%params.sub_vec_num, true, &token_pack);
           uint64_t new_token_pack=pack(-total_cost, j);
-          Token* cur_te=params.token_per_arc+j;
-          store16(cur_te, &(Token(weight, tok, j)));
-          atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
+          uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
+          if (ret<new_token_pack) {
+            Token* cur_te=params.token_per_arc+j;
+            store16(cur_te, &(Token(weight, tok, j)));
+          }
         }
       }
     }
@@ -1312,10 +1316,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
        if (rank0) {
+#if 1
+         *params.ne_idx=0;
+#else
          int tmp=*params.ne_idx;
          *params.ne_idx=*params.l_ne_idx;
          *params.l_ne_idx=tmp;
          cnt++;
+#endif
        }
     } while ((*modified0)==true);
     if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
