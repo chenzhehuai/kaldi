@@ -484,7 +484,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
       elem.token=token;
       elem.active=false;
       elem.token_pack=pack(-FLT_MAX, 0);
-      store16(&current_tokens_lookup[i], &elem);
+      //store16(&current_tokens_lookup[i], &elem);
+      memcpy(&current_tokens_lookup[i], &elem, sizeof(CudaDecoder::TokenLookupElem));
     }
   }
   __global__ void allocateAllTokens(CudaDecoder::TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaDecoder::TokenAllocator allocator, int *barrier) {
@@ -506,7 +507,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
       elem.token=token;
       elem.active=false;
       elem.token_pack=pack(-FLT_MAX, 0);
-      store16(&current_tokens_lookup[state], &elem);
+      memcpy(&current_tokens_lookup[state], &elem, sizeof(CudaDecoder::TokenLookupElem));
+      //store16(&current_tokens_lookup[state], &elem);
     }
   }
 
