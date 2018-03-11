@@ -160,6 +160,7 @@ public:
   using CudaVector<T>::max_size;
   
   DEVICE inline void merge(void* undefined, int* token_per_arc_update, int num_arcs,  bool clear=true);
+  DEVICE inline int update(int i);
   DEVICE inline void clear_sub();
   inline void allocate(uint32_t max_size, int sub_vec_num);
   DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack, const int subid); 
@@ -168,6 +169,7 @@ public:
   inline void swap(CudaMergeVector<T> &v);
 
   //for arr merge to single; assume create using cudaMallocManaged
+  int *mem_update_d;
   uint64** mem_pack_buf_d;
   T* mem_buf_d;
   int *mem_buf_count_d;
@@ -359,8 +361,11 @@ class CudaDecoder {
     volatile int *modified;
     int *pe_idx;
     int *ne_idx;
+    int *ne_queue;
     int *l_ne_idx;
     int *fb_idx;
+    int *cidx2;
+    int *cidx;
     int *barrier;
 
     //debug
@@ -439,9 +444,10 @@ class CudaDecoder {
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
 
   //warp assignment indexes
-  int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d;
+  int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d, *ne_queue_d;
   int *barrier_d;  //barrier to allow grid syncs
-  
+ 
+  int *cidx_d,*cidx2_d;
   int verbose;
   
   int max_arcs_per_frame_search_;

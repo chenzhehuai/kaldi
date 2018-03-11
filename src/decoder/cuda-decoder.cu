@@ -259,9 +259,15 @@ template<typename T>
     inline void CudaMergeVector<T>::swap(CudaMergeVector<T> &v) {
       CudaVector<T>::swap(v);
       std::swap(mem_buf_count_d,v.mem_buf_count_d);
+      std::swap(mem_update_d,v.mem_update_d);
     }
 
 
+template<typename T> 
+  DEVICE inline int CudaMergeVector<T>::update(int i) {
+    if (i>=*count_d) return 0;
+    return mem_update_d[i];
+  }
 template<> 
 DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* token_per_arc_update, int num_arcs, bool clear) {
   int tid=threadIdx.x+blockIdx.x*blockDim.x;
@@ -289,11 +295,16 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
     uint64_t* pack_v=mem_pack_buf_d[(subid*(max_size/(sub_vec_num))+idx)];
     int ptr=unpack_ptr(*pack_v);
     //assert(ptr<num_arcs);
+    mem_update_d[(idx+mem_buf_acc_count_d[subid])]=token_per_arc_update[ptr];
+  #if 1
     if (token_per_arc_update[ptr]) token_per_arc_update[ptr]=0;
     else continue;
-    TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
+  #endif
     TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
-    memcpy(to_ts,cur_ts,sizeof(TokenState));
+    if (sub_vec_num!=1) {// has been copied in push_back
+      TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
+      memcpy(to_ts,cur_ts,sizeof(TokenState));
+    }
     Token* cur_tok=((Token *)token_per_arc)+ptr;
     Token* to_tok=to_ts->token;
     store16(to_tok, cur_tok);
@@ -321,9 +332,10 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       assert(subid<sub_vec_num);
       uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
       assert(idx<sub_size);
-      mem_buf_d[subid*sub_size+idx]=val; 
+      if (sub_vec_num==1) mem_d[subid*sub_size+idx]=val;
+      else mem_buf_d[subid*sub_size+idx]=val; 
       mem_pack_buf_d[subid*sub_size+idx]=val_pack; 
-      mem_d[subid*sub_size+idx]=val; 
+      //CudaVector<T>::push_back(val); //do this is only for speedup in PNE; dont need to
       return idx;
     }
 
@@ -335,6 +347,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       sub_size=max_size/sub_vec_num;
       cudaMalloc(&mem_pack_buf_d,sizeof(uint64_t*)*max_size);
       cudaMalloc(&mem_buf_d,sizeof(T)*max_size);
+      cudaMalloc(&mem_update_d,sizeof(int)*max_size);
+      cudaMemset(mem_update_d,0,sizeof(int)*max_size);
       cudaMalloc(&mem_buf_count_d,sizeof(int)*(sub_vec_num+1));
       cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*(1+sub_vec_num));
       cudaMalloc(&barrier_,sizeof(int)*1);
@@ -343,7 +357,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
   template<typename T>
     inline size_t CudaMergeVector<T>::getCudaMallocBytes() {
       return CudaVector<T>::getCudaMallocBytes()+
-        sizeof(uint32_t)*(1+2*(1+sub_vec_num))+max_size*sizeof(uint64_t*);
+        sizeof(uint32_t)*(1+2*(1+sub_vec_num))+max_size*(sizeof(T)+sizeof(uint64_t*)+sizeof(int));
     }
 
   template<typename T>
@@ -351,6 +365,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       CudaVector<T>::free();
       cudaFree(mem_pack_buf_d);
       cudaFree(mem_buf_d);
+      cudaFree(mem_update_d);
       cudaFree(mem_buf_count_d);
       cudaFree(mem_buf_acc_count_d);
       cudaFree(barrier_);
@@ -643,13 +658,18 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     cudaStreamCreateWithPriority(&stream_ll, cudaStreamNonBlocking, -1);
 
     cudaMalloc(&pe_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
+    cudaMalloc(&cidx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
+    cudaMalloc(&cidx2_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&ne_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
+    cudaMalloc(&ne_queue_d, sizeof(int)*config.max_tokens_per_frame); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&l_ne_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&fb_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&barrier_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
 
     cudaMemset(pe_idx_d,0,sizeof(int));
     cudaMemset(ne_idx_d,0,sizeof(int));
+    cudaMemset(cidx_d,0,sizeof(int));
+    cudaMemset(cidx2_d,0,sizeof(int));
     cudaMemset(l_ne_idx_d,0,sizeof(int));
     cudaMemset(fb_idx_d,0,sizeof(int));
     cudaMemset(barrier_d,0,sizeof(int));
@@ -713,7 +733,10 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     cudaFree(current_tokens_lookup_d);
 
     cudaFree(pe_idx_d);
+    cudaFree(cidx_d);
+    cudaFree(cidx2_d);
     cudaFree(ne_idx_d);
+    cudaFree(ne_queue_d);
     cudaFree(l_ne_idx_d);
     cudaFree(fb_idx_d);
     cudaFree(barrier_d);
@@ -1199,18 +1222,39 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
   }
     template<int blockDimx, int blockDimy>
-  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
-    
-    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PNE: %i %i\n",params.frame, params.cur_toks.size());
+  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified, bool aggregate=false) {
+
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
+
+    int& cidx=*params.cidx;
+    int& cidx2=*params.cidx2;
+    int tid=threadIdx.x+blockIdx.x*blockDim.x;
+    if (aggregate) {
+      for (tid;tid<size;tid+=blockDim.x*gridDim.x) {
+        if(params.cur_toks.update(tid)) {
+          int i=atomicAdd(&cidx,1);      //get token index
+          if (i>=size) break;
+          params.ne_queue[i]=tid;
+        }
+      }
+      __grid_sync_nv_internal(params.barrier);
+    }
+
+    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PNE: %i %i %i\n",params.frame, params.cur_toks.size(), cidx);
 
     int threadIdxy = threadIdx.x / blockDimx;
 
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) {
-      int i;
+      int i,j;
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
-        i=atomicAdd(params.ne_idx,1);      //get token index
+      if (aggregate) {
+          j=atomicAdd(&cidx2,1);      //get token index
+          if (j>=cidx) i=size; // to exit
+          else i=params.ne_queue[j];
+      } else {
+          i=atomicAdd(params.ne_idx,1);      //get token index
+      }
       }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
@@ -1248,6 +1292,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     }
     __grid_sync_nv_internal(params.barrier);
     params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
+    if (threadIdx.x==0&&blockIdx.x==0) { cidx=cidx2=0; }
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1333,12 +1378,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
       uint32_t size = 0;
       uint32_t psize=size;
     do {
-
       psize=size;
       size = params.cur_toks.size();
-      if (rank0)
-        *params.ne_idx=psize;
-      
+      if (rank0) {
+        *params.ne_idx=0; //psize;
+      }
+      cnt++;
+      bool aggregate=cnt>1?1:0;
       //grid.sync();  
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
@@ -1347,11 +1393,10 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
       *modified1 = false;
 
-      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0);
+      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0, aggregate);
 
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
- 
     } while ((*modified0)==true);
     if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
 
@@ -1424,6 +1469,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.beam=beam_;
     params.pe_idx=pe_idx_d;
     params.ne_idx=ne_idx_d;
+    params.ne_queue=ne_queue_d;
     params.l_ne_idx=l_ne_idx_d;
     params.fb_idx=fb_idx_d;
     params.barrier=barrier_d;
@@ -1439,6 +1485,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.token_per_arc=token_per_arc_d;
     params.token_per_arc_update=token_per_arc_update_d;
     params.numArcs=fst_.NumArcs();
+    params.cidx=cidx_d;
+    params.cidx2=cidx2_d;
   }
 
   void CudaDecoder::ProcessTokens() {
