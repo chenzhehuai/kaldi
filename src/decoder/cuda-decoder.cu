@@ -1258,7 +1258,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
       }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
-      if(i>=size) break;
+      if(aggregate&&i>=size) break;
+      if(aggregate==0&&i>=params.cur_toks.size()) break;
       
       TokenState& ts = params.cur_toks[i];
       Token * tok = ts.token;
