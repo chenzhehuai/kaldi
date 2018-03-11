@@ -1330,11 +1330,15 @@ DEVICE void acquire_semaphore(volatile int *lock){
       *params.ne_idx=0;
       *params.l_ne_idx=params.cur_toks.size();
       int cnt=0;
+      uint32_t size = 0;
+      uint32_t psize=size;
     do {
 
-      uint32_t size = params.cur_toks.size();
-
-
+      psize=size;
+      size = params.cur_toks.size();
+      if (rank0)
+        *params.ne_idx=psize;
+      
       //grid.sync();  
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
@@ -1347,16 +1351,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
-       if (rank0) {
-#if 0
-         *params.ne_idx=0;
-#else
-         int tmp=*params.ne_idx;
-         *params.ne_idx=*params.l_ne_idx;
-         *params.l_ne_idx=tmp;
-         cnt++;
-#endif
-       }
+ 
     } while ((*modified0)==true);
     if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
 
