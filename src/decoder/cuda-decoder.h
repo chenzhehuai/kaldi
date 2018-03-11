@@ -46,8 +46,8 @@ namespace kaldi {
 class CudaDecoder;
 //typedef uint64_t uint64_t;
 inline DEVICE uint64_t pack (float cost, int ptr) {
-  assert (!isnan(cost));
-  assert (ptr >= 0 && ptr < 1L<<32);
+  //assert (!isnan(cost));
+  //assert (ptr >= 0 && ptr < 1L<<32);
   uint32_t i_cost = *(uint32_t *)&cost;
   if (i_cost & 0x80000000)
     i_cost = i_cost ^ 0xFFFFFFFF;
@@ -68,7 +68,7 @@ inline DEVICE float unpack_cost (uint64_t packed) {
 
 // Unpacks a back-pointer.
 inline DEVICE int unpack_ptr (uint64_t packed) {
-  assert (!(packed & 0x80000000));
+  //assert (!(packed & 0x80000000));
   return packed & 0x7FFFFFFF;
 }
 
@@ -165,6 +165,7 @@ public:
   DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack, const int subid); 
   inline void free();
   inline size_t getCudaMallocBytes(); 
+  inline void swap(CudaMergeVector<T> &v);
 
   //for arr merge to single; assume create using cudaMallocManaged
   uint64** mem_pack_buf_d;
@@ -279,6 +280,7 @@ class CudaDecoder {
 //    BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
     HOST DEVICE inline Token(BaseFloat cost, Token *prev, uint32_t arc_index) : prev_(prev), cost_(cost), arc_index_(arc_index) {
+      //assert(prev!=this);
       if(prev) {
         cost_ += prev->cost_;
       }

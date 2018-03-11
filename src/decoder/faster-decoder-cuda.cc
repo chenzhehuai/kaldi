@@ -24,7 +24,7 @@ namespace kaldi {
 FasterDecoderCuda::FasterDecoderCuda(const CudaDecoderConfig &decoder_opts,
                               const CudaFst &fst):
     decoder_opts_(decoder_opts), decoder_(fst, decoder_opts_) {
-  decoder_.InitDecoding();
+  //decoder_.InitDecoding();
 }
 
 

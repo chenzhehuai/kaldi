@@ -82,8 +82,12 @@ int main(int argc, char *argv[]) {
       if (!word_syms)
         KALDI_ERR << "Could not read symbol table from file "<<word_syms_filename;
     }
-
+#if 0
     cuInit(0);
+#else
+    CuDevice::Instantiate().SelectGpuId("yes");
+    CuDevice::Instantiate().AllowMultithreading();
+#endif
     CudaFst cuda_fst;
     SequentialBaseFloatMatrixReader loglikes_reader(loglikes_rspecifier);
 
