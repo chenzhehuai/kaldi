@@ -307,9 +307,9 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
   template<typename T> 
     DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, 
                                     uint64 *val_pack, const int subid) { 
-      //assert(subid<sub_vec_num);
+      assert(subid<sub_vec_num);
       uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
-      //assert(idx<sub_size);
+      assert(idx<sub_size);
       mem_buf_d[subid*sub_size+idx]=val; 
       mem_pack_buf_d[subid*sub_size+idx]=val_pack; 
       mem_d[subid*sub_size+idx]=val; 
@@ -809,6 +809,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
     Token* cur_te=params.token_per_arc+j;
     store16(cur_te, &(Token(0, NULL, j)));
     atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
+    params.cur_toks.merge(params.token_per_arc,false);
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -1106,8 +1107,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
    
     if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PE: %i %i\n",params.frame, params.prev_toks.size());
 
-    params.cur_toks.clear_sub();
-    __grid_sync_nv_internal(params.barrier);
 
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
@@ -1341,7 +1340,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       *params.fb_idx=0;  
       *params.pe_idx=0;
     }
-    
+    params.cur_toks.clear_sub();
     __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
     if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
     

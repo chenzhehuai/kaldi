@@ -6,7 +6,7 @@ LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
 LDLIBS += -lnvToolsExt -lcudart
 CUDAOPTS =
-CUDAOPTS += -G -g 
+#CUDAOPTS += -G -g 
 
 TESTFILES =
 
