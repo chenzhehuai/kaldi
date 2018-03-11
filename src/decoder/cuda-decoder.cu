@@ -1281,13 +1281,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
       tok_E=params.cur_toks.size();
 
       *params.ne_idx=0;
+      *params.l_ne_idx=params.cur_toks.size();
+      int cnt=0;
     do {
 
       uint32_t size = params.cur_toks.size();
 
 
       //grid.sync();  
-       if (rank0) *params.l_ne_idx=*params.ne_idx;
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
       //swap buffers
@@ -1299,12 +1300,17 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
-       if (rank0) *params.ne_idx=*params.l_ne_idx;
+       if (rank0) {
+         int tmp=*params.ne_idx;
+         *params.ne_idx=*params.l_ne_idx;
+         *params.l_ne_idx=tmp;
+         cnt++;
+       }
     } while ((*modified0)==true);
     if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
-          printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
+          printf("TK: %i %i %i %i\n", params.frame, tok_E, params.cur_toks.size(), cnt);
 
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
   
