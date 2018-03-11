@@ -82,7 +82,7 @@ int main(int argc, char *argv[]) {
       if (!word_syms)
         KALDI_ERR << "Could not read symbol table from file "<<word_syms_filename;
     }
-#if 0
+#if 1
     cuInit(0);
 #else
     CuDevice::Instantiate().SelectGpuId("yes");
