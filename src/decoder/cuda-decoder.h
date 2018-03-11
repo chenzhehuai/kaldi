@@ -394,7 +394,7 @@ class CudaDecoder {
     Token *token;     //pointer for that token
     uint32_t active;  //tells if token has activiated or not
     uint64_t token_pack;     //aligning to 16 bytes
-    volatile int32 tokenstate_idx;     //aligning to 16 bytes
+    //volatile int32 tokenstate_idx;     //aligning to 16 bytes
   };
   
   //token lookup table.  Provides constant time lookup for active tokens.
