@@ -614,11 +614,13 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
 
     cudaMalloc(&pe_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&ne_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
+    cudaMalloc(&l_ne_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&fb_idx_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
     cudaMalloc(&barrier_d, sizeof(int)); bytes_cudaMalloc+=sizeof(int);
 
     cudaMemset(pe_idx_d,0,sizeof(int));
     cudaMemset(ne_idx_d,0,sizeof(int));
+    cudaMemset(l_ne_idx_d,0,sizeof(int));
     cudaMemset(fb_idx_d,0,sizeof(int));
     cudaMemset(barrier_d,0,sizeof(int));
 
@@ -679,6 +681,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
 
     cudaFree(pe_idx_d);
     cudaFree(ne_idx_d);
+    cudaFree(l_ne_idx_d);
     cudaFree(fb_idx_d);
     cudaFree(barrier_d);
 
@@ -1218,6 +1221,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       uint32_t size = params.cur_toks.size();
 
       *params.ne_idx=0;
+      *params.l_ne_idx=0;
       //grid.sync();  
       __grid_sync_nv_internal(params.barrier);
 
@@ -1276,13 +1280,14 @@ DEVICE void acquire_semaphore(volatile int *lock){
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
       tok_E=params.cur_toks.size();
 
+      *params.ne_idx=0;
     do {
 
       uint32_t size = params.cur_toks.size();
 
-      *params.ne_idx=0;
 
       //grid.sync();  
+       if (rank0) *params.l_ne_idx=*params.ne_idx;
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
       //swap buffers
@@ -1294,7 +1299,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
-
+       if (rank0) *params.ne_idx=*params.l_ne_idx;
     } while ((*modified0)==true);
     if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
 
@@ -1367,6 +1372,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     params.beam=beam_;
     params.pe_idx=pe_idx_d;
     params.ne_idx=ne_idx_d;
+    params.l_ne_idx=l_ne_idx_d;
     params.fb_idx=fb_idx_d;
     params.barrier=barrier_d;
     params.verbose=verbose;

@@ -356,6 +356,7 @@ class CudaDecoder {
     volatile int *modified;
     int *pe_idx;
     int *ne_idx;
+    int *l_ne_idx;
     int *fb_idx;
     int *barrier;
 
@@ -432,7 +433,7 @@ class CudaDecoder {
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
 
   //warp assignment indexes
-  int *pe_idx_d, *ne_idx_d, *fb_idx_d;
+  int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d;
   int *barrier_d;  //barrier to allow grid syncs
   
   int verbose;
