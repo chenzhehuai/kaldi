@@ -525,6 +525,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       elem.token=token;
       elem.active=false;
       elem.token_pack=pack(-FLT_MAX, 0);
+      elem.tokenstate_idx=-1;
       //store16(&current_tokens_lookup[i], &elem);
       memcpy(&current_tokens_lookup[i], &elem, sizeof(CudaDecoder::TokenLookupElem));
     }
@@ -548,6 +549,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       elem.token=token;
       elem.active=false;
       elem.token_pack=pack(-FLT_MAX, 0);
+      elem.tokenstate_idx=-1;
       memcpy(&current_tokens_lookup[state], &elem, sizeof(CudaDecoder::TokenLookupElem));
       //store16(&current_tokens_lookup[state], &elem);
     }
@@ -828,7 +830,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, int subid, bool use_sub, uint64_t **token_pack, int* update) {
+    TokenState* ts, int subid, bool use_sub, uint64_t **token_pack, int* update, int* tokenstate_idx=NULL) {
     //TokenLookupElem lookup_elem;
     //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
@@ -838,11 +840,14 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       //if havent seen, add into hash
       *update=1;
       if (use_sub) 
-        params.cur_toks.push_back(TokenState(cur_tok,nextstate), 
+        lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate), 
         &lookup_elem.token_pack, subid);
-      else params.cur_toks.push_back(TokenState(cur_tok,nextstate));
+      else lookup_elem.tokenstate_idx=params.cur_toks.push_back(TokenState(cur_tok,nextstate));
     }
+    while (lookup_elem.tokenstate_idx == -1);//hasnt pushed
+    __threadfence();
       if (use_sub) *token_pack=&lookup_elem.token_pack;
+    if (tokenstate_idx) *tokenstate_idx=lookup_elem.tokenstate_idx;
 
     return cur_tok;  
   }
@@ -1229,6 +1234,9 @@ DEVICE void acquire_semaphore(volatile int *lock){
     int& cidx=*params.cidx;
     int& cidx2=*params.cidx2;
     int tid=threadIdx.x+blockIdx.x*blockDim.x;
+
+#define AGG_IN_SEARCH
+#ifndef AGG_IN_SEARCH 
     if (aggregate) {
       for (tid;tid<size;tid+=blockDim.x*gridDim.x) {
         if(params.cur_toks.update(tid)) {
@@ -1237,10 +1245,13 @@ DEVICE void acquire_semaphore(volatile int *lock){
           params.ne_queue[i]=tid;
         }
       }
-      __grid_sync_nv_internal(params.barrier);
     }
-
+#endif
+    int pidx=cidx;
     if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PNE: %i %i %i\n",params.frame, params.cur_toks.size(), cidx);
+    __grid_sync_nv_internal(params.barrier);
+    if (threadIdx.x==0&&blockIdx.x==0) { cidx=cidx2=0; }//clear for latter aggregate
+    __grid_sync_nv_internal(params.barrier);
 
     int threadIdxy = threadIdx.x / blockDimx;
 
@@ -1250,7 +1261,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
       if (aggregate) {
           j=atomicAdd(&cidx2,1);      //get token index
-          if (j>=cidx) i=size; // to exit
+          if (j>=pidx) i=size; // to exit
           else i=params.ne_queue[j];
       } else {
           i=atomicAdd(params.ne_idx,1);      //get token index
@@ -1278,8 +1289,9 @@ DEVICE void acquire_semaphore(volatile int *lock){
         if (next_tok.cost_ <= cutoff) {
           TokenState *next_ts=NULL;
           uint64_t* token_pack;
+          int tokenstate_idx;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, (i+j)%params.sub_vec_num, true, &token_pack, params.token_per_arc_update+j);
+            0, &ts, (i+j)%params.sub_vec_num, true, &token_pack, params.token_per_arc_update+j, &tokenstate_idx);
           uint64_t new_token_pack=pack(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
@@ -1287,13 +1299,17 @@ DEVICE void acquire_semaphore(volatile int *lock){
             store16(cur_te, &(Token(weight, tok, j)));
             params.token_per_arc_update[j]=1;
             (*modified) = true;
+#ifdef AGG_IN_SEARCH            
+            //aggregate; can only be used in sub_vec_num==1
+            int i=atomicAdd(&cidx,1);     
+            params.ne_queue[i]=tokenstate_idx;
+#endif
           }
         }
       }
     }
     __grid_sync_nv_internal(params.barrier);
     params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
-    if (threadIdx.x==0&&blockIdx.x==0) { cidx=cidx2=0; }
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
