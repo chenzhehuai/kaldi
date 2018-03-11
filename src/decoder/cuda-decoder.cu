@@ -291,6 +291,15 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, bool 
 }
 
 template<typename T> 
+DEVICE inline void CudaMergeVector<T>::clear_sub() {
+  int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
+  if (rank0) {
+    memset(mem_buf_count_d, 0, sizeof(int)*sub_vec_num);
+  }
+}
+
+
+template<typename T> 
 DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
   assert(0);
 }
@@ -792,10 +801,14 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, bool clear) {
   }
 
   __global__ void addOneToken(processTokens_params params, CudaDecoder::StateId state) {
+    uint64_t* token_pack;
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL,0,false, NULL);
-    Token tok(0, NULL, 0);
-    *cur_tok = tok;
+      0, NULL,0,true, &token_pack);
+    int j=0;
+    uint64_t new_token_pack=pack(0, j);
+    Token* cur_te=params.token_per_arc+j;
+    store16(cur_te, &(Token(0, NULL, j)));
+    atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
   }
 
   //putting this into a kernel to avoid extra latency of a memory copy
@@ -1090,7 +1103,12 @@ DEVICE void acquire_semaphore(volatile int *lock){
     typedef CudaDecoder::CostType CostType;
     typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
     int threadIdxy = threadIdx.x / blockDimx;
-    
+   
+    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PE: %i %i\n",params.frame, params.prev_toks.size());
+
+    params.cur_toks.clear_sub();
+    __grid_sync_nv_internal(params.barrier);
+
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     CostType cutoff=*params.cutoff;
@@ -1098,12 +1116,8 @@ DEVICE void acquire_semaphore(volatile int *lock){
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) {
       int i;
-      if(group.thread_rank()==0) { //thread 0 nominated to get new token
+      if(group.thread_rank()==0) //thread 0 nominated to get new token
         i=atomicAdd(params.pe_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
-      }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
       if(i>=size) break;
@@ -1152,11 +1166,12 @@ DEVICE void acquire_semaphore(volatile int *lock){
       } //end arc loop
     } //end token loop
     __grid_sync_nv_internal(params.barrier);
-    params.cur_toks.merge(params.token_per_arc);
+    params.cur_toks.merge(params.token_per_arc,false);
   }
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified) {
     
+    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PNE: %i %i\n",params.frame, params.cur_toks.size());
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     int threadIdxy = threadIdx.x / blockDimx;
@@ -1187,24 +1202,18 @@ DEVICE void acquire_semaphore(volatile int *lock){
       if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           TokenState *next_ts=NULL;
+          uint64_t* token_pack;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, 0, false, NULL);
-
-          volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
-
-          while(*cur_tokv < next_tok) {   //check if we need to update
-            acquire_semaphore((int*)&params.token_locks[nextstate]);
-              if(*cur_tokv < next_tok) {
-                //cur_tok->cost_=next_tok.cost_;
-                *cur_tok=next_tok;
-                (*modified) = true;                                                                            //mark as updated
-              }
-            release_semaphore((int*)&params.token_locks[nextstate]);
-              break;  //exit loop as our update is done
-          } //end try update loop
+            0, &ts, (i+j)%params.sub_vec_num, true, &token_pack);
+          uint64_t new_token_pack=pack(-total_cost, j);
+          Token* cur_te=params.token_per_arc+j;
+          store16(cur_te, &(Token(weight, tok, j)));
+          atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
         }
       }
     }
+    __grid_sync_nv_internal(params.barrier);
+    params.cur_toks.merge(params.token_per_arc,false);
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes

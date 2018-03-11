@@ -160,6 +160,7 @@ public:
   using CudaVector<T>::max_size;
   
   DEVICE inline void merge(void* undefined, bool clear=true);
+  DEVICE inline void clear_sub();
   inline void allocate(uint32_t max_size, int sub_vec_num);
   DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack, const int subid); 
   inline void free();
