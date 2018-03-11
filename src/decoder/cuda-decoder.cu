@@ -294,7 +294,7 @@ template<typename T>
 DEVICE inline void CudaMergeVector<T>::clear_sub() {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   if (rank0) {
-    memset(mem_buf_count_d, 0, sizeof(int)*sub_vec_num);
+    memset(mem_buf_count_d, 0, sizeof(int)*(sub_vec_num+1));
   }
 }
 
@@ -1212,6 +1212,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
             store16(cur_te, &(Token(weight, tok, j)));
+            (*modified) = true;
           }
         }
       }
@@ -1316,7 +1317,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
        if (rank0) {
-#if 1
+#if 0
          *params.ne_idx=0;
 #else
          int tmp=*params.ne_idx;
