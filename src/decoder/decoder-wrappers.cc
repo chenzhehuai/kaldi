@@ -210,7 +210,8 @@ bool DecodeUtteranceLatticeFasterCuda(
     Int32VectorWriter *words_writer,
     CompactLatticeWriter *compact_lattice_writer,
     LatticeWriter *lattice_writer,
-    double *like_ptr) { // puts utterance's like in like_ptr on success.
+    double *like_ptr,
+    Lattice* olat) { // puts utterance's like in like_ptr on success.
   using fst::VectorFst;
 
   if (!decoder.Decode(&decodable)) {
@@ -230,6 +231,7 @@ bool DecodeUtteranceLatticeFasterCuda(
   }
 
   nvtxRangePushA("post_decoding");
+  Timer timer;
   double likelihood;
   LatticeWeight weight;
   int32 num_frames;
@@ -262,13 +264,42 @@ bool DecodeUtteranceLatticeFasterCuda(
   }
   // Get lattice, and do determinization if requested.
   nvtxRangePushA("get_lattice");
-  Timer timer;
-  Lattice lat;
+  Lattice& lat=*olat;
   decoder.GetRawLattice(&lat);
   if (lat.NumStates() == 0)
     KALDI_ERR << "Unexpected problem getting lattice for utterance " << utt;
   fst::Connect(&lat);
   nvtxRangePop();
+
+    double t4 = timer.Elapsed();
+    KALDI_VLOG(1)<<"post_decoding: "<<t4;
+
+  KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
+            << (likelihood / num_frames) << " over "
+            << num_frames << " frames.";
+  KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
+                << weight.Value1() << " + " << weight.Value2();
+  *like_ptr = likelihood;
+  nvtxRangePop();
+
+  return true;
+}
+
+bool DecodeUtteranceLatticeFasterCudaOutput(
+    LatticeFasterDecoderCuda &decoder, // not const but is really an input.
+    DecodableInterface &decodable, // not const but is really an input.
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr,
+    Lattice& lat) {
   if (determinize) {
     CompactLattice clat;
     if (!DeterminizeLatticePhonePrunedWrapper(
@@ -292,19 +323,10 @@ bool DecodeUtteranceLatticeFasterCuda(
     lattice_writer->Write(utt, lat);
   nvtxRangePop();
   }
-    double t4 = timer.Elapsed();
-    KALDI_VLOG(1)<<"get_lat_det_lat: "<<t4;
-
-  KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
-            << (likelihood / num_frames) << " over "
-            << num_frames << " frames.";
-  KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
-                << weight.Value1() << " + " << weight.Value2();
-  *like_ptr = likelihood;
-  nvtxRangePop();
-
   return true;
 }
+
+
 
 // Takes care of output.  Returns true on success.
 bool DecodeUtteranceLatticeFaster(

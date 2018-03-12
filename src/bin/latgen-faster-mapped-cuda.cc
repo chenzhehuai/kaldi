@@ -140,20 +140,25 @@ int main(int argc, char *argv[]) {
   nvtxRangePop();
 
           double like;
+          Lattice lat;
           if (DecodeUtteranceLatticeFasterCuda(
                   decoder, decodable, trans_model, word_syms, utt,
                   acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
-                  &like)) {
+                  &like, &lat)) {
             tot_like += like;
             frame_count += loglikes.NumRows();
             num_success++;
           } else num_fail++;
-        }
+      elapsed += timer.Elapsed();
+          DecodeUtteranceLatticeFasterCudaOutput(
+                  decoder, decodable, trans_model, word_syms, utt,
+                  acoustic_scale, determinize, allow_partial, &alignment_writer,
+                  &words_writer, &compact_lattice_writer, &lattice_writer,
+                  &like, lat);
   nvtxRangePop();
-
+        }
       }
-      elapsed = timer.Elapsed();
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
       KALDI_ERR<< "unfinished";
