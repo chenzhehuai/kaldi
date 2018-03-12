@@ -190,10 +190,10 @@ struct CudaDecoderConfig {
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
-                       max_tokens_per_frame(1<<18),
+                       max_tokens_per_frame(1<<17),
                        max_tokens(60000000),
                        verbose(0),
-                       max_lat_arc_per_frame(1<<19),
+                       max_lat_arc_per_frame(1<<18),
                        sub_vec_num(1)
                        {}
   
@@ -336,7 +336,7 @@ class CudaDecoder {
   //
 
   struct TokenState;
-  struct __align__(16) TokenLookupElem;
+  struct TokenLookupElem;
   typedef CudaVector<TokenState> TokenVector;
   typedef CudaMergeVector<TokenState> TokenMergeVector;
   struct processTokens_params {

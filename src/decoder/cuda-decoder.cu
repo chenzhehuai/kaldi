@@ -276,7 +276,7 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
   //int subid=threadIdx.x;
   //int idx=blockIdx.x;
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
-  int batch=max(1,blockDim.x*gridDim.x/(sub_vec_num)); 
+  int batch=blockDim.x*gridDim.x/(sub_vec_num); 
   if (rank0) {
     //assert(blockDim.x*gridDim.x%(sub_vec_num)==0);
     int acc=0;
@@ -296,17 +296,17 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
     int ptr=unpack_ptr(*pack_v);
     //assert(ptr<num_arcs);
     mem_update_d[(idx+mem_buf_acc_count_d[subid])]=token_per_arc_update[ptr];
-    TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
   #if 1
     if (token_per_arc_update[ptr]) token_per_arc_update[ptr]=0;
-    else if (to_ts->token) {//TODO: check why to_ts->token==0
-      assert(sub_vec_num==1);
+    else //if (to_ts->token) {//TODO: check why to_ts->token==0
       continue;
-    } 
+      //assert(sub_vec_num==1);
+    //} 
   #endif
+    TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
     if (sub_vec_num!=1) {// has been copied in push_back
       TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
-      assert(cur_ts->token);
+      //assert(cur_ts->token);
       memcpy(to_ts,cur_ts,sizeof(TokenState));
     }
     Token* cur_tok=((Token *)token_per_arc)+ptr;
