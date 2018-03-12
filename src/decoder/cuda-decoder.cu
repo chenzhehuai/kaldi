@@ -303,7 +303,8 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
     TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
     if (sub_vec_num!=1) {// has been copied in push_back
       TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
-      memcpy(to_ts,cur_ts,sizeof(TokenState));
+      //memcpy(to_ts,cur_ts,sizeof(TokenState));
+      store16(to_ts, cur_ts);
     }
     Token* cur_tok=((Token *)token_per_arc)+ptr;
     Token* to_tok=to_ts->token;

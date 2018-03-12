@@ -337,7 +337,7 @@ class CudaDecoder {
   //
 
   struct TokenState;
-  struct __align__(16) TokenLookupElem;
+  struct  TokenLookupElem;
   typedef CudaVector<TokenState> TokenVector;
   typedef CudaMergeVector<TokenState> TokenMergeVector;
   struct processTokens_params {
@@ -400,10 +400,11 @@ class CudaDecoder {
   //One entry per state.  If entry is NULL token is not active.
   TokenLookupElem *current_tokens_lookup_d;
 
-  struct TokenState {
+  struct __align__(16) TokenState {
     Token* token;
     StateId state;
-    HOST DEVICE inline TokenState (Token *token, StateId state) : token(token), state(state) {}
+    int pad;
+    HOST DEVICE inline TokenState (Token *token, StateId state) : token(token), state(state), pad(0) {}
     HOST DEVICE inline TokenState () : token(NULL) {};
   };
  
