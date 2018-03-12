@@ -191,10 +191,10 @@ struct CudaDecoderConfig {
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
-                       max_tokens_per_frame(200000),
+                       max_tokens_per_frame(1<<17),
                        max_tokens(60000000),
                        verbose(0),
-                       max_lat_arc_per_frame(600000),
+                       max_lat_arc_per_frame(1<<18),
                        sub_vec_num(1)
                        {}
   
