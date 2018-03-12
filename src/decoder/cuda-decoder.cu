@@ -299,11 +299,8 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
     TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
   #if 1
     if (token_per_arc_update[ptr]) token_per_arc_update[ptr]=0;
-    else {
-      if (!to_ts->token) printf("%i\n",to_ts->state);
-      assert(to_ts->token);
-
-
+    else if (to_ts->token) {//TODO: check why to_ts->token==0
+      assert(sub_vec_num==1);
       continue;
     } 
   #endif
