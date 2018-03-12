@@ -90,7 +90,10 @@ int main(int argc, char *argv[]) {
     int num_success = 0, num_fail = 0;
     cuInit(0);
     CudaFst cuda_fst;
-
+    double elapsed=0;
+    Timer timer;
+    kaldi::int64 frame_count = 0;
+    VectorFst<StdArc> *decode_fst = fst::ReadFstKaldi(fst_in_filename);
 #pragma omp parallel shared(po, cuda_fst) 
     {
       printf("Thread %d of %d\n", omp_get_thread_num(), omp_get_num_threads());
@@ -107,18 +110,15 @@ int main(int argc, char *argv[]) {
     // It has to do with what happens on UNIX systems if you call fork() on a
     // large process: the page-table entries are duplicated, which requires a
     // lot of virtual memory.
-    VectorFst<StdArc> *decode_fst = fst::ReadFstKaldi(fst_in_filename);
         
     if(omp_get_thread_num()==0) cuda_fst.initialize(*decode_fst);
 #pragma omp barrier
 
 
     BaseFloat tot_like = 0.0;
-    kaldi::int64 frame_count = 0;
     FasterDecoderCuda decoder(decoder_opts, cuda_fst);
 
-    double elapsed=0;
-    Timer timer;
+
     for (; !loglikes_reader.Done(); loglikes_reader.Next()) {
             if(omp_get_thread_num()==0) {
               printf("cudaMallocMemory: %lg GB, cudaMallocManagedMemory: %lg GB\n", 
@@ -142,7 +142,7 @@ int main(int argc, char *argv[]) {
       Lattice decoded;  // linear FST.
 
 #pragma omp barrier
-      elapsed += timer.Elapsed();
+      if (omp_get_thread_num() == 0 ) elapsed += timer.Elapsed();
       nvtxRangePop();//real decoding
 
       if ( (allow_partial || decoder.ReachedFinal())
@@ -188,7 +188,7 @@ int main(int argc, char *argv[]) {
 #pragma omp barrier
     }
 
-
+    if (omp_get_thread_num() == 0 ) {
     KALDI_LOG <<omp_get_thread_num() << " "
       "Time taken [excluding initialization] "<< elapsed
               << "s: real-time factor assuming 100 frames/sec is "
@@ -197,18 +197,20 @@ int main(int argc, char *argv[]) {
               << num_fail;
     KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like/frame_count)
               << " over " << frame_count << " frames.";
-
-    KALDI_LOG <<"Stopping CUDA 1\n";
-    delete word_syms;
-    delete decode_fst;
+    KALDI_LOG <<"Stopping CUDA 2\n";
+    }
     
 #pragma omp barrier
     }
-    KALDI_LOG <<"Stopping CUDA 2\n";
+    delete word_syms;
+    delete decode_fst;
+
     cuda_fst.finalize();
     cudaDeviceSynchronize();
     cudaProfilerStop();
 
+
+    KALDI_LOG <<"Stopping CUDA 1\n";
     if (num_success != 0) return 0;
     else return 1;
   } catch(const std::exception &e) {
