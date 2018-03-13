@@ -274,7 +274,8 @@ class LatticeFasterDecoderCuda {
   int num_frames_decoded_;
 
   cuTokenVector* cur_toks_;
-  cuTokenVector* pprev_toks_;
+  TokenState* pprev_toks_;
+  int* pprev_toks_size_;
   ForwardLink* pprev_arcs_;  
   std::vector<Token*> active_tok_frames_;
   std::vector<int> active_tok_size_frames_;

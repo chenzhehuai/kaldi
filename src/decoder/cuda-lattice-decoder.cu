@@ -247,7 +247,7 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
     }
   
 template<typename T>
-    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream, void* to_buf, bool copy_size) {
+    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream, T* to_buf, bool copy_size) {
       if (!to_buf) {
         to_buf=mem_h;
       }
@@ -703,7 +703,7 @@ void CudaMergeVector<T>::free() {
     cudaEventCreateWithFlags(&event_ll,cudaEventDisableTiming);
 
     cudaStreamCreateWithFlags(&stream_comp, cudaStreamNonBlocking);
-    for (int i=0; i<LAT_BUF_SIZE; i++) 
+    for (int i=0; i<LAT_BUF_SIZE+1; i++) 
       cudaStreamCreateWithFlags(&stream_copy[i], cudaStreamNonBlocking);    
     cudaStreamCreateWithPriority(&stream_ll, cudaStreamNonBlocking, -1);
 
@@ -733,7 +733,7 @@ void CudaMergeVector<T>::free() {
     cudaMalloc((void**)&loglikelihoods_old_d,sizeof(BaseFloat)*(fst_.max_ilabel+1)); bytes_cudaMalloc+=sizeof(BaseFloat)*(fst_.max_ilabel+1);
 
     verbose=config.verbose;
-    prune_interval_=1; //config.prune_interval;
+    prune_interval_=config.prune_interval;
     sub_vec_num_=config.sub_vec_num;
     max_arcs_=config.max_arcs;
 
@@ -761,8 +761,10 @@ void CudaMergeVector<T>::free() {
     num_frames_decoded_=0;
 
     //for pruning
-    bytes_cudaMalloc+=lattice_pruner.allocate(config.max_tokens_per_frame, 
-                      config.max_lat_arc_per_frame, config.prune_interval);
+    bytes_cudaMalloc+=lattice_pruner_.allocate(config.max_tokens_per_frame, 
+                      config.max_lat_arc_per_frame, config.prune_interval,
+                      config.max_arcs);
+    lattice_beam_=config.lattice_beam;
 
     SetTokArcPointerByFrame(num_frames_decoded_);
     
@@ -791,7 +793,7 @@ void CudaMergeVector<T>::free() {
     }
     cudaFree(arc_copy_buf_);
     cudaFreeHost(arcs_buf_);
-    
+    lattice_pruner_.free();    
     
     allocator.finalize();
 
@@ -815,7 +817,7 @@ void CudaMergeVector<T>::free() {
     cudaEventDestroy(event_ll);
 
     cudaStreamDestroy(stream_comp);
-    for (int i=0; i<LAT_BUF_SIZE; i++) 
+    for (int i=0; i<LAT_BUF_SIZE+1; i++) 
       cudaStreamDestroy(stream_copy[i]);
     cudaStreamDestroy(stream_ll);
 
@@ -886,6 +888,7 @@ void CudaMergeVector<T>::free() {
       ClearArcVector(lat_arcs_sub_vec_buf_[i]);
     }    
     SetTokArcPointerByFrame(num_frames_decoded_);
+    lattice_pruner.init();
     arcs_buf_used_=0;
 
     allocator.reset();
@@ -996,7 +999,7 @@ void CudaMergeVector<T>::free() {
 
   void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableInterface *decodable) {
     PUSH_RANGE("ComputeLogLikelihoods",3)
-    int32 frame = num_frames_decoded_;//TODO
+    int32 frame = num_frames_decoded_;
     //cudaStreamSynchronize(stream_comp); //finish decoding this frame
     std::swap(loglikelihoods_h,loglikelihoods_old_h); //double buffering so we don't overwrite loglikelihoods_h before it is copied down
     std::swap(loglikelihoods_d,loglikelihoods_old_d); //double buffer
@@ -1314,6 +1317,16 @@ void CudaMergeVector<T>::free() {
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
           printf("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
 
+
+    //proc lattice before allocate new toks to TokenState
+    params.lattice_pruner.collect_tok_per_frame(params.cur_toks.mem_d, 
+                  *params.cur_toks.count_d, params.frame);
+    params.lattice_pruner.collect_arc_per_frame(params.lat_arcs_sub_vec, 
+      params.sub_vec_num, params.lat_arcs_sub_vec_buf_count);
+    
+
+    __grid_sync_nv_internal(params.barrier); 
+
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
   
     if(rank0) {
@@ -1373,6 +1386,10 @@ void CudaMergeVector<T>::free() {
     params.prune_interval = prune_interval_;
     params.lat_arcs_sub_vec = lat_arcs_sub_vec_;
     params.sub_vec_num=sub_vec_num_;
+    params.lattice_pruner=lattice_pruner_;
+    uint idx=(num_frames_decoded_)%LAT_BUF_SIZE;
+    params.lat_arcs_sub_vec_buf_count=lat_arcs_sub_vec_buf_count_[idx][1];
+    params.lattice_beam=lattice_beam_;
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
@@ -1402,57 +1419,90 @@ void CudaMergeVector<T>::free() {
     lat_arcs_sub_vec_=lat_arcs_sub_vec_buf_[frame%LAT_BUF_SIZE];
     lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%LAT_BUF_SIZE];    
   }
-  //TODO
-  void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame) {
+
+  __launch_bounds__(64,64)
+  __global__ void LaunchPruneActiveTokens(processTokens_params params) {
+//    auto grid = cooperative_groups::this_grid();
+    params.lattice_pruner.PruneActiveTokens(params.frame, params.lattice_beam,
+      params.verbose);
+  }
+
+  void CudaLatticeDecoder::CallLaunchPruneActiveTokens(cudaStream_t wait_st, 
+    TokenOrSize* toks_buf_after_pr, LatLink* arcs_buf_after_pr,
+    cudaStream_t st, float ratio) {
+    processTokens_params params;
+    initParams(params);
+    dim3 threads(64,1);
+    dim3 blocks(DIV_ROUND_UP(total_threads*ratio,(threads.x*threads.y)));
+    cudaStreamSynchronize(wait_st);
+    LaunchPruneActiveTokens<<<blocks,threads,0,st>>>(params);
+
+    lattice_pruner.copy_arc_to_host(num_frames_decoded_, 
+      toks_buf_after_pr, arcs_buf_after_pr, st);
+  }
+
+  void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame,
+    TokenOrSize* toks_buf_after_pr, LatLink* arcs_buf_after_pr) {
     PUSH_RANGE("PostProcessLattices",1); 
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
     uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
     uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
     uint pprev_idx2=(dec_frame-2)%(LAT_BUF_SIZE-1);
- 
-    {//do this first because there is a sync inner to get count first
-      //cudaMemPrefetchAsync(&cur_vec,sizeof(LatLinkVectorMerge), cudaCpuDeviceId, stream_copy[prev_idx]);
-      cudaStreamSynchronize(stream_copy[prev_idx]);
-      LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx];
-      cur_vec.copy_data_to_host(stream_copy[prev_idx], arcs_buf_+arcs_buf_used_, false);
-      assert(arcs_buf_used_+cur_vec.size()<=max_arcs_);
-      arcs_ready2cpu_[prev_idx]=arcs_buf_+arcs_buf_used_;
-      arcs_buf_used_+=cur_vec.size();
-      //cudaCheckError();
-      (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], NULL, false);
+
+    if (dec_frame-1>=0) 
+    {//do this second because there is a sync inner to get count first      
+      cudaStreamSynchronize(stream_copy[prev_idx]); //finish copy size
+      TokenState* ts_buf;
+      int* size;
+      lattice_pruner.get_tok_buf_by_frame(&ts_buf, &size, dec_frame-1);
+      (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], ts_buf, false);
+      *size=(toks_buf_[prev_idx]).size();
     }
-
-
     //if (islast) 
       //cudaStreamSynchronize(stream_copy); //else overlap CPU&GPU
-    cudaStreamSynchronize(stream_comp);
+
+    //independent stream
+    if (num_frames_decoded_%prune_interval_==0)
+      CallLaunchPruneActiveTokens(stream_comp, stream_copy[LAT_BUF_SIZE], 
+        toks_buf_after_pr, arcs_buf_after_pr, 0.25);
+    
     POP_RANGE
   }
 
-  //TODO
-  void CudaLatticeDecoder::PreProcessLattices(TokenVector** pprev_toks, 
-    void** pprev_arcs, int *num_arcs, bool islast, int* lat_frame, uint dec_frame) {
+  void CudaLatticeDecoder::PreProcessLattices(TokenState** pprev_toks, int**pprev_tok_size,
+    void** pprev_arcs, int **pprev_arcs_size, bool islast, int* lat_frame, uint dec_frame) {
     PUSH_RANGE("PreProcessLattices_and_Wait",0)
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
     uint prev_idx2=(dec_frame-1)%(LAT_BUF_SIZE-1);
     uint pprev_idx=(dec_frame-2)%LAT_BUF_SIZE;
     uint pprev_idx2=(dec_frame-2)%(LAT_BUF_SIZE-1);
     *lat_frame=dec_frame-2; //for CPU
+    //stream_copy[prev_idx]
     {
+      /* //previous do like this 
       LatLinkVectorMerge& cur_vec=arc_copy_buf_[prev_idx];
       cur_vec.load(lat_arcs_sub_vec_buf_[prev_idx], 
           sub_vec_num_, stream_copy[prev_idx], total_threads,
           lat_arcs_sub_vec_buf_count_[prev_idx][1]);
       cudaCheckError();
       cur_vec.copy_size_to_host(stream_copy[prev_idx]);
-      (toks_buf_[prev_idx]).copy_size_to_host(stream_copy[prev_idx]);
+      */
+      (toks_buf_[prev_idx]).copy_size_to_host(stream_copy[prev_idx]);//copy data in post
     }
     //stream_copy[pprev_idx]
     cudaStreamSynchronize(stream_copy[pprev_idx]);
     cudaCheckError();
-    *pprev_toks = &toks_buf_[pprev_idx];
-    *pprev_arcs=arcs_ready2cpu_[pprev_idx];
-    *num_arcs=arc_copy_buf_[pprev_idx].size();
+    if ((dec_frame-2)%prune_interval_) { //ready for arc lat proc, copy per prune_interval_
+      cudaStreamSynchronize(stream_copy[LAT_BUF_SIZE]);   
+      lattice_pruner_.get_data_copied_to_host(pprev_arcs_size, pprev_arcs, dec_frame-2);
+      lattice_pruner.get_tok_buf_by_frame(pprev_toks, pprev_tok_size, dec_frame-2);
+    }
+    else {
+      *pprev_arcs=NULL;
+      *pprev_arcs_size==NULL;
+      *pprev_toks=NULL;
+      *pprev_tok_size=NULL;
+    }
     POP_RANGE
   }
   void CudaLatticeDecoder::PreProcessTokens() {

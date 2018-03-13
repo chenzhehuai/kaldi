@@ -97,10 +97,10 @@ void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost,
   Token *&toks, Token* newtok) {
     Token *new_tok = newtok;
     {
+      if (!new_tok->links) return;
       new_tok->tot_cost=cost;
       new_tok->next=toks;
       new_tok->extra_cost=0;
-      new_tok->links=NULL;
     }
     toks = new_tok; //add into active_toks_;
 }
@@ -137,30 +137,46 @@ POP_RANGE
 }
 
 void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector& cur_toks,
-  ForwardLink& cur_arcs, int num_arcs, int proc_frame) {
+  ForwardLink& cur_arcs, int* arcs_buf_size, int proc_frame) {
   //add current
   if (proc_frame<0) return;
 PUSH_RANGE("ProcessLattices",3)
-PUSH_RANGE("tok",4)
+
   active_toks_.resize(active_toks_.size() + 1);
   assert(proc_frame<active_toks_.size());
+  
   Token* newtoks;
   GET_FROM_BUF(newtoks,toks_buf_,toks_buf_used_,cur_toks.size(),config_.max_tokens);
   active_tok_frames_.push_back(newtoks);
   active_tok_size_frames_.push_back(cur_toks.size());
   assert(proc_frame==active_tok_frames_.size()-1); //frame 0 has idx 0
-  for (int i=0;i<cur_toks.size();i++) { //always add into active_toks_map_, the newer key will replace the older
-    CreateTokAndRegister(cur_toks[i].cost_, active_toks_[proc_frame].toks, newtoks+i);
-    num_toks_++;
+
+  if (arcs_buf_size) {
+    for (int i=0; i<=min(num_frames_decoded_,config_.prune_interval); i++) {
+      cuTokenVector
+      int num_arcs=arcs_buf_size[i];
+      active_arc_frames_.push_back(&cur_arcs);
+      active_arc_size_frames_.push_back(num_arcs);
+      //TODO:
+      AddLatticeArcs(cur_arcs, proc_frame);
+    
+      //only allocate memory, but don't need to iteration here
+      //after AddLatticeArcs(), if (!new_tok->links) return;
+      //while arc prune is done in GPU
+      for (int i=0;i<cur_toks.size();i++) { //always add into active_toks_map_, the newer key will replace the older
+        CreateTokAndRegister(cur_toks[i].cost_, active_toks_[proc_frame].toks, newtoks+i);
+        num_toks_++;
+      }
+    }
   }
-  KALDI_VLOG(7)<<NumFramesDecoded()<<" "<<cur_toks.size();
-POP_RANGE
-  active_arc_frames_.push_back(&cur_arcs);
-  active_arc_size_frames_.push_back(num_arcs);
-  AddLatticeArcs(cur_arcs, proc_frame);
+  
   //call prune
-  if (NumFramesDecoded() % config_.prune_interval == 0)
+  if (NumFramesDecoded() % config_.prune_interval == 0) {
+    assert(arcs_buf_size); //should be proc just after AddLatticeArcs
     PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
+  }
+
+  KALDI_VLOG(7)<<NumFramesDecoded()<<" "<<cur_toks.size();
 POP_RANGE
 }
 // Returns true if any kind of traceback is available (not necessarily from
@@ -171,11 +187,13 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
   nvtxRangePushA("CudaLatticeDecoder::Decode::init_search");
   int proc_lat_frame;
-  int cur_num_arcs;
+  int* cur_num_arcs;
+  int* cur_num_toks;
   InitDecoding(); //CPU init
   decoder_.InitDecoding(); //GPU init
   //GPU transfers lattice to CPU
-  decoder_.PreProcessLattices(&pprev_toks_, (void **)&pprev_arcs_, &cur_num_arcs, 0, &proc_lat_frame, num_frames_decoded_);
+  //TODO:modify parameters
+  decoder_.PreProcessLattices(&pprev_toks_, &cur_num_toks, (void **)&pprev_arcs_, &cur_num_arcs, 0, &proc_lat_frame, num_frames_decoded_);
   decoder_.PostProcessLattices(0, num_frames_decoded_); //CPU is always faster than GPU, so wait for GPU here
   decoder_.ComputeLogLikelihoods(decodable); //get posteriors
   num_frames_decoded_++;
