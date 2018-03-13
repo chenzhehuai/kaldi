@@ -110,7 +110,12 @@ template <typename T>
     const ulong2 src = *reinterpret_cast<const ulong2*>(b);
     asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
   }
-
+template <typename T>
+  DEVICE __forceinline__ void store32(T *a, const T *b) {
+    const ulong4 src = *reinterpret_cast<const ulong4*>(b);
+    asm("st.global.v4.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y),
+      "l"(src.z), "l"(src.w));
+  }
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 // No stream priorities
 DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
@@ -544,7 +549,7 @@ void CudaMergeVector<T>::free() {
     for(int i=blockIdx.x*blockDim.x+threadIdx.x; i<numStates; i+=blockDim.x*gridDim.x) {
       Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
-      token->prev_ = NULL;
+      token->extra_cost = 0;
       token->frame= -1;
       TokenLookupElem elem;
       elem.token=token;
@@ -566,7 +571,7 @@ void CudaMergeVector<T>::free() {
     for(int i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
       Token *token = allocator.getToken(i);
       token->cost_ = INFINITY;
-      token->prev_ = NULL;
+      token->extra_cost = 0;
       token->frame= -1;
       //a CPU copy of cur_toks can still be used, cur_toks will be clear in PreProcessTokens 
       //lat_arcs_sub_vec_ is clearred in PreProcessTokens
@@ -732,9 +737,7 @@ void CudaMergeVector<T>::free() {
     sub_vec_num_=config.sub_vec_num;
     max_arcs_=config.max_arcs;
 
-    //lattice: should use manage
-    cudaMallocHost((void**)&arcs_buf_,sizeof(LatLink)*(config.max_arcs)); 
-    cudaMallocManaged((void**)&arc_copy_buf_,sizeof(LatLinkVectorMerge)*(LAT_BUF_SIZE)); 
+    //lattice: should use manage 
     for (int j=0; j<LAT_BUF_SIZE; j++) {
       cudaMallocHost((void**)&lat_arcs_sub_vec_buf_count_[j][0],sizeof(uint32_t)*(config.sub_vec_num)); 
       //coount bytes_cudaMalloc in the loop below
@@ -756,6 +759,11 @@ void CudaMergeVector<T>::free() {
       arc_copy_buf_[j].reg(lat_arcs_sub_vec_buf_[j], config.sub_vec_num, stream_copy[0]);
     }
     num_frames_decoded_=0;
+
+    //for pruning
+    bytes_cudaMalloc+=lattice_pruner.allocate(config.max_tokens_per_frame, 
+                      config.max_lat_arc_per_frame, config.prune_interval);
+
     SetTokArcPointerByFrame(num_frames_decoded_);
     
     cudaStreamSynchronize(stream_comp);
@@ -845,7 +853,7 @@ void CudaMergeVector<T>::free() {
     TokenState *next_ts=NULL;
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
       0, NULL, -1, false, 0, &next_ts);
-    Token tok(0, NULL);
+    Token tok(0, 0);
     *cur_tok = tok;
     cur_tok->frame=params.frame;
   }
@@ -1120,7 +1128,7 @@ void CudaMergeVector<T>::free() {
 
         if(total_cost<=cutoff) 
         {
-          Token next_tok =  Token(acoustic_cost+weight, tok);
+          Token next_tok =  Token(acoustic_cost+weight, params.frame);
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             acoustic_cost, &ts, j, true, (i+j)%params.sub_vec_num, &next_ts);
@@ -1131,12 +1139,12 @@ void CudaMergeVector<T>::free() {
           acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min           
 
-                //if(sizeof(Token)==16)
-                //  store16(cur_tok,&next_tok);                                                                       //update token
-                //else
-                //  *cur_tok=next_tok;
-                cur_tok->cost_=next_tok.cost_;
-                cur_tok->frame=params.frame;
+                if(sizeof(Token)==16)
+                  store16(cur_tok,&next_tok);                                                                       //update token
+                else
+                  *cur_tok=next_tok;
+                /*cur_tok->cost_=next_tok.cost_;
+                cur_tok->frame=params.frame;*/
                 next_ts->cost_=cur_tok->cost_;
               }
               release_semaphore((int*)&params.token_locks[nextstate]);
@@ -1177,7 +1185,7 @@ void CudaMergeVector<T>::free() {
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
-        Token next_tok = Token(weight, tok);
+        Token next_tok = Token(weight, params.frame);
 
         CostType total_cost = tok->cost_ + weight;
 
@@ -1192,12 +1200,12 @@ void CudaMergeVector<T>::free() {
           while(*cur_tokv < next_tok) {   //check if we need to update
             acquire_semaphore((int*)&params.token_locks[nextstate]);
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
-                //if(sizeof(Token)==16)
-                //  store16(cur_tok,&next_tok);                                                                       //update token
-                //else
-                //  *cur_tok=next_tok;
-                cur_tok->cost_=next_tok.cost_;
-                cur_tok->frame=params.frame;
+                if(sizeof(Token)==16)
+                  store16(cur_tok,&next_tok);                                                                       //update token
+                else
+                  *cur_tok=next_tok;
+                /*cur_tok->cost_=next_tok.cost_;
+                cur_tok->frame=params.frame;*/
                 next_ts->cost_=cur_tok->cost_;
                 (*modified) = true;                                                                            //mark as updated
               }
@@ -1394,6 +1402,7 @@ void CudaMergeVector<T>::free() {
     lat_arcs_sub_vec_=lat_arcs_sub_vec_buf_[frame%LAT_BUF_SIZE];
     lat_arcs_sub_vec_prev_=lat_arcs_sub_vec_buf_[(frame-1)%LAT_BUF_SIZE];    
   }
+  //TODO
   void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame) {
     PUSH_RANGE("PostProcessLattices",1); 
     uint prev_idx=(dec_frame-1)%LAT_BUF_SIZE;
@@ -1420,6 +1429,7 @@ void CudaMergeVector<T>::free() {
     POP_RANGE
   }
 
+  //TODO
   void CudaLatticeDecoder::PreProcessLattices(TokenVector** pprev_toks, 
     void** pprev_arcs, int *num_arcs, bool islast, int* lat_frame, uint dec_frame) {
     PUSH_RANGE("PreProcessLattices_and_Wait",0)
