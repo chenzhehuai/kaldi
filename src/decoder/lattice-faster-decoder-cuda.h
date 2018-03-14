@@ -43,6 +43,7 @@ class LatticeFasterDecoderCuda {
   typedef Arc::Weight Weight;
   typedef CudaLatticeDecoder::Token cuToken;
   typedef CudaLatticeDecoder::TokenVector cuTokenVector;
+  typedef CudaLatticeDecoder::TokenState TokenState;
   typedef CudaLatticeDecoder::LatLink LatLink;
   typedef CudaLatticeDecoder::LatLinkVectorMerge LatLinkVector;
   // instantiate this class once for each thing you have to decode.
@@ -176,7 +177,7 @@ class LatticeFasterDecoderCuda {
   };
 
   typedef HashList<StateId, Token*>::Elem Elem;
-  void ProcessLattices(Token* toks_buf, 
+  void ProcessLattices(cuTokenVector* last_toks, cuToken* toks_buf, 
   int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int proc_frame);
   inline Token* ActiveToksMap(void*) const;
   inline Token* ActiveToksMap(int frame, int i) const;
@@ -272,9 +273,7 @@ class LatticeFasterDecoderCuda {
   int32 num_toks_; // current total #toks allocated...
   CudaLatticeDecoder decoder_;
   int num_frames_decoded_;
-
-  cuTokenVector* cur_toks_;
-  TokenState* pprev_toks_;
+  cuTokenVector* pprev_toks_;
   int* pprev_toks_size_;
   ForwardLink* pprev_arcs_;  
   std::vector<Token*> active_tok_frames_;

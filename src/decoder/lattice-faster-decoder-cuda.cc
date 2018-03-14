@@ -136,7 +136,7 @@ POP_RANGE
   return num_arcs;
 }
 
-void LatticeFasterDecoderCuda::ProcessLattices(Token* toks_buf, 
+void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector* last_toks, cuToken* toks_buf, 
   int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int proc_frame) {
   //add current
   if (proc_frame<0) return;
@@ -144,7 +144,7 @@ PUSH_RANGE("ProcessLattices",3)
   assert(proc_frame<config_.prune_interval);
   active_toks_.resize(proc_frame + 1);
   assert(proc_frame<active_toks_.size());
-    
+  pprev_toks_=last_toks;
   for (int i=0; i<=num_frames_decoded_; i++) {
     Token* newtoks;
     int cur_toks_size=toks_sidx[i+1]-toks_sidx[i];
@@ -156,19 +156,19 @@ PUSH_RANGE("ProcessLattices",3)
   int acc=0;
   for (int i=num_frames_decoded_; i>0; i++) {
     int num_arcs=arcs_size[i];
-    active_arc_frames_.insert(active_arc_frames_.begin(),arcs_buf+acc);
+    active_arc_frames_.insert(active_arc_frames_.begin(),(ForwardLink*)arcs_buf+acc);
     acc+=num_arcs;
-    active_arc_size_frames_.insert(active_arc_frames_.begin(),num_arcs);
+    active_arc_size_frames_.insert(active_arc_size_frames_.begin(),num_arcs);
   }
   for (int j=0; j<=num_frames_decoded_; j++) {
     AddLatticeArcs(j);
     //only allocate memory, but don't need to iteration here
     //after AddLatticeArcs(), if (!new_tok->links) return;
     //while arc prune is done in GPU
-    int cur_toks_size=toks_sidx[i+1]-toks_sidx[i];
+    int cur_toks_size=toks_sidx[j+1]-toks_sidx[j];
     Token* newtoks=active_tok_frames_[j];
     for (int i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
-      Token& cur_tok=toks_buf[toks_sidx[j]+i];
+      cuToken& cur_tok=toks_buf[toks_sidx[j]+i];
       CreateTokAndRegister(cur_tok.cost_, active_toks_[j].toks, newtoks+i);
       num_toks_++;
     }
@@ -181,7 +181,6 @@ PUSH_RANGE("ProcessLattices",3)
   }
   */
 
-  KALDI_VLOG(7)<<NumFramesDecoded()<<" "<<cur_toks.size();
 POP_RANGE
 }
 // Returns true if any kind of traceback is available (not necessarily from
@@ -191,9 +190,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   //decoder_.Decode(decodable);
 
   nvtxRangePushA("CudaLatticeDecoder::Decode::init_search");
-  int proc_lat_frame;
-  int* cur_num_arcs;
-  int* cur_num_toks;
+  //int proc_lat_frame;
   InitDecoding(); //CPU init
   decoder_.InitDecoding(); //GPU init
   //GPU transfers lattice to CPU
@@ -241,14 +238,15 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   assert(num_frames_decoded_==NumFramesDecoded());
   nvtxRangePop();
   nvtxRangePushA("CudaLatticeDecoder::Decode::final");
-  Token* toks_buf;
+  cuToken* toks_buf;
   int* toks_sidx;
   LatLink* arcs_buf;
   int* arcs_size;
-  decoder_.PreFinalizeDecoding(
+  cuTokenVector* last_tokv;
+  decoder_.PreFinalizeDecoding(&last_tokv,
     &toks_buf, &toks_sidx, &arcs_buf, &arcs_size);
   //TODO
-  ProcessLattices(toks_buf, toks_sidx, arcs_buf, arcs_size, proc_lat_frame);
+  ProcessLattices(last_tokv, toks_buf, toks_sidx, arcs_buf, arcs_size, num_frames_decoded_);
   FinalizeDecoding();   //final lattice pruning
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
