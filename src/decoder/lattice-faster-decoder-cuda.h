@@ -196,7 +196,7 @@ class LatticeFasterDecoderCuda {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
-  void CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok, bool last);
+  bool CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok, bool last);
   int AddLatticeArcs(int proc_frame);
 
 

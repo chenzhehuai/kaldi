@@ -93,16 +93,17 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   //ProcessNonemittingWrapper(config_.beam);
 }
 //inline
-void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost, 
+bool LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost, 
   Token *&toks, Token* newtok, bool last) {
     Token *new_tok = newtok;
     {
-      if (!new_tok->links&&!last) return;
+      if (!new_tok->links&&!last) return false;
       new_tok->tot_cost=cost;
       new_tok->next=toks;
       new_tok->extra_cost=0;
     }
     toks = new_tok; //add into active_toks_;
+    return true;
 }
 inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(void* p) const {
   int frame, id;
@@ -177,12 +178,17 @@ PUSH_RANGE("ProcessLattices",3)
   for (int j=0; j<=num_frames_decoded_; j++) {
     int cur_toks_size=toks_sidx[j+1]-toks_sidx[j];
     Token* newtoks=active_tok_frames_[j];
+    int survive=0;
     for (int i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
       cuToken& cur_tok=toks_buf[toks_sidx[j]+i];
-      CreateTokAndRegister(cur_tok.cost_, active_toks_[j].toks, newtoks+i, j==num_frames_decoded_);
-      num_toks_++;
+      survive+=CreateTokAndRegister(cur_tok.cost_, active_toks_[j].toks, newtoks+i, j==num_frames_decoded_);
     }
+    if (survive)
+      num_toks_+=survive;
+    else
+      KALDI_WARN<<"no survive after GPU prune @ frame "<<j;
   }
+  KALDI_VLOG(3)<<"tok after GPU prune "<<num_toks_;
 
   /*
   //call prune

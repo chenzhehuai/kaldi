@@ -1229,8 +1229,8 @@ void CudaMergeVector<T>::free() {
   void CudaLatticeDecoder::PreFinalizeDecoding(TokenVector** last_tokv,
     Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) { 
     cudaStreamSynchronize(stream_comp);//after fini comp. we can start copy 
-    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 0.25);
     lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
+    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 0.25);
     (toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]).copy_data_to_host(stream_copy[2]);//copy data in post
     *last_tokv=&(toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]);
 
@@ -1763,7 +1763,7 @@ void CudaMergeVector<T>::free() {
     dim3 blocks(DIV_ROUND_UP(total_threads*ratio,(threads.x*threads.y)));
     cudaStreamSynchronize(wait_st);
     LaunchPruneActiveTokens<<<blocks,threads,0,st>>>(params);
-    lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, st);
+    //lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, st);
   }
 #if 0
   void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame,
