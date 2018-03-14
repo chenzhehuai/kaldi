@@ -763,7 +763,7 @@ void CudaMergeVector<T>::free() {
     //for pruning
     bytes_cudaMalloc+=lattice_pruner_.allocate(config.max_tokens_per_frame, 
                       config.max_lat_arc_per_frame, config.prune_interval,
-                      config.max_arcs);
+                      config.max_tokens, config.max_arcs);
     lattice_beam_=config.lattice_beam;
 
     SetTokArcPointerByFrame(num_frames_decoded_);
@@ -917,7 +917,15 @@ void CudaMergeVector<T>::free() {
     ProcessNonemitting();
   }
 
-  void CudaLatticeDecoder::PreFinalizeDecoding() { 
+  void CudaLatticeDecoder::PreFinalizeDecoding(
+    Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) { 
+    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 
+         0.25);
+    lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
+    cudaStreamSynchronize(stream_copy[0]);
+    copy_arcs_to_host(num_frames_decoded_, 0);
+    cudaStreamSynchronize(stream_copy[1]);
+    get_data_copied_to_host(toks_buf, toks_sidx, arcs_buf, arcs_size);
   }
 
   bool CudaLatticeDecoder::ReachedFinal() const {
@@ -1428,7 +1436,6 @@ void CudaMergeVector<T>::free() {
   }
 
   void CudaLatticeDecoder::CallLaunchPruneActiveTokens(cudaStream_t wait_st, 
-    TokenOrSize* toks_buf_after_pr, LatLink* arcs_buf_after_pr,
     cudaStream_t st, float ratio) {
     processTokens_params params;
     initParams(params);
@@ -1436,11 +1443,9 @@ void CudaMergeVector<T>::free() {
     dim3 blocks(DIV_ROUND_UP(total_threads*ratio,(threads.x*threads.y)));
     cudaStreamSynchronize(wait_st);
     LaunchPruneActiveTokens<<<blocks,threads,0,st>>>(params);
-
-    lattice_pruner.copy_arc_to_host(num_frames_decoded_, 
-      toks_buf_after_pr, arcs_buf_after_pr, st);
+    lattice_pruner.copy_arcs_to_host(num_frames_decoded_, st);
   }
-
+#if 0
   void CudaLatticeDecoder::PostProcessLattices(bool islast, uint dec_frame,
     TokenOrSize* toks_buf_after_pr, LatLink* arcs_buf_after_pr) {
     PUSH_RANGE("PostProcessLattices",1); 
@@ -1454,8 +1459,6 @@ void CudaMergeVector<T>::free() {
       cudaStreamSynchronize(stream_copy[prev_idx]); //finish copy size
       TokenState* ts_buf;
       int* size;
-      lattice_pruner.get_tok_buf_by_frame(&ts_buf, &size, dec_frame-1);
-      (toks_buf_[prev_idx]).copy_data_to_host(stream_copy[prev_idx], ts_buf, false);
       *size=(toks_buf_[prev_idx]).size();
     }
     //if (islast) 
@@ -1505,6 +1508,7 @@ void CudaMergeVector<T>::free() {
     }
     POP_RANGE
   }
+#endif  
   void CudaLatticeDecoder::PreProcessTokens() {
     nvtxRangePushA("PreProcessTokens"); 
     num_frames_decoded_++;
@@ -1524,6 +1528,7 @@ void CudaMergeVector<T>::free() {
     }
     nvtxRangePop();
   }
+  
   void CudaLatticeDecoder::ProcessTokens() {
     PUSH_RANGE("ProcessTokens",2)
     if (verbose>4) KALDI_LOG << num_frames_decoded_<<std::endl;

@@ -173,8 +173,8 @@ struct CudaLatticeDecoderConfig {
                        max_lat_tok_per_frame(200000),
                        max_lat_arc_per_frame(600000),
                        max_tokens(60000000),
-                       max_arcs(180000000),
-                       prune_interval(25),
+                       max_arcs(90000000),
+                       prune_interval(2000),
                        lattice_beam(10.0),
                        determinize_lattice(true),
                        prune_scale(0.1), 
@@ -410,10 +410,13 @@ typedef CudaVector<TokenState> TokenVector;
   void InitDecoding(); 
   void ClearArcVector(LatLinkVector* lat_arcs_sub_vec_);
   void initParams(processTokens_params& params);
-  void PreFinalizeDecoding();
+  void PreFinalizeDecoding(
+    Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);
+  #if 0
   void PostProcessLattices(bool islast, uint dec_frame);
   void PreProcessLattices(TokenVector** pprev_toks, 
     void** buf_arcs, int *num_arcs, bool islast, int* lat_frame, uint dec_frame);
+  #endif
   void PreProcessTokens();
 
   /// Returns the number of frames already decoded.  
@@ -492,100 +495,82 @@ typedef CudaVector<TokenState> TokenVector;
   //for pruning
   class LatticePruner {
   public:  
-    #define GET_IDX_BY_FRAME1(frame) ((frame)%(prune_interval))
-    #define FR_SUBID(frame) ((frame)/prune_interval%2)
-    #define FR_IDX(frame) ((frame)%prune_interval)
-
     inline DEVICE void init_buf_before_cp() {
       if (threadIdx.x!=0||blockIdx.x!=0) return;
       //*arcs_buf_after_pr_size_arr_used_d=prune_interval_/sizeof(int)*2;
-      *arcs_buf_after_pr_used_d=0;
-    }
-    inline DEVICE int* get_arc_size_of_frame(int f) {
-      return arcs_buf_after_pr_size_arr_d+GET_IDX_BY_FRAME1(f);
+      *arcs_apr_used_d=0;
     }
     inline DEVICE int merge_arc(LatLink* arc) {
-      int i=atomicAdd(arcs_buf_after_pr_used_d, 1);
-      store32(arcs_buf_after_pr_d+i, arc)
+      int i=atomicAdd(arcs_apr_used_d, 1);
+      store32(arcs_apr_d+i, arc)
     }
-    /*
-    inline DEVICE int merge_tok(Token* tok) {
-      int i=atomicAdd(arcs_buf_after_pr_size_arr_used_d, 1);
-      store16(arcs_buf_after_pr_size_arr_d+i, tok)
-    }
-    */
+    #define PRUNE_RATIO_ASSUME 0.25
     int allocate(int max_tokens_per_frame, int max_lat_arc_per_frame, 
-      int prune_interval, int max_arcs) {
+      int prune_interval, int max_toks, int max_arcs) {
       int sz;
       int bytes_cudaMalloc=0;
-      float prune_ratio_assume=0.5;
+      
       //after
       sz=sizeof(int)*(prune_interval+1);
-      cudaMalloc((void**)&arcs_buf_after_pr_size_arr_d,sz); bytes_cudaMalloc+=sz;
-      cudaMallocHost((void**)&arcs_buf_after_pr_size_arr_h,sz);
-      sz=prune_ratio_assume*sizeof(LatLink)*max_lat_arc_per_frame*prune_interval*(1);
-      cudaMalloc((void**)&arcs_buf_after_pr_d,sz); bytes_cudaMalloc+=sz;
+      cudaMalloc((void**)&arcs_apr_size_d,sz); bytes_cudaMalloc+=sz;
+      cudaMallocHost((void**)&arcs_apr_size_h,sz);
+      sz=PRUNE_RATIO_ASSUME*sizeof(LatLink)*max_arcs;
+      cudaMalloc((void**)&arcs_apr_d,sz); bytes_cudaMalloc+=sz;
+      cudaMalloc((void**)&arcs_apr_h,sz); 
       /*sz=sizeof(int);
       cudaMalloc((void**)&arcs_buf_after_pr_size_arr_used_d,sz); bytes_cudaMalloc+=sz;*/
       sz=sizeof(int);
-      cudaMalloc((void**)&arcs_buf_after_pr_used_d,sz); bytes_cudaMalloc+=sz;
-      cudaMallocHost((void**)&arcs_buf_after_pr_used_h,sz); bytes_cudaMalloc+=sz;
+      cudaMalloc((void**)&arcs_apr_used_d,sz); bytes_cudaMalloc+=sz;
+      cudaMallocHost((void**)&arcs_apr_used_h,sz); 
 
       //before
-      for (int i=0; i<2;i++) {
-        sz=sizeof(Token)*max_tokens_per_frame*prune_interval*(1);
-        cudaMalloc((void**)&toks_buf_before_pr_d[i],sz); bytes_cudaMalloc+=sz;
-        toks_buf_before_pr_size=sz/sizeof(Token);
-        sz=sizeof(LatLink)*max_lat_arc_per_frame*prune_interval*(1);
-        cudaMalloc((void**)&arcs_buf_before_pr_d[i],sz); bytes_cudaMalloc+=sz;
-        arcs_buf_before_pr_size=sz/sizeof(LatLink);
-        sz=sizeof(int)*(prune_interval+1);
-        cudaMalloc((void**)&per_fr_sidx_toks_buf[i],sz); bytes_cudaMalloc+=sz;
-        sz=sizeof(int)*(prune_interval+1);
-        cudaMalloc((void**)&per_fr_sidx_arcs_buf[i],sz); bytes_cudaMalloc+=sz;
-      }
+      sz=sizeof(Token)*max_toks;
+      cudaMalloc((void**)&toks_bpr_d,sz); bytes_cudaMalloc+=sz;
+      cudaMalloc((void**)&toks_bpr_h,sz); 
+      toks_buf_before_pr_size=sz/sizeof(Token);
+      sz=sizeof(LatLink)*max_arcs;
+      cudaMalloc((void**)&arcs_bpr_d,sz); bytes_cudaMalloc+=sz;
+      arcs_buf_before_pr_size=sz/sizeof(LatLink);
+      sz=sizeof(int)*(prune_interval+1);
+      cudaMalloc((void**)&toks_bpr_sidx_d,sz); bytes_cudaMalloc+=sz;
+      cudaMallocHost((void**)&toks_bpr_sidx_h,sz); 
+      sz=sizeof(int)*(prune_interval+1);
+      cudaMalloc((void**)&arcs_bpr_sidx_d,sz); bytes_cudaMalloc+=sz;
 
       sz=sizeof(int);
       cudaMalloc((void**)&barrier_,sz); bytes_cudaMalloc+=sz;
       sz=sizeof(int)*(sub_vec_num+1);
       cudaMalloc((void**)&count_vec_acc_d,sz); bytes_cudaMalloc+=sz;
       this->prune_interval=prune_interval;
-      sz=sizeof(LatLink)*max_arcs;
-      cudaMalloc((void**)&arcs_exact_after_pr_h,sz); 
       
       return bytes_cudaMalloc;
     }
     void free() {
-      cudaFree(arcs_buf_after_pr_size_arr_d);
-      cudaFreeHost(arcs_buf_after_pr_size_arr_h);
+      cudaFree(arcs_apr_size_d);
+      cudaFreeHost(arcs_apr_size_h);
       /*cudaFree(arcs_buf_after_pr_size_arr_used_d);*/
-      cudaFree(arcs_buf_after_pr_d);
-      cudaFree(arcs_buf_after_pr_used_d);
-      cudaFreeHost(arcs_buf_after_pr_used_h);
-      for (int i=0; i<2; i++) {
-        cudaFree(toks_buf_before_pr_d[i]);
-        cudaFree(arcs_buf_before_pr_d[i]);
-        cudaFree(per_fr_sidx_toks_buf[i]);
-        cudaFree(per_fr_sidx_arcs_buf[i]);  
-      }
+      cudaFree(arcs_apr_d);
+      cudaFree(arcs_apr_used_d);
+      cudaFreeHost(arcs_apr_used_h);
+      cudaFree(toks_bpr_d);
+      cudaFree(arcs_bpr_d);
+      cudaFree(toks_bpr_sidx_d);
+      cudaFreeHost(toks_bpr_sidx_h);
+      cudaFree(arcs_bpr_sidx_d);  
       
       cudaFree(count_vec_acc_d);
       cudaFree(barrier_);
-      cudaFree(arcs_exact_after_pr_h);
+      cudaFree(arcs_apr_h);
     }
     inline DEVICE void set_next_sidx(int* sidx_buf, int size, int frame) {
-      int cur_sidx=sidx_buf[FR_SUBID(frame)][FR_IDX(frame)]
-      if (FR_IDX(frame)==prune_interval-1) { //boundary
-        sidx_buf[FR_SUBID(frame+1)][FR_IDX(frame+1)]=0;
-        sidx_buf[FR_SUBID(frame)][FR_IDX(frame)+1]=cur_sidx+size;
-      } else {
-        sidx_buf[FR_SUBID(frame+1)][FR_IDX(frame+1)]=cur_sidx+size;
-      }
+      assert(frame>=0);
+      int cur_sidx=sidx_buf[(frame)];
+      sidx_buf[(frame+1)]=cur_sidx+size;
     }
     inline DEVICE void collect_tok_per_frame(TokenState* cur_toks, int size, int frame) {
       int tid=threadIdx.x+blockIdx.x*blockDim.x;
       if (tid==0) {
-        set_next_sidx(per_fr_sidx_toks_buf, size, frame);
+        set_next_sidx(toks_bpr_sidx_d, size, frame);
       }
       for (tid<size;tid+=gridDim.x*blockDim.x) {
         Token* to_tok=ActiveToksMap(frame,tid);
@@ -610,7 +595,7 @@ typedef CudaVector<TokenState> TokenVector;
       if (rank0) {
         int size=count_vec_acc_d[sub_vec_num];
         assert(size==count_vec_acc_d[sub_vec_num-1]+count_vec_d[sub_vec_num-1]);
-        set_next_sidx(per_fr_sidx_arcs_buf, size, frame);
+        set_next_sidx(arcs_bpr_sidx_d, size, frame);
       }
       int sz = count_vec_acc_d[subid+1]-count_vec_acc_d[subid];
       for(; idx < sz; idx += batch) {
@@ -619,19 +604,14 @@ typedef CudaVector<TokenState> TokenVector;
       }
     }
     inline DEVICE void PruneActiveTokens(int frame, float lattice_beam,int verbose) {
-      if (GET_IDX_BY_FRAME1(frame)!=0||frame==0) return;
-
+      if (frame==0) return;
       init_buf_before_cp();
       __grid_sync_nv_internal(barrier_);
-      
-      int start=frame-2*prune_interval;
-      int end=frame-1*prune_interval;
-      for (int f = frame; f > frame-2*prune_interval; f--) {
-          merge=f<=frame-1*prune_interval?1:0;
-          PruneForwardLinks_PruneTokensForFrame(f,merge,verbose);
+      for (int f = frame; f > 0; f--) {
+          PruneForwardLinks_PruneTokensForFrame(f,1,verbose);
       }
       //see copy_data_to_host
-      assert(*arcs_buf_after_pr_used_d<arcs_buf_before_pr_size*0.5);
+      assert(*arcs_apr_used_d<arcs_buf_before_pr_size*PRUNE_RATIO_ASSUME);
     }
     #define DECODE_TOK_ADDR(frame,idx,v) { \
     frame=(((uint64)v)>>32); \
@@ -644,21 +624,21 @@ typedef CudaVector<TokenState> TokenVector;
     }
     inline DEVICE Token* ActiveToksMap(int frame, int id) const {
       
-      int cur_sidx=per_fr_sidx_toks_buf[FR_SUBID(frame)][FR_IDX(frame)];
+      int cur_sidx=toks_bpr_sidx_d[frame];
       assert(cur_sidx+id<toks_buf_before_pr_size);
-      Token* tok=toks_buf_before_pr_d[FR_SUBID(frame)]+cur_sidx+id;
+      Token* tok=toks_bpr_d+cur_sidx+id;
       assert(tok->frame==frame);
       return tok;
     }
     inline DEVICE LatLink* ActiveArcsMap(int frame, int id) const {
-      int cur_sidx=per_fr_sidx_arcs_buf[FR_SUBID(frame)][FR_IDX(frame)];
+      int cur_sidx=arcs_bpr_sidx_d[(frame)];
       assert(cur_sidx+id<arcs_buf_before_pr_size);
-      LatLink* arc=arcs_buf_before_pr_d[FR_SUBID(frame)]+cur_sidx+id;
+      LatLink* arc=arcs_bpr_d+cur_sidx+id;
       return arc;
     }
     inline DEVICE int GetSize(int* acc_len, int frame) const {
-      int size=acc_len[FR_SUBID(frame)][FR_IDX(frame)+1]-acc_len[FR_SUBID(frame)][FR_IDX(frame)];
-      assert(size>=0&&size<=arcs_buf_before_pr_size);
+      int size=acc_len[(frame)+1]-acc_len[(frame)];
+      assert(size>=0&&size<=arcs_buf_before_pr_size*PRUNE_RATIO_ASSUME);
       return size;
     }
     inline DEVICE void PruneForwardLinks_PruneTokensForFrame(int frame, 
@@ -668,7 +648,7 @@ typedef CudaVector<TokenState> TokenVector;
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
-        int size=GetSize(per_fr_sidx_toks_buf,frame);
+        int size=GetSize(toks_bpr_sidx_d,frame);
         for (tid<size;tid+=gridDim.x*blockDim.x) {
           Token* tok=ActiveToksMap(frame-1,tid);
           tok->extra_cost=FLT_MAX;
@@ -677,7 +657,7 @@ typedef CudaVector<TokenState> TokenVector;
         __grid_sync_nv_internal(barrier_);
         if (merge) {
           if (rank0) //wait for last iteration(frame+1) finish
-            prev_cidx=*arcs_buf_after_pr_used_d;
+            prev_cidx=*arcs_apr_used_d;
           __grid_sync_nv_internal(barrier_);
         }
       }
@@ -685,7 +665,7 @@ typedef CudaVector<TokenState> TokenVector;
       //update arc
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
-        int size=GetSize(per_fr_sidx_arcs_buf,frame);
+        int size=GetSize(arcs_bpr_sidx_d,frame);
         for (tid<size;tid+=gridDim.x*blockDim.x) {
           LatLink* link=ActiveArcsMap(frame,tid);
           Token* next_tok=ActiveToksMap(link->p1);
@@ -706,97 +686,97 @@ typedef CudaVector<TokenState> TokenVector;
         //some flag to show whether it is changed   
       }
       
-      {
+      /*{
         //update tok
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
-        int size=GetSize(per_fr_sidx_toks_buf,frame);
+        int size=GetSize(toks_bpr_sidx_d,frame);
         for (tid<size;tid+=gridDim.x*blockDim.x) {
           Token* tok=ActiveToksMap(frame-1,tid);
           if (tok->extra_cost==FLT_MAX)
             tok->tot_cost=CUDART_NAN_F; //prune
         }        
-      }    
+      } */   
       
       //get size 
       if (merge&&rank0) {
-          int& size_arc_of_frame=*get_arc_size_of_frame(f);
-          size_arc_of_frame=*arcs_buf_after_pr_used_d-prev_cidx;
+          int& size_arc_of_frame=arcs_apr_size_d[frame];
+          size_arc_of_frame=*arcs_apr_used_d-prev_cidx;
           if (verbose>3) printf("PR %i %i %i\n",frame, 
-            GetSize(per_fr_sidx_arcs_buf,frame), size_arc_of_frame);
+            GetSize(arcs_bpr_sidx_d,frame), size_arc_of_frame);
           //size_tok_of_frame[f-1]=cidx-prev_cidx
           //prev_cidx=cidx
       }
-
     }
-    #define GET_ARC_BUF_HOST_BY_FRAME(frame) (arcs_exact_after_pr_h+arcs_exact_after_pr_h_used)
+    //#define GET_ARC_BUF_HOST_BY_FRAME(frame) (arcs_apr_h+arcs_apr_h_used)
 
     //TODO: proc the tail
     void init() {
-      arcs_exact_after_pr_h_used=0;
+      ;
+      //arcs_apr_h_used=0;
     }
-    void copy_arc_to_host(int frame, cudaStream_t st) {
+    void copy_arcs_to_host(int frame, cudaStream_t st) {
       int sz;
-      //TODO: as we do it in stream and need to know the length in advance, we have to copy max_size
-      //BUT we shift a real offset in get_data_copied_to_host()
-      //sz=sizeof(LatLink)*(*arcs_buf_after_pr_used_d);
-      sz=sizeof(LatLink)*(arcs_buf_before_pr_size*0.5); //assume 0.5 parts are pruned
-      cudaMemcpyAsync(GET_ARC_BUF_HOST_BY_FRAME(frame),arcs_buf_after_pr_d,
+      //TODO: optimize out this
+      cudaMemcpy(arcs_apr_used_h,arcs_apr_used_d,
+        sizeof(int), cudaMemcpyDeviceToHost);
+      //
+      sz=sizeof(LatLink)*(*arcs_apr_used_h);
+      //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*0.5); //assume 0.5 parts are pruned
+      cudaMemcpyAsync(arcs_apr_h,arcs_apr_d,
         sz, cudaMemcpyDeviceToHost, st);
-
       //we can call it because currently *arcs_buf_after_pr_size_arr_used_d is static len, 
       //which is only used to save size but not any token
-      sz=sizeof(int)*(prune_interval+1)*(1);
-      cudaMemcpyAsync(arcs_buf_after_pr_size_arr_h,arcs_buf_after_pr_size_arr_d,
+      sz=sizeof(int)*(frame+1)*(1);
+      cudaMemcpyAsync(arcs_apr_size_h,arcs_apr_size_d,
         sz, cudaMemcpyDeviceToHost, st);
-      //TODO: optimize out this
-      cudaMemcpyAsync(arcs_buf_after_pr_used_h,arcs_buf_after_pr_used_d,
-        sizeof(int), cudaMemcpyDeviceToHost, st);
-
       // call init_buf_before_cp(); in GPU
     }
-
-    //TODO: modify to a buffer containing [frame-prune_interval*2,frame-prune_interval]
-    //TODO: a buffer contain only one frame for copying
-    void* get_tok_buf_by_frame(TokenState** ts_buf, int** size, int frame) {
-      *size=ts_exact_after_pr_size_arr_h+frame;
-      ts_exact_after_pr_h_used+=frame==0?-ts_exact_after_pr_h_used:
-              ts_exact_after_pr_size_arr_h[frame-1];//has been proc
-      *ts_buf=ts_exact_after_pr_h+ts_exact_after_pr_h_used;
+    void copy_toks_to_host(int frame, cudaStream_t st) {
+      int sz;
+      sz=sizeof(int)*(frame+1)*(1);
+      cudaMemcpyAsync(toks_bpr_sidx_h,toks_bpr_sidx_d,
+        sz, cudaMemcpyDeviceToHost, st);
+      cudaStreamSynchronize(st);
+      sz=sizeof(Token)*(toks_bpr_sidx_h[frame+1]);
+      cudaMemcpyAsync(toks_bpr_h,toks_bpr_d,
+        sz, cudaMemcpyDeviceToHost, st);
     }
 
-    //TODO: modify to a buffer containing [frame-prune_interval*2,frame-prune_interval]
-    //when call this func, we assume data has been copied to arcs_exact_after_pr_h
-    void get_data_copied_to_host(LatLink** arcs_buf, int** arcs_size, int frame) {
+    void get_data_copied_to_host(Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) {
       //copy the real len 
-      *arcs_size=arcs_buf_after_pr_size_arr_h;  //next prune_interval len
-      *arcs_buf=GET_ARC_BUF_HOST_BY_FRAME(frame); //start of next prune_interval len arcs
-      assert(*arcs_buf_after_pr_used_h>0&&*arcs_buf_after_pr_used_h<arcs_buf_before_pr_size*0.5) //see copy_data_to_host
-      arcs_exact_after_pr_h_used+=*arcs_buf_after_pr_used_h;//shift real offset 
+      *toks_sidx=toks_bpr_sidx_h;
+      *toks_buf=toks_bpr_h;
+      *arcs_size=arcs_apr_size_h;  //next prune_interval len
+      *arcs_buf=arcs_apr_h; //start of next prune_interval len arcs
     }
   private:
+    //after pruning
+    //Arc
     //it's in reverse seq, it includes a header to contain sizeof arc&tok per frame, of [frame-2*prune_interval, frame-1*prune_interval-1]
-    int* arcs_buf_after_pr_size_arr_d; //single buffer to contain all size, so that we can copy in a command
+    int* arcs_apr_size_d; //single buffer to contain all size, so that we can copy in a command
     //int* arcs_buf_after_pr_size_arr_used_d;
-    int* arcs_buf_after_pr_size_arr_h; //only used to save size, currently
+    int* arcs_apr_size_h; //only used to save size, currently
     //it's in reverse seq; of [frame-2*prune_interval+1, frame-1*prune_interval]
-    LatLink* arcs_buf_after_pr_d;
-    int* arcs_buf_after_pr_used_d;
-    int* arcs_buf_after_pr_used_h;
-    //CPU
-    LatLink* arcs_exact_after_pr_h;
-    int arcs_exact_after_pr_h_used;
+    LatLink* arcs_apr_d;
+    LatLink* arcs_apr_h;
+    //for mergeArc
+    int* arcs_apr_used_d;
+    int* arcs_apr_used_h;
     //TokenState
-    TokenState* ts_exact_after_pr_h;
-    int ts_exact_after_pr_h_used;
-    int* ts_exact_after_pr_size_arr_h;
+    //TokenState* ts_exact_after_pr_h;
+    //int ts_exact_after_pr_h_used;
+    //int* ts_exact_after_pr_size_arr_h;
+
     //before
-    Token* toks_buf_before_pr_d[2];  
-    LatLink* arcs_buf_before_pr_d[2];
-    int* per_fr_sidx_toks_buf[2];
-    int* per_fr_sidx_arcs_buf[2];
+    Token* toks_bpr_d;  
+    Token* toks_bpr_h;
+    int* toks_bpr_sidx_d;
+    int* toks_bpr_sidx_h;
+    LatLink* arcs_bpr_d;
+    int* arcs_bpr_sidx_d;
+
     int *barrier_;
     int* count_vec_acc_d;
-
     int prune_interval;
     int toks_buf_before_pr_size;
     int arcs_buf_before_pr_size;
@@ -804,8 +784,6 @@ typedef CudaVector<TokenState> TokenVector;
   };
   
   LatticePruner lattice_pruner_;
-  LatLink* arcs_pruned_ready2cpu_h; //from arcs_buf_
-
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };
