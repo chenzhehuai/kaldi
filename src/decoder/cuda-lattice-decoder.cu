@@ -1235,7 +1235,7 @@ void CudaMergeVector<T>::free() {
     *last_tokv=&(toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]);
 
     cudaStreamSynchronize(stream_copy[0]);
-    lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, 0);
+    lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, stream_copy[1]);
     cudaStreamSynchronize(stream_copy[1]);
     cudaStreamSynchronize(stream_copy[2]);
     lattice_pruner_.get_data_copied_to_host(toks_buf, toks_sidx, arcs_buf, arcs_size);
