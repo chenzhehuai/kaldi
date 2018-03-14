@@ -360,7 +360,7 @@ template<typename T>
       //before
       sz=sizeof(Token)*max_toks;
       cudaMalloc((void**)&toks_bpr_d,sz); bytes_cudaMalloc+=sz;
-      cudaMalloc((void**)&toks_bpr_h,sz); 
+      cudaMallocHost((void**)&toks_bpr_h,sz); 
       toks_buf_before_pr_size=sz/sizeof(Token);
       sz=sizeof(LatLink)*max_arcs;
       cudaMalloc((void**)&arcs_bpr_d,sz); bytes_cudaMalloc+=sz;
@@ -389,6 +389,7 @@ template<typename T>
       cudaFree(arcs_apr_used_d);
       cudaFreeHost(arcs_apr_used_h);
       cudaFree(toks_bpr_d);
+      cudaFreeHost(toks_bpr_h);
       cudaFree(arcs_bpr_d);
       cudaFree(toks_bpr_sidx_d);
       cudaFreeHost(toks_bpr_sidx_h);
@@ -398,7 +399,7 @@ template<typename T>
       cudaFree(barrier_);
       cudaFree(modified_d);
       cudaFree(merge_d);
-      cudaFree(arcs_apr_h);
+      cudaFreeHost(arcs_apr_h);
     }
     inline DEVICE void LatticePruner::set_next_sidx(int* sidx_buf, int size, int frame) {
       assert(frame>=0);
@@ -628,9 +629,8 @@ template<typename T>
         sz, cudaMemcpyDeviceToHost);
       sz=sizeof(Token)*(toks_bpr_sidx_h[frame+1]);
       assert(sz);
-      printf("toks_bpr_h %i\n",sz);
-      cudaMemcpy(toks_bpr_h,toks_bpr_d,
-        sz, cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(toks_bpr_h,toks_bpr_d,
+        sz, cudaMemcpyDeviceToHost,st);
     }
 
     void LatticePruner::get_data_copied_to_host(Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) {
@@ -1228,10 +1228,9 @@ void CudaMergeVector<T>::free() {
 
   void CudaLatticeDecoder::PreFinalizeDecoding(TokenVector** last_tokv,
     Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) { 
-    cudaStreamSynchronize(stream_comp);
+    cudaStreamSynchronize(stream_comp);//after fini comp. we can start copy 
+    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 0.25);
     lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
-    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 
-         0.25);
     (toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]).copy_data_to_host(stream_copy[2]);//copy data in post
     *last_tokv=&(toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]);
 

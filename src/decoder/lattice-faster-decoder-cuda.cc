@@ -94,10 +94,10 @@ void LatticeFasterDecoderCuda::InitDecoding() {
 }
 //inline
 void LatticeFasterDecoderCuda::CreateTokAndRegister(BaseFloat cost, 
-  Token *&toks, Token* newtok) {
+  Token *&toks, Token* newtok, bool last) {
     Token *new_tok = newtok;
     {
-      if (!new_tok->links) return;
+      if (!new_tok->links&&!last) return;
       new_tok->tot_cost=cost;
       new_tok->next=toks;
       new_tok->extra_cost=0;
@@ -173,16 +173,17 @@ PUSH_RANGE("ProcessLattices",3)
     //only allocate memory, but don't need to iteration here
     //after AddLatticeArcs(), if (!new_tok->links) return;
     //while arc prune is done in GPU
+  }
+  for (int j=0; j<=num_frames_decoded_; j++) {
     int cur_toks_size=toks_sidx[j+1]-toks_sidx[j];
     Token* newtoks=active_tok_frames_[j];
     for (int i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
       cuToken& cur_tok=toks_buf[toks_sidx[j]+i];
-      active_toks_[j];
-      active_toks_[j].toks;
-      CreateTokAndRegister(cur_tok.cost_, active_toks_[j].toks, newtoks+i);
+      CreateTokAndRegister(cur_tok.cost_, active_toks_[j].toks, newtoks+i, j==num_frames_decoded_);
       num_toks_++;
     }
   }
+
   /*
   //call prune
   if (NumFramesDecoded() % config_.prune_interval == 0) {
