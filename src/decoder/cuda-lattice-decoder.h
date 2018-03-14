@@ -227,9 +227,10 @@ class __align__(16) Token {
   CostType cost_; // accumulated total cost up to this point.
   int32_t frame; //used in generation
   float extra_cost;//used in pruning
+  StateId state_id;
   //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
-  HOST DEVICE inline Token(BaseFloat cost, int frame, Token* prev) : cost_(cost), frame(frame), extra_cost(0) {
+  HOST DEVICE inline Token(BaseFloat cost, int frame, Token* prev, StateId state_id) : cost_(cost), frame(frame), extra_cost(0), state_id(state_id) {
     assert(sizeof(Token)==16); 
     if(prev) {
       cost_ += prev->cost_;
@@ -354,8 +355,8 @@ typedef CudaVector<TokenState> TokenVector;
     inline DEVICE void collect_arc_per_frame(LatLinkVector* cur_arc_array, 
       int sub_vec_num, uint* count_vec_d, int frame);
     inline DEVICE void PruneActiveTokens(int frame, float lattice_beam,int verbose);
-    inline DEVICE Token* ActiveToksMap(void* p) const;
-    inline DEVICE Token* ActiveToksMap(int frame, int id) const;
+    inline DEVICE Token* ActiveToksMap(void* p, bool check=false, int frame=-1) const;
+    inline DEVICE Token* ActiveToksMap(int frame, int id, bool check=false) const;
     inline DEVICE LatLink* ActiveArcsMap(int frame, int id) const;
     inline DEVICE int GetSize(int* acc_len, int frame) const;
     inline DEVICE void PruneForwardLinks_PruneTokensForFrame(int frame, 
@@ -396,7 +397,8 @@ typedef CudaVector<TokenState> TokenVector;
     int prune_interval;
     int toks_buf_before_pr_size;
     int arcs_buf_before_pr_size;
-
+    int* modified_d;
+    int* merge_d;
   };
  
  

@@ -373,6 +373,8 @@ template<typename T>
 
       sz=sizeof(int);
       cudaMalloc((void**)&barrier_,sz); bytes_cudaMalloc+=sz;
+      cudaMalloc((void**)&modified_d,sz); bytes_cudaMalloc+=sz;
+      cudaMalloc((void**)&merge_d,sz); bytes_cudaMalloc+=sz;
       sz=sizeof(int)*(sub_vec_num+1);
       cudaMalloc((void**)&count_vec_acc_d,sz); bytes_cudaMalloc+=sz;
       this->prune_interval=prune_interval;
@@ -394,6 +396,8 @@ template<typename T>
       
       cudaFree(count_vec_acc_d);
       cudaFree(barrier_);
+      cudaFree(modified_d);
+      cudaFree(merge_d);
       cudaFree(arcs_apr_h);
     }
     inline DEVICE void LatticePruner::set_next_sidx(int* sidx_buf, int size, int frame) {
@@ -407,8 +411,11 @@ template<typename T>
         set_next_sidx(toks_bpr_sidx_d, size, frame);
       }
       for (;tid<size;tid+=gridDim.x*blockDim.x) {
-        Token* to_tok=ActiveToksMap(frame,tid);
+        Token* to_tok=ActiveToksMap(frame,tid,false);
         store16(to_tok, cur_toks[tid].token);
+        //debug
+        //assert(cur_toks[tid].token->frame==frame);
+        //ActiveToksMap(frame,tid,true);
       }
     }
 #define SUB_VEC_NUM 32
@@ -419,13 +426,21 @@ template<typename T>
       int subid=tid%(sub_vec_num);
       int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
       int batch=blockDim.x*gridDim.x/(sub_vec_num);
-      if (blockIdx.x==0&&threadIdx.x<SUB_VEC_NUM+1) {
+      if (rank0) {
         assert(blockDim.x*gridDim.x%(sub_vec_num)==0);
         assert(blockDim.x>=sub_vec_num);
         assert(sub_vec_num==SUB_VEC_NUM);
-        typedef cub::BlockScan<int, SUB_VEC_NUM+1> BlockScan;
+#if 0        
+        typedef cub::BlockScan<int, SUB_VEC_NUM> BlockScan;
         __shared__ typename BlockScan::TempStorage temp_storage;
         BlockScan(temp_storage).ExclusiveSum(count_vec_d[threadIdx.x], count_vec_acc_d[threadIdx.x]);
+#else
+        int acc=0;
+        for (int i=0;i<sub_vec_num+1;i++) {
+          count_vec_acc_d[i]=acc;
+          acc+=count_vec_d[i];
+        }
+#endif        
       }//not including self
       __grid_sync_nv_internal(barrier_);
       if (rank0) {
@@ -437,9 +452,13 @@ template<typename T>
       for(; idx < sz; idx += batch) {
         LatLink* to_arc=ActiveArcsMap(frame,(idx+count_vec_acc_d[subid]));
         store32(to_arc, cur_arc_array[subid].mem_d+idx);
+        //debug
+        ActiveToksMap((cur_arc_array[subid].mem_d+idx)->p1,true,frame);
+        ActiveToksMap(to_arc->p1,true,frame);
       }
     }
     inline DEVICE void LatticePruner::PruneActiveTokens(int frame, float lattice_beam,int verbose) {
+      int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
       if (frame==0) return;
       init_buf_before_cp();
       __grid_sync_nv_internal(barrier_);
@@ -448,18 +467,22 @@ template<typename T>
       }
       //see copy_data_to_host
       assert(*arcs_apr_used_d<arcs_buf_before_pr_size*PRUNE_RATIO_ASSUME);
+      if (verbose>2&&rank0) printf("PRt: %i %i\n", arcs_bpr_sidx_d[frame+1], *arcs_apr_used_d);
     }
-    inline DEVICE Token* LatticePruner::ActiveToksMap(void* p) const {
+    inline DEVICE Token* LatticePruner::ActiveToksMap(void* p, bool check, int iframe) const {
       int frame, id;
       DECODE_TOK_ADDR(frame, id, p);
-      return ActiveToksMap(frame,id);
+      if (check) assert(frame==iframe||frame==iframe-1);
+      return ActiveToksMap(frame,id,check);
     }
-    inline DEVICE Token* LatticePruner::ActiveToksMap(int frame, int id) const {
+    inline DEVICE Token* LatticePruner::ActiveToksMap(int frame, int id, bool check) const {
       
       int cur_sidx=toks_bpr_sidx_d[frame];
       assert(cur_sidx+id<toks_buf_before_pr_size);
       Token* tok=toks_bpr_d+cur_sidx+id;
-      assert(tok->frame==frame);
+      if (check) {
+        assert(tok->frame==frame);
+      }
       return tok;
     }
     inline DEVICE LatLink* LatticePruner::ActiveArcsMap(int frame, int id) const {
@@ -480,12 +503,12 @@ template<typename T>
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
-        int size=GetSize(toks_bpr_sidx_d,frame);
+        int size=GetSize(toks_bpr_sidx_d,frame-1);
         for (;tid<size;tid+=gridDim.x*blockDim.x) {
-          Token* tok=ActiveToksMap(frame-1,tid);
+          Token* tok=ActiveToksMap(frame-1,tid,true);
           tok->extra_cost=FLT_MAX;
         }
-
+        if (rank0) *modified_d=1;
         __grid_sync_nv_internal(barrier_);
         if (merge) {
           if (rank0) //wait for last iteration(frame+1) finish
@@ -494,29 +517,61 @@ template<typename T>
         }
       }
 
-      //update arc
-      {
+      //update arc //need some loop here
+      int cnt=0;
+      while (cnt++<10&&*modified_d!=0){
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
         int size=GetSize(arcs_bpr_sidx_d,frame);
+        if (rank0) *modified_d=0;
+        __grid_sync_nv_internal(barrier_);
         for (;tid<size;tid+=gridDim.x*blockDim.x) {
           LatLink* link=ActiveArcsMap(frame,tid);
-          Token* next_tok=ActiveToksMap(link->p1);
-          Token* tok=ActiveToksMap(link->p2);
+          Token* next_tok=ActiveToksMap(link->p1,true,frame);
+          Token* tok=ActiveToksMap(link->p2, true,frame);
           float link_extra_cost = next_tok->extra_cost + 
                   ((tok->cost_ + link->acoustic_cost + link->graph_cost) 
                     - next_tok->cost_);
-          if (link_extra_cost > lattice_beam)
-            link->acoustic_cost=CUDART_NAN_F; //should be pruned
-          else
-            assert(link_extra_cost>-1);
-            if (link_extra_cost < tok->extra_cost)
-                atomicMin(&tok->extra_cost,link_extra_cost);
-            if (merge) merge_arc(link);
+          if (isnan(link_extra_cost) || link_extra_cost > lattice_beam)
+            ; //should be pruned
+          else {
+            //debug
+            if (link_extra_cost<-1) {
+              printf("%i %f %f %f %f %f\n",frame,next_tok->extra_cost, tok->cost_, link->acoustic_cost, link->graph_cost, next_tok->cost_);
+            }
+            if (link_extra_cost < tok->extra_cost) {
+              atomicMin(&tok->extra_cost,link_extra_cost);
+              if (*modified_d==0) atomicAdd(modified_d,1);
+            }
+          }
         }
         __grid_sync_nv_internal(barrier_);
         //if we do this always in 25 frames, we might dont need this
         //some flag to show whether it is changed   
       }
+      if (rank0&&verbose>3) printf("cnt: %i\n",cnt);
+      {
+        int tid=threadIdx.x+blockIdx.x*blockDim.x;
+        int size=GetSize(arcs_bpr_sidx_d,frame);
+        for (;tid<size;tid+=gridDim.x*blockDim.x) {
+          LatLink* link=ActiveArcsMap(frame,tid);
+          Token* next_tok=ActiveToksMap(link->p1,true,frame);
+          Token* tok=ActiveToksMap(link->p2, true,frame);
+          float link_extra_cost = next_tok->extra_cost + 
+                  ((tok->cost_ + link->acoustic_cost + link->graph_cost) 
+                    - next_tok->cost_);
+          if (isnan(link_extra_cost) || link_extra_cost > lattice_beam)
+            ; //should be pruned
+          else {
+            if (merge) {
+              merge_arc(link);
+              //if have seen, we can delete this
+              //link->acoustic_cost=CUDART_NAN_F; 
+            }
+          }
+        }
+        __grid_sync_nv_internal(barrier_);
+      }
+
       
       /*{
         //update tok
@@ -543,8 +598,11 @@ template<typename T>
 
     //TODO: proc the tail
     void LatticePruner::init() {
-      ;
       //arcs_apr_h_used=0;
+      cudaMemset(arcs_apr_size_d,0,sizeof(int)*(prune_interval+1));
+      cudaMemset(arcs_apr_used_d,0,sizeof(int));
+      cudaMemset(toks_bpr_sidx_d,0,sizeof(int)*(prune_interval+1));
+      cudaMemset(arcs_bpr_sidx_d,0,sizeof(int)*(prune_interval+1));
     }
     void LatticePruner::copy_arcs_to_host(int frame, cudaStream_t st) {
       int sz;
@@ -565,13 +623,14 @@ template<typename T>
     }
     void LatticePruner::copy_toks_to_host(int frame, cudaStream_t st) {
       int sz;
-      sz=sizeof(int)*(frame+1)*(1);
-      cudaMemcpyAsync(toks_bpr_sidx_h,toks_bpr_sidx_d,
-        sz, cudaMemcpyDeviceToHost, st);
-      cudaStreamSynchronize(st);
+      sz=sizeof(int)*(frame+1+1)*(1); //include frame 0 & finalsum
+      cudaMemcpy(toks_bpr_sidx_h,toks_bpr_sidx_d,
+        sz, cudaMemcpyDeviceToHost);
       sz=sizeof(Token)*(toks_bpr_sidx_h[frame+1]);
-      cudaMemcpyAsync(toks_bpr_h,toks_bpr_d,
-        sz, cudaMemcpyDeviceToHost, st);
+      assert(sz);
+      printf("toks_bpr_h %i\n",sz);
+      cudaMemcpy(toks_bpr_h,toks_bpr_d,
+        sz, cudaMemcpyDeviceToHost);
     }
 
     void LatticePruner::get_data_copied_to_host(Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) {
@@ -807,6 +866,7 @@ void CudaMergeVector<T>::free() {
       token->cost_ = INFINITY;
       token->extra_cost = 0;
       token->frame= -1;
+      token->state_id= -1;
       TokenLookupElem elem;
       elem.token=token;
       elem.active=false;
@@ -829,6 +889,7 @@ void CudaMergeVector<T>::free() {
       token->cost_ = INFINITY;
       token->extra_cost = 0;
       token->frame= -1;
+      token->state_id= -1;
       //a CPU copy of cur_toks can still be used, cur_toks will be clear in PreProcessTokens 
       //lat_arcs_sub_vec_ is clearred in PreProcessTokens
       StateId state=cur_toks[i].state;  
@@ -1104,7 +1165,7 @@ void CudaMergeVector<T>::free() {
     TokenState *next_ts=NULL;
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
       0, NULL, -1, false, 0, &next_ts);
-    Token tok(0, 0, NULL);
+    Token tok(0, 0, NULL, state);
     *cur_tok = tok;
     cur_tok->frame=params.frame;
   }
@@ -1167,15 +1228,17 @@ void CudaMergeVector<T>::free() {
 
   void CudaLatticeDecoder::PreFinalizeDecoding(TokenVector** last_tokv,
     Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) { 
+    cudaStreamSynchronize(stream_comp);
+    lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
     CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 
          0.25);
-    lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
     (toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]).copy_data_to_host(stream_copy[2]);//copy data in post
     *last_tokv=&(toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]);
 
     cudaStreamSynchronize(stream_copy[0]);
     lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, 0);
     cudaStreamSynchronize(stream_copy[1]);
+    cudaStreamSynchronize(stream_copy[2]);
     lattice_pruner_.get_data_copied_to_host(toks_buf, toks_sidx, arcs_buf, arcs_size);
   }
 
@@ -1390,7 +1453,7 @@ void CudaMergeVector<T>::free() {
 
         if(total_cost<=cutoff) 
         {
-          Token next_tok =  Token(acoustic_cost+weight, params.frame, tok);
+          Token next_tok =  Token(acoustic_cost+weight, params.frame, tok, nextstate);
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
             acoustic_cost, &ts, j, true, (i+j)%params.sub_vec_num, &next_ts);
@@ -1447,7 +1510,7 @@ void CudaMergeVector<T>::free() {
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
-        Token next_tok = Token(weight, params.frame, tok);
+        Token next_tok = Token(weight, params.frame, tok, nextstate);
 
         CostType total_cost = tok->cost_ + weight;
 
@@ -1514,7 +1577,14 @@ void CudaMergeVector<T>::free() {
     
     //prepare for next iteration
     *params.cutoff = INFINITY;
-
+    //proc lattice before allocate new toks to TokenState
+    params.lattice_pruner.collect_tok_per_frame(params.cur_toks.mem_d, 
+                  *params.cur_toks.count_d, params.frame);
+    params.lattice_pruner.collect_arc_per_frame(params.lat_arcs_sub_vec, 
+      params.sub_vec_num, params.lat_arcs_sub_vec_buf_count, params.frame);
+ 
+    __grid_sync_nv_internal(params.barrier); 
+    
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
     __grid_sync_nv_internal(params.barrier);
     if(threadIdx.x==0 && blockIdx.x==0)
