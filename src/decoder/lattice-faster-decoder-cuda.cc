@@ -75,9 +75,9 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   // clean up from last time:
   //DeleteElems(toks_.Clear());
   cost_offsets_.clear();
+  memset(toks_buf_,0,toks_buf_used_*sizeof(Token));
   ClearActiveTokens();
   warned_ = false;
-  num_toks_ = 0;
   decoding_finalized_ = false;
   final_costs_.clear();
   StateId start_state = fst_.Start();
@@ -178,7 +178,6 @@ PUSH_RANGE("ProcessLattices",3)
   }
   for (int j=0; j<=num_frames_decoded_; j++) {
     int cur_toks_size=toks_sidx[j+1]-toks_sidx[j];
-    KALDI_VLOG(4)<<j<<" "<<cur_toks_size;
     Token* newtoks=active_tok_frames_[j];
     int survive=0;
     for (int i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
@@ -189,6 +188,7 @@ PUSH_RANGE("ProcessLattices",3)
       num_toks_+=survive;
     else
       KALDI_WARN<<"no survive after GPU prune @ frame "<<j;
+    KALDI_VLOG(4)<<j<<" "<<cur_toks_size<<" "<<survive<<" "<<num_toks_;
   }
   KALDI_VLOG(3)<<"tok after GPU prune "<<num_toks_;
 

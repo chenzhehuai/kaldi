@@ -120,10 +120,10 @@ int main(int argc, char *argv[]) {
 
         LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
       {
-        timer.Reset();
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
 
+        timer.Reset();
   nvtxRangePushA("whole decoding");
   nvtxRangePushA("before_decoding");
           std::string utt = loglike_reader.Key();
