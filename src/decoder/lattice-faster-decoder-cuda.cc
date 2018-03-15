@@ -160,6 +160,7 @@ PUSH_RANGE("ProcessLattices",3)
 
   for (int i=num_frames_decoded_; i>=0; i--) {
     int num_arcs=arcs_size[i];
+    KALDI_VLOG(4)<<i<<" "<<num_arcs;
     active_arc_frames_t.push_back((ForwardLink*)arcs_buf+acc);
     acc+=num_arcs;
     active_arc_size_frames_t.push_back(num_arcs);
@@ -177,6 +178,7 @@ PUSH_RANGE("ProcessLattices",3)
   }
   for (int j=0; j<=num_frames_decoded_; j++) {
     int cur_toks_size=toks_sidx[j+1]-toks_sidx[j];
+    KALDI_VLOG(4)<<j<<" "<<cur_toks_size;
     Token* newtoks=active_tok_frames_[j];
     int survive=0;
     for (int i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
