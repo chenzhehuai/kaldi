@@ -63,6 +63,7 @@ class LatticeFasterDecoderCuda {
   /// note, this may block waiting for input if the "decodable" object blocks.
   /// Returns true if any kind of traceback is available (not necessarily from a
   /// final state).
+  const CudaLatticeDecoder &Decoder() const { return decoder_; }
   bool Decode(DecodableInterface *decodable);
   void PrintTime();
   void InitDecoding();

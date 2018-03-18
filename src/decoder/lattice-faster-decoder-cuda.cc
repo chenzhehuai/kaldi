@@ -61,6 +61,7 @@ LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
   //toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
   //decoder_.InitDecoding();
   //InitDecoding();
+  toks_buf_used_=0;
   toks_buf_=(Token*)malloc(sizeof(Token)*config_.max_tokens);
 }
 

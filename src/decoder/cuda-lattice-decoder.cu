@@ -1224,6 +1224,7 @@ void CudaMergeVector<T>::free() {
 
     initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
     ProcessNonemitting();
+    if (verbose>3) printf("CUDA LatticeDecoder End of InitDecoding\n");
   }
 
   void CudaLatticeDecoder::PreFinalizeDecoding(TokenVector** last_tokv,
