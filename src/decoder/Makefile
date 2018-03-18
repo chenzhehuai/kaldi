@@ -5,8 +5,8 @@ include ../kaldi.mk
 LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
 LDLIBS += -lnvToolsExt
-CUDAOPTS = -lineinfo
-#CUDAOPTS += -G -g 
+CUDAOPTS = 
+#CUDAOPTS += -G -g  -lineinfo
 
 
 TESTFILES =

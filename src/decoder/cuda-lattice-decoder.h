@@ -189,7 +189,7 @@ struct CudaLatticeDecoderConfig {
                        prune_scale(0.1), 
                        verbose(0),
                        sub_vec_num(32) { }
-  
+ 
   void Register(OptionsItf *opts) {
     det_opts.Register(opts);
     opts->Register("cuda-verbose", &verbose, "debug log verbose.");
@@ -199,6 +199,7 @@ struct CudaLatticeDecoderConfig {
                                                   "A single decoding cannot saturate the device.  "
                                                   "Use multiple LatticeDecoders in parallel for the best performance.");
     opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Maximum tokens used per frame.  If decoding exceeds this resutls are undefined.");
+    opts->Register("max-arcs-per-frame", &max_lat_arc_per_frame, "Maximum arcs used per frame.  If decoding exceeds this resutls are undefined.");
     opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
                                                         "  If actual usaged exceeds this the results are undefined.");
     opts->Register("max-arcs-allocated", &max_arcs, "Total number of arcs allocated.  This controls how many tokens are allocated to the entire decoding process."

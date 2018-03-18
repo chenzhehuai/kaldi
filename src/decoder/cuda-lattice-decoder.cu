@@ -428,11 +428,16 @@ template<typename T>
       if (rank0) {
         assert(blockDim.x*gridDim.x%(sub_vec_num)==0);
         assert(blockDim.x>=sub_vec_num);
+#if 0
         assert(sub_vec_num==SUB_VEC_NUM);
-#if 0        
+        if (blockIdx.x==0&&threadIdx.x<SUB_VEC_NUM) {
         typedef cub::BlockScan<int, SUB_VEC_NUM> BlockScan;
         __shared__ typename BlockScan::TempStorage temp_storage;
         BlockScan(temp_storage).ExclusiveSum(count_vec_d[threadIdx.x], count_vec_acc_d[threadIdx.x]);
+        }
+      __grid_sync_nv_internal(barrier_);
+      if (rank0)  count_vec_acc_d[sub_vec_num]=count_vec_d[sub_vec_num-1]+count_vec_acc_d[sub_vec_num-1];
+      __grid_sync_nv_internal(barrier_);
 #else
         int acc=0;
         for (int i=0;i<sub_vec_num+1;i++) {
