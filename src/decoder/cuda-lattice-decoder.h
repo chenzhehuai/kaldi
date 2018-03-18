@@ -29,6 +29,15 @@
   #define DEVICE
 #endif
 
+//#define __DEBUG__
+#ifdef __DEBUG__
+#define VERBOSE 5
+#define DEBUG(format,...) printf(format, ##__VA_ARGS__)
+#else
+#define VERBOSE 0
+#define DEBUG(format,...)
+#endif
+
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include "util/stl-utils.h"
@@ -354,13 +363,15 @@ typedef CudaVector<TokenState> TokenVector;
     inline DEVICE void collect_tok_per_frame(TokenState* cur_toks, int size, int frame);
     inline DEVICE void collect_arc_per_frame(LatLinkVector* cur_arc_array, 
       int sub_vec_num, uint* count_vec_d, int frame);
-    inline DEVICE void PruneActiveTokens(int frame, float lattice_beam,int verbose);
+    template <int verbose>
+    inline DEVICE void PruneActiveTokens(int frame, float lattice_beam);
     inline DEVICE Token* ActiveToksMap(void* p, bool check=false, int frame=-1) const;
     inline DEVICE Token* ActiveToksMap(int frame, int id, bool check=false) const;
     inline DEVICE LatLink* ActiveArcsMap(int frame, int id) const;
     inline DEVICE int GetSize(int* acc_len, int frame) const;
+    template <int verbose>
     inline DEVICE void PruneForwardLinks_PruneTokensForFrame(int frame, 
-                  bool merge, float lattice_beam,int verbose);
+                  bool merge, float lattice_beam);
     void init();
     void copy_arcs_to_host(int frame, cudaStream_t st);
     void copy_toks_to_host(int frame, cudaStream_t st);

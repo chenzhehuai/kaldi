@@ -1,5 +1,3 @@
-// decoder/cuda-lattice-decoder.cu
-
 // Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
@@ -458,17 +456,18 @@ template<typename T>
         ActiveToksMap(to_arc->p1,true,frame);
       }
     }
-    inline DEVICE void LatticePruner::PruneActiveTokens(int frame, float lattice_beam,int verbose) {
+template <int verbose>
+    inline DEVICE void LatticePruner::PruneActiveTokens(int frame, float lattice_beam) {
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
       if (frame==0) return;
       init_buf_before_cp();
       __grid_sync_nv_internal(barrier_);
       for (int f = frame; f > 0; f--) {
-          PruneForwardLinks_PruneTokensForFrame(f,1,lattice_beam,verbose);
+          PruneForwardLinks_PruneTokensForFrame<verbose>(f,1,lattice_beam);
       }
       //see copy_data_to_host
       assert(*arcs_apr_used_d<arcs_buf_before_pr_size*PRUNE_RATIO_ASSUME);
-      if (verbose>2&&rank0) printf("PRt: %i %i\n", arcs_bpr_sidx_d[frame+1], *arcs_apr_used_d);
+      if (verbose>2&&rank0) DEBUG("PRt: %i %i\n", arcs_bpr_sidx_d[frame+1], *arcs_apr_used_d);
     }
     inline DEVICE Token* LatticePruner::ActiveToksMap(void* p, bool check, int iframe) const {
       int frame, id;
@@ -497,8 +496,9 @@ template<typename T>
       assert(size>=0&&size<=arcs_buf_before_pr_size*PRUNE_RATIO_ASSUME);
       return size;
     }
+template <int verbose>
     inline DEVICE void LatticePruner::PruneForwardLinks_PruneTokensForFrame(int frame, 
-                                  bool merge, float lattice_beam,int verbose) {
+                                  bool merge, float lattice_beam) {
       //init
       int prev_cidx;
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
@@ -537,7 +537,7 @@ template<typename T>
           else {
             //debug
             if (link_extra_cost<-1) {
-              printf("%i %f %f %f %f %f\n",frame,next_tok->extra_cost, tok->cost_, link->acoustic_cost, link->graph_cost, next_tok->cost_);
+              DEBUG("%i %f %f %f %f %f\n",frame,next_tok->extra_cost, tok->cost_, link->acoustic_cost, link->graph_cost, next_tok->cost_);
             }
             if (link_extra_cost < tok->extra_cost) {
               atomicMin(&tok->extra_cost,link_extra_cost);
@@ -549,7 +549,7 @@ template<typename T>
         //if we do this always in 25 frames, we might dont need this
         //some flag to show whether it is changed   
       }
-      if (rank0&&verbose>3) printf("cnt: %i\n",cnt);
+      if (rank0&&verbose>3) DEBUG("cnt: %i\n",cnt);
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
         int size=GetSize(arcs_bpr_sidx_d,frame);
@@ -589,7 +589,7 @@ template<typename T>
       if (merge&&rank0) {
           int& size_arc_of_frame=arcs_apr_size_d[frame];
           size_arc_of_frame=*arcs_apr_used_d-prev_cidx;
-          if (verbose>3) printf("PR %i %i %i\n",frame, 
+          if (verbose>3) DEBUG("PR %i %i %i\n",frame, 
             GetSize(arcs_bpr_sidx_d,frame), size_arc_of_frame);
           //size_tok_of_frame[f-1]=cidx-prev_cidx
           //prev_cidx=cidx
@@ -1417,7 +1417,7 @@ void CudaMergeVector<T>::free() {
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.pe_idx,1);      //get token index
         if (params.verbose>3 && i%1000==0) {
-          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
+          DEBUG("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
         }
       }
       i=group.shfl(i,0);           //broadcast token index
@@ -1494,7 +1494,7 @@ void CudaMergeVector<T>::free() {
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.ne_idx,1);      //get token index
         if (params.verbose>3 && i%1000==0) {
-          printf("NE: %i %i %i\n", i, threadIdx.x, blockIdx.x);
+          DEBUG("NE: %i %i %i\n", i, threadIdx.x, blockIdx.x);
         }
       }
       i=group.shfl(i,0);           //broadcast token index
@@ -1515,7 +1515,7 @@ void CudaMergeVector<T>::free() {
 
         CostType total_cost = tok->cost_ + weight;
 
-      if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
+      if (params.verbose>4) DEBUG("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           TokenState *next_ts=NULL;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
@@ -1542,7 +1542,7 @@ void CudaMergeVector<T>::free() {
       }
 
     }
-      if (params.verbose>4) printf("ED: %i %i %i \n",threadIdx.x, group.thread_rank(), blockIdx.x);
+      if (params.verbose>4) DEBUG("ED: %i %i %i \n",threadIdx.x, group.thread_rank(), blockIdx.x);
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1598,16 +1598,12 @@ void CudaMergeVector<T>::free() {
 
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     int p=0;
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
 
     findBestCutoff_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
    
    
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
 
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
@@ -1645,7 +1641,7 @@ void CudaMergeVector<T>::free() {
     } while ((*modified0)==true);
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
-          printf("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
+          DEBUG("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
 
 
     //proc lattice before allocate new toks to TokenState
@@ -1753,8 +1749,8 @@ void CudaMergeVector<T>::free() {
   __launch_bounds__(64,64)
   __global__ void LaunchPruneActiveTokens(processTokens_params params) {
 //    auto grid = cooperative_groups::this_grid();
-    params.lattice_pruner.PruneActiveTokens(params.frame, params.lattice_beam,
-      params.verbose);
+    params.lattice_pruner.PruneActiveTokens<VERBOSE>(params.frame, params.lattice_beam
+      );
   }
 
   void CudaLatticeDecoder::CallLaunchPruneActiveTokens(cudaStream_t wait_st, 
