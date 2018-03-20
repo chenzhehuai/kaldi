@@ -28,7 +28,7 @@ cuda-decoder_test:cuda-decoder_test.o
 	g++ -g -O0 -o cuda-decoder_test $(CUDA_LDFLAGS)  $(CUDA_LDLIBS)  -lcuda cuda-decoder_test.o
 
 cuda-decoder_prelink.o: cuda-decoder.cu cuda-decoder.h
-	$(CUDATKDIR)/bin/nvcc $(CUDAOPTS) -O3 $(CUDA_INCLUDE) -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS  -Xcompiler "-msse -msse2 -pthread "  -Xcompiler -fPIC -DHAVE_CUDA -o cuda-decoder_prelink.o cuda-decoder.cu -lcuda -lcudart
+	$(CUDATKDIR)/bin/nvcc $(CUDAOPTS) -O3 $(CUDA_INCLUDE) -Xptxas -v $(CUDA_ARCH)  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I$(OPENFSTINC) -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS  -Xcompiler "-msse -msse2 -pthread  -fopenmp"  -Xcompiler -fPIC -DHAVE_CUDA -o cuda-decoder_prelink.o cuda-decoder.cu -lcuda -lcudart
 cuda-decoder.o: cuda-decoder_prelink.o
 	$(CUDATKDIR)/bin/nvcc $(CUDAOPTS) -O3 cuda-decoder_prelink.o -v $(CUDA_ARCH)  -dlink -o cuda-decoder.o -Xcompiler "-pthread -fPIC" #-arch=sm_70
 

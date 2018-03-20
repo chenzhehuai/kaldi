@@ -27,6 +27,7 @@
 #include <math.h>
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
+#include "omp.h"
 
 #define USE_NVTX
 #ifdef USE_NVTX
