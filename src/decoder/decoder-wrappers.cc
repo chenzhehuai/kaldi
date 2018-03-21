@@ -22,6 +22,7 @@
 #include "decoder/decoder-wrappers.h"
 #include "decoder/faster-decoder.h"
 #include "lat/lattice-functions.h"
+#include "omp.h"
 
 
 namespace kaldi {

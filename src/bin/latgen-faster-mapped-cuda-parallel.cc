@@ -100,7 +100,8 @@ int main(int argc, char *argv[]) {
 
     double elapsed = 0;
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
-
+      Fst<StdArc> *decode_fst;
+        decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
       cuInit(0);
       CudaFst decode_fst_cuda;
 #pragma omp parallel shared(po, decode_fst_cuda) 
@@ -129,9 +130,9 @@ int main(int argc, char *argv[]) {
 #pragma omp barrier
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
-      Fst<StdArc> *decode_fst;
-      if(omp_get_thread_num()==0) {
-        decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
+
+      if(omp_get_thread_num()==0) 
+      {
         decode_fst_cuda.initialize(*decode_fst);
       }
 #pragma omp barrier
@@ -189,8 +190,11 @@ int main(int argc, char *argv[]) {
       }
         }
       }
-      if(omp_get_thread_num()==0) delete decode_fst; // delete this only after decoder goes out of scope.
+#pragma omp barrier
       }//omp parallel
+      delete decode_fst; // delete this only after decoder goes out of scope.
+      decode_fst_cuda.finalize();
+      cudaDeviceSynchronize();
     } else { // We have different FSTs for different utterances.
       KALDI_ERR<< "unfinished";
     }

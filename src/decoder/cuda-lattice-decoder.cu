@@ -24,6 +24,7 @@
 #include "decoder/cuda-lattice-decoder.h"
 #include <cub/block/block_scan.cuh>
 #include "math_constants.h"
+#include "omp.h"
 
 #define USE_NVTX
 #ifdef USE_NVTX
@@ -50,7 +51,7 @@ const int num_colors = sizeof(colors)/sizeof(uint32_t);
 #endif
 
 
-#define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
+//#define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
 //Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError() {                                          \
@@ -442,7 +443,7 @@ template<typename T>
         int acc=0;
         for (int i=0;i<sub_vec_num+1;i++) {
           count_vec_acc_d[i]=acc;
-          acc+=count_vec_d[i];
+          acc+=count_vec_d[i];  //clear in InitDecoding::ClearArcVector
         }
 #endif        
       }//not including self
@@ -498,7 +499,7 @@ template <int verbose>
     }
     inline DEVICE int LatticePruner::GetSize(int* acc_len, int frame) const {
       int size=acc_len[(frame)+1]-acc_len[(frame)];
-      assert(size>=0&&size<=arcs_buf_before_pr_size*PRUNE_RATIO_ASSUME);
+      assert(size>=0&&size<=arcs_buf_before_pr_size);
       return size;
     }
 template <int verbose>
@@ -506,7 +507,11 @@ template <int verbose>
                                   bool merge, float lattice_beam) {
       //init
       int prev_cidx;
+      int c=0;
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
+      
+        __grid_sync_nv_internal(barrier_);
+      if (rank0&&verbose>3) printf("%i %i\n",c++, GetSize(toks_bpr_sidx_d,frame-1));
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
         int size=GetSize(toks_bpr_sidx_d,frame-1);
@@ -514,14 +519,14 @@ template <int verbose>
           Token* tok=ActiveToksMap(frame-1,tid,true);
           tok->extra_cost=FLT_MAX;
         }
-        if (rank0) *modified_d=1;
-        __grid_sync_nv_internal(barrier_);
-        if (merge) {
-          if (rank0) //wait for last iteration(frame+1) finish
-            prev_cidx=*arcs_apr_used_d;
-          __grid_sync_nv_internal(barrier_);
+        if (rank0) {//wait for last iteration(frame+1) finish
+          *modified_d=1;
+          prev_cidx=*arcs_apr_used_d;
         }
+        if (rank0&&verbose>3) printf("%i %p\n",c++,barrier_);
+        __grid_sync_nv_internal(barrier_);
       }
+      if (rank0&&verbose>3) printf("%i\n",c++);
 
       //update arc //need some loop here
       int cnt=0;
@@ -599,6 +604,8 @@ template <int verbose>
           //size_tok_of_frame[f-1]=cidx-prev_cidx
           //prev_cidx=cidx
       }
+      __grid_sync_nv_internal(barrier_);
+        if (rank0&&verbose>3) printf("%i %p\n",c++,barrier_);
     }
     //#define GET_ARC_BUF_HOST_BY_FRAME(frame) (arcs_apr_h+arcs_apr_h_used)
 
@@ -1236,13 +1243,15 @@ void CudaMergeVector<T>::free() {
     Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) { 
     cudaStreamSynchronize(stream_comp);//after fini comp. we can start copy 
     lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
-    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 0.25);
+    CallLaunchPruneActiveTokens(stream_comp, stream_copy[0], 1);
     (toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]).copy_data_to_host(stream_copy[2]);//copy data in post
     *last_tokv=&(toks_buf_[num_frames_decoded_%LAT_BUF_SIZE]);
-
+    if (verbose>1) KALDI_LOG<<"";
     cudaStreamSynchronize(stream_copy[0]);
+    if (verbose>1) KALDI_LOG<<"";
     lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, stream_copy[0]);
     cudaStreamSynchronize(stream_copy[0]);
+    if (verbose>1) KALDI_LOG<<"";
     cudaStreamSynchronize(stream_copy[1]);
     cudaStreamSynchronize(stream_copy[2]);
     lattice_pruner_.get_data_copied_to_host(toks_buf, toks_sidx, arcs_buf, arcs_size);
@@ -1551,7 +1560,7 @@ void CudaMergeVector<T>::free() {
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
-  //__launch_bounds__(64,32)
+  __launch_bounds__(64,64)
   __global__ void processNonEmittingTokens_cg(processTokens_params params) {
 
     //auto grid = cooperative_groups::this_grid();
@@ -1586,8 +1595,9 @@ void CudaMergeVector<T>::free() {
     //proc lattice before allocate new toks to TokenState
     params.lattice_pruner.collect_tok_per_frame(params.cur_toks.mem_d, 
                   *params.cur_toks.count_d, params.frame);
-    params.lattice_pruner.collect_arc_per_frame(params.lat_arcs_sub_vec, 
-      params.sub_vec_num, params.lat_arcs_sub_vec_buf_count, params.frame);
+    // TODO: currently we won't add arc in addOneToken and assume no in processNonEmittingTokens_function
+    //params.lattice_pruner.collect_arc_per_frame(params.lat_arcs_sub_vec, 
+    //  params.sub_vec_num, params.lat_arcs_sub_vec_buf_count, params.frame);
  
     __grid_sync_nv_internal(params.barrier); 
     
@@ -1725,7 +1735,7 @@ void CudaMergeVector<T>::free() {
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
 
-    dim3 threads(32,1);
+    dim3 threads(64,1);
 
     dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
 
@@ -1765,6 +1775,7 @@ void CudaMergeVector<T>::free() {
     dim3 threads(64,1);
     dim3 blocks(DIV_ROUND_UP(total_threads*ratio,(threads.x*threads.y)));
     cudaStreamSynchronize(wait_st);
+    if (params.verbose>1) KALDI_LOG <<"CallLaunchPruneActiveTokens, # of blocks: "<<blocks.x<<std::endl;
     LaunchPruneActiveTokens<<<blocks,threads,0,st>>>(params);
     //lattice_pruner_.copy_arcs_to_host(num_frames_decoded_, st);
   }
