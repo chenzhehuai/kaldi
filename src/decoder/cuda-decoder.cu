@@ -861,7 +861,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     int j=0;
     if (threadIdx.x!=0 || blockIdx.x!=0) return;
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL,0,true, &token_pack, params.token_per_arc_update+j);
+      0, NULL,true, &token_pack, params.token_per_arc_update+j);
     uint64_t new_token_pack=pack(0, j);
     Token* cur_te=params.token_per_arc+j;
     params.token_per_arc_update[j]=1;
@@ -1190,7 +1190,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           TokenState *next_ts=NULL;
           //get cur_tok&token_pack addr
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-          acoustic_cost, &ts, 0,true, &token_pack, params.token_per_arc_update+j);
+          acoustic_cost, &ts, true, &token_pack, params.token_per_arc_update+j);
           //get cur_te&new_token_pack
           uint64_t new_token_pack=pack(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
@@ -1263,7 +1263,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           TokenState *next_ts=NULL;
           uint64_t* token_pack;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, 0, true, &token_pack, params.token_per_arc_update+j);
+            0, &ts,  true, &token_pack, params.token_per_arc_update+j);
           uint64_t new_token_pack=pack(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
