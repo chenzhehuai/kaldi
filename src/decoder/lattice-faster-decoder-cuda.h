@@ -45,7 +45,6 @@ class LatticeFasterDecoderCuda {
   typedef CudaLatticeDecoder::TokenVector cuTokenVector;
   typedef CudaLatticeDecoder::TokenState TokenState;
   typedef CudaLatticeDecoder::LatLink LatLink;
-  typedef CudaLatticeDecoder::LatLinkVectorMerge LatLinkVector;
   // instantiate this class once for each thing you have to decode.
   LatticeFasterDecoderCuda(const CudaFst &fst,
                        const CudaLatticeDecoderConfig &config);

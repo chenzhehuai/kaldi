@@ -107,7 +107,6 @@ class CudaVector {
     public:
       HOST DEVICE T& operator[](uint32_t idx); 
       HOST DEVICE const T& operator[](uint32_t idx) const; 
-      inline void allocate(uint32_t max_size);
       inline void allocate(uint32_t max_size, 
         uint32_t* icount_h=NULL, uint32_t* icount_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
       inline void free(bool create_outside=false);
@@ -277,7 +276,6 @@ typedef CudaVector<TokenState> TokenVector;
   };
 
   typedef CudaVector<LatLink> LatLinkVector;
-  typedef CudaMergeVector<LatLink> LatLinkVectorMerge;
 
   union __align__(16) TokenOrSize {
     Token tok;
@@ -330,8 +328,8 @@ typedef CudaVector<TokenState> TokenVector;
     void free();
     inline DEVICE void set_next_sidx(int* sidx_buf, int size, int frame);
     inline DEVICE void collect_tok_per_frame(TokenState* cur_toks, int size, int frame);
-    inline DEVICE void collect_arc_per_frame(LatLinkVector* cur_arc_array, 
-      uint* count_vec_d, int frame);
+    inline DEVICE void collect_arc_per_frame(LatLinkVector& cur_arc_array,
+        uint* count_vec_d, int frame);
     template <int verbose>
     inline DEVICE void PruneActiveTokens(int frame, float lattice_beam);
     inline DEVICE Token* ActiveToksMap(void* p, bool check=false, int frame=-1) const;
@@ -452,7 +450,7 @@ typedef CudaVector<TokenState> TokenVector;
   /// to call this.  You can call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance. 
   void InitDecoding(); 
-  void ClearArcVector(LatLinkVector* lat_arcs_sub_vec_);
+  void ClearArcVector(LatLinkVector& lat_arcs_sub_vec_);
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding(
 TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);

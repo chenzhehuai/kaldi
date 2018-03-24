@@ -210,22 +210,6 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
       }
     }
 
-
-  template<typename T>
-    inline void CudaVector<T>::allocate(uint32_t max_size) {
-      this->max_size=max_size;
-
-      cudaMallocHost(&count_h,sizeof(uint32_t));
-      cudaMalloc(&count_d, sizeof(uint32_t));
-      cudaMemset(count_d, 0,sizeof(uint32_t));
-      *count_h=0;
-
-      cudaMalloc(&mem_d,max_size*sizeof(T));
-      cudaMallocHost(&mem_h,max_size*sizeof(T));
-
-      alloc_size=max_size*sizeof(T)+sizeof(uint32_t);
-    }
-
   template<typename T>
     inline size_t CudaVector<T>::getCudaMallocBytes() {
       return alloc_size;
