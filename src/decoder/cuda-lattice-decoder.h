@@ -49,11 +49,8 @@
 
 namespace kaldi {
 
-/** 
- * Simple Cuda Decoder
- */
-
-#define LAT_BUF_SIZE 3
+// TODO:
+#define LAT_BUF_SIZE 2
 
 class CudaLatticeDecoder;
 
@@ -112,7 +109,7 @@ class CudaVector {
       HOST DEVICE const T& operator[](uint32_t idx) const; 
       inline void allocate(uint32_t max_size);
       inline void allocate(uint32_t max_size, 
-        uint32_t* icount_h, uint32_t* icount_d) ;
+        uint32_t* icount_h=NULL, uint32_t* icount_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
       inline void free(bool create_outside=false);
       HOST DEVICE uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
@@ -134,29 +131,7 @@ class CudaVector {
       uint32_t *count_d, *count_h;
       uint32_t max_size;
       T* mem_d, *mem_h;
-};
-
-template<typename T>
-class CudaMergeVector : public CudaVector<T> {
-  #define MAX_SUB_VEC_SIZE (2048+1)
-public:
-  //HOST DEVICE T& operator[](uint32_t idx); 
-  //using CudaVector<T>::operator[];
-  //HOST DEVICE uint32_t size() const; 
-  //using CudaVector<T>::size;
-  using CudaVector<T>::count_d;
-  using CudaVector<T>::mem_d;
-  using CudaVector<T>::max_size;
-  
-  inline void load(CudaVector<T>*in, int sub_vec_num, cudaStream_t st, int total_threads, uint32_t* count_vec_d=NULL);
-  inline void reg(CudaVector<T>*in, int sub_vec_num, cudaStream_t st);
-  inline void allocate(uint32_t max_size);
-  inline void free();
-
-  //for arr merge to single; assume create using cudaMallocManaged
-  T** arr_; //add cache here
-  int *vec_len_acc_;
-  int* barrier_;
+      int alloc_size;
 };
 
 struct CudaLatticeDecoderConfig {
@@ -174,7 +149,6 @@ struct CudaLatticeDecoderConfig {
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
 
   int verbose;
-  int32_t sub_vec_num;
   
   CudaLatticeDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
@@ -187,14 +161,12 @@ struct CudaLatticeDecoderConfig {
                        lattice_beam(10.0),
                        determinize_lattice(true),
                        prune_scale(0.1), 
-                       verbose(0),
-                       sub_vec_num(32) { }
+                       verbose(0) { }
  
   void Register(OptionsItf *opts) {
     det_opts.Register(opts);
     opts->Register("cuda-verbose", &verbose, "debug log verbose.");
     opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
-    opts->Register("sub-vec-num", &sub_vec_num, "sub_vecs.");
     opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this LatticeDecoder.  "
                                                   "A single decoding cannot saturate the device.  "
                                                   "Use multiple LatticeDecoders in parallel for the best performance.");
@@ -304,10 +276,6 @@ typedef CudaVector<TokenState> TokenVector;
 
   };
 
-  #define GET_ARCIDX(rawid, thd) ((rawid<<5)+thd)   //assume 32 threads
-  #define GET_RAWARCIDX(id)  (id>>5) //assume 32 threads
-  #define GET_THDIDX(id) (id&((1<<5)-1)) //assume 32 threads
-
   typedef CudaVector<LatLink> LatLinkVector;
   typedef CudaMergeVector<LatLink> LatLinkVectorMerge;
 
@@ -358,12 +326,12 @@ typedef CudaVector<TokenState> TokenVector;
     inline DEVICE void init_buf_before_cp();
     inline DEVICE int merge_arc(LatLink* arc);
     int allocate(int max_tokens_per_frame, int max_lat_arc_per_frame, 
-      int prune_interval, int max_toks, int max_arcs, int sub_vec_num);
+      int prune_interval, int max_toks, int max_arcs);
     void free();
     inline DEVICE void set_next_sidx(int* sidx_buf, int size, int frame);
     inline DEVICE void collect_tok_per_frame(TokenState* cur_toks, int size, int frame);
     inline DEVICE void collect_arc_per_frame(LatLinkVector* cur_arc_array, 
-      int sub_vec_num, uint* count_vec_d, int frame);
+      uint* count_vec_d, int frame);
     template <int verbose>
     inline DEVICE void PruneActiveTokens(int frame, float lattice_beam);
     inline DEVICE Token* ActiveToksMap(void* p, bool check=false, int frame=-1) const;
@@ -373,6 +341,8 @@ typedef CudaVector<TokenState> TokenVector;
     template <int verbose>
     inline DEVICE void PruneForwardLinks_PruneTokensForFrame(int frame, 
                   bool merge, float lattice_beam);
+    LatLink* GetArcBpr() { return arcs_bpr_d; }
+        
     void init();
     void copy_arcs_to_host(int frame, cudaStream_t st);
     void copy_toks_to_host(int frame, cudaStream_t st);
@@ -403,6 +373,7 @@ typedef CudaVector<TokenState> TokenVector;
     int* toks_bpr_sidx_h;
     LatLink* arcs_bpr_d;
     int* arcs_bpr_sidx_d;
+    int* arcs_bpr_used_d;
 
     int *barrier_;
     int* count_vec_acc_d;
@@ -442,12 +413,9 @@ typedef CudaVector<TokenState> TokenVector;
 
     uint32_t frame;
     int prune_interval;
-    LatLinkVector* lat_arcs_vec;
-    LatLinkVector* lat_arcs_sub_vec;
-    int sub_vec_num;
+    LatLinkVector lat_arcs_sub_vec;
 
     LatticePruner lattice_pruner;
-    uint32* lat_arcs_sub_vec_buf_count;
     float lattice_beam;
   };
 
@@ -538,6 +506,7 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
   CostType *cutoff_d;
   int *modified_d;
 
+  //TODO
   volatile int *token_locks_d;
   void ClearToks(TokenVector &toks);
 
@@ -553,15 +522,12 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
   
   int verbose;
   int prune_interval_;
-  int sub_vec_num_;
   int max_arcs_;
   float lattice_beam_;
 
   //for recording lattice
   LatLinkVector* lat_arcs_sub_vec_;
-  LatLinkVector* lat_arcs_sub_vec_prev_;
-  LatLinkVector* lat_arcs_sub_vec_buf_[LAT_BUF_SIZE];
-  uint32_t* lat_arcs_sub_vec_buf_count_[LAT_BUF_SIZE][2]; //0 for CPU 1 for GPU
+  LatLinkVector lat_arcs_sub_vec_buf_;
   
   TokenVector toks_buf_[LAT_BUF_SIZE];
   /*
