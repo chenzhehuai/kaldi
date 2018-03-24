@@ -40,9 +40,6 @@
 
 namespace kaldi {
   
-/** 
- * Simple Cuda Decoder
- */
 class CudaDecoder;
 //typedef uint64_t uint64_t;
 inline DEVICE uint64_t pack (float cost, int ptr) {
@@ -162,8 +159,8 @@ public:
   DEVICE inline void merge(void* undefined, int* token_per_arc_update, int num_arcs,  bool clear=true);
   DEVICE inline int update(int i);
   DEVICE inline void clear_sub();
-  inline void allocate(uint32_t max_size, int sub_vec_num);
-  DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack, const int subid); 
+  inline void allocate(uint32_t max_size);
+  DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack); 
   inline void free();
   inline size_t getCudaMallocBytes(); 
   inline void swap(CudaMergeVector<T> &v);
@@ -175,8 +172,6 @@ public:
   int *mem_buf_count_d;
   int *mem_buf_acc_count_d;
   int* barrier_;
-  int sub_vec_num;
-  int sub_size;
 };
  
 
@@ -187,15 +182,13 @@ struct CudaDecoderConfig {
   uint32_t max_tokens;
   int verbose;
   uint32_t max_lat_arc_per_frame;
-  int sub_vec_num;
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
                        max_tokens_per_frame(1<<17),
                        max_tokens(60000000),
                        verbose(0),
-                       max_lat_arc_per_frame(1<<18),
-                       sub_vec_num(1)
+                       max_lat_arc_per_frame(1<<18)
                        {}
   
   void Register(OptionsItf *opts) {
@@ -208,7 +201,6 @@ struct CudaDecoderConfig {
     opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
                                                         "  If actual usaged exceeds this the results are undefined.");
     opts->Register("max-lat-arc-per-frame", &max_lat_arc_per_frame, "Total number of lat arc allocated.  ");
-    opts->Register("sub-vec-num", &sub_vec_num, "Total number of sub-vec for token  ");    
   }
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 && max_tokens_per_frame > 0 && max_tokens>0);
@@ -377,7 +369,6 @@ class CudaDecoder {
     int *tid2tok;
     int max_arcs_per_frame_search;
     uint64 *clock_buf;
-    int sub_vec_num;
     Token* token_per_arc;
     int* token_per_arc_update;
     int numArcs;
@@ -421,7 +412,6 @@ class CudaDecoder {
   void* d_temp_storage;
   size_t temp_storage_bytes;
   uint64* clock_buf_d;
-  int sub_vec_num_;
 
   const CudaFst fst_;
 

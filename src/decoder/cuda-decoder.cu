@@ -272,41 +272,31 @@ template<typename T>
 template<> 
 DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* token_per_arc_update, int num_arcs, bool clear) {
   int tid=threadIdx.x+blockIdx.x*blockDim.x;
-  int idx=tid/(sub_vec_num);
-  int subid=tid%(sub_vec_num);
-  //int subid=threadIdx.x;
-  //int idx=blockIdx.x;
+  int idx=tid;
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
-  int batch=blockDim.x*gridDim.x/(sub_vec_num); 
+  int batch=blockDim.x*gridDim.x; 
   if (rank0) {
-    assert(blockDim.x*gridDim.x%(sub_vec_num)==0);
     int acc=0;
-    for (int i=0; i<sub_vec_num; i++) {
-      mem_buf_acc_count_d[i]=acc;
-      acc+=(mem_buf_count_d[i]);
-      if (clear) mem_buf_count_d[i]=0;
-    }
+    int i=0;
+    mem_buf_acc_count_d[i]=acc;
+    acc+=(mem_buf_count_d[i]);
+    if (clear) mem_buf_count_d[i]=0;
     assert(acc<=max_size);
     *count_d=acc;
-    mem_buf_acc_count_d[sub_vec_num]=acc;
+    mem_buf_acc_count_d[1]=acc;
   }
   __grid_sync_nv_internal(barrier_);
-  int sz = mem_buf_acc_count_d[subid+1]-mem_buf_acc_count_d[subid];
+  int sz = mem_buf_acc_count_d[1]-mem_buf_acc_count_d[0];
   for(; idx < sz; idx += batch) {
-    uint64_t* pack_v=mem_pack_buf_d[(subid*(max_size/(sub_vec_num))+idx)];
+    uint64_t* pack_v=mem_pack_buf_d[idx];
     int ptr=unpack_ptr(*pack_v);
     //assert(ptr<num_arcs);
-    mem_update_d[(idx+mem_buf_acc_count_d[subid])]=token_per_arc_update[ptr];
+    mem_update_d[(idx+mem_buf_acc_count_d[0])]=token_per_arc_update[ptr];
   #if 1
     if (token_per_arc_update[ptr]) token_per_arc_update[ptr]=0;
     else continue;
   #endif
-    TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[subid]);
-    if (sub_vec_num!=1) {// has been copied in push_back
-      TokenState* cur_ts=mem_buf_d+(subid*(max_size/(sub_vec_num))+idx);
-      //memcpy(to_ts,cur_ts,sizeof(TokenState));
-      store16(to_ts, cur_ts);
-    }
+    TokenState* to_ts=mem_d+(idx+mem_buf_acc_count_d[0]);
     Token* cur_tok=((Token *)token_per_arc)+ptr;
     Token* to_tok=to_ts->token;
     store16(to_tok, cur_tok);
@@ -318,7 +308,7 @@ template<typename T>
 DEVICE inline void CudaMergeVector<T>::clear_sub() {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   if (rank0) {
-    memset(mem_buf_count_d, 0, sizeof(int)*(sub_vec_num+1));
+    memset(mem_buf_count_d, 0, sizeof(int)*(2));
   }
 }
 
@@ -330,36 +320,31 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
   template<typename T> 
     DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, 
-                                    uint64 *val_pack, const int subid) { 
-      assert(subid<sub_vec_num);
-      uint32_t idx = atomicAdd(mem_buf_count_d+subid,1);
-      assert(idx<sub_size);
-      if (sub_vec_num==1) mem_d[subid*sub_size+idx]=val;
-      else mem_buf_d[subid*sub_size+idx]=val; 
-      mem_pack_buf_d[subid*sub_size+idx]=val_pack; 
+                                    uint64 *val_pack) { 
+      uint32_t idx = atomicAdd(mem_buf_count_d,1);
+      mem_d[idx]=val;
+      mem_pack_buf_d[idx]=val_pack; 
       //CudaVector<T>::push_back(val); //do this is only for speedup in PNE; dont need to
       return idx;
     }
 
   template<typename T>
-    inline void CudaMergeVector<T>::allocate(uint32_t max_size, int sub_vec_num) {
+    inline void CudaMergeVector<T>::allocate(uint32_t max_size) {
       CudaVector<T>::allocate(max_size);
 
-      this->sub_vec_num=sub_vec_num;
-      sub_size=max_size/sub_vec_num;
       cudaMalloc(&mem_pack_buf_d,sizeof(uint64_t*)*max_size);
       cudaMalloc(&mem_buf_d,sizeof(T)*max_size);
       cudaMalloc(&mem_update_d,sizeof(int)*max_size);
       cudaMemset(mem_update_d,0,sizeof(int)*max_size);
-      cudaMalloc(&mem_buf_count_d,sizeof(int)*(sub_vec_num+1));
-      cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*(1+sub_vec_num));
+      cudaMalloc(&mem_buf_count_d,sizeof(int)*(2));
+      cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*(2));
       cudaMalloc(&barrier_,sizeof(int)*1);
     }
 
   template<typename T>
     inline size_t CudaMergeVector<T>::getCudaMallocBytes() {
       return CudaVector<T>::getCudaMallocBytes()+
-        sizeof(uint32_t)*(1+2*(1+sub_vec_num))+max_size*(sizeof(T)+sizeof(uint64_t*)+sizeof(int));
+        sizeof(uint32_t)*(1+2*(2))+max_size*(sizeof(T)+sizeof(uint64_t*)+sizeof(int));
     }
 
   template<typename T>
@@ -518,6 +503,29 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
   /***************************************End CudaFst****************************************************/
 
+
+  inline DEVICE void atomicMin(double *address, double val) {
+    unsigned long long *address_ull = (unsigned long long *)address;
+
+    double minval = *address;
+
+    while (val < minval) {  //if my value is less than minimum
+      minval = val;         //update the minimum to my value locally
+      val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
+    } //if the new value is < the minimum I wrote I need to try again.
+  }
+  inline DEVICE void atomicMin(float *address, float val) {
+    unsigned int *address_ui = (unsigned int  *)address;
+
+    float minval = *address;
+
+    while (val < minval) {  //if my value is less than minimum
+      minval = val;         //update the minimum to my value locally
+      val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
+    } //if the new value is < the minimum I wrote I need to try again.
+  }
+  
+
   DEVICE inline void allocateAllTokens_function(CudaDecoder::TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaDecoder::TokenAllocator allocator) {
     for(int i=blockIdx.x*blockDim.x+threadIdx.x; i<numStates; i+=blockDim.x*gridDim.x) {
       CudaDecoder::Token *token = allocator.getToken(i);
@@ -645,10 +653,9 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     allocator.initialize(config.max_tokens);
 
     bytes_cudaMallocManaged+=allocator.getCudaMallocManagedBytes();
-    cur_toks_.allocate(config.max_tokens_per_frame, config.sub_vec_num);
-    prev_toks_.allocate(config.max_tokens_per_frame, config.sub_vec_num);
+    cur_toks_.allocate(config.max_tokens_per_frame);
+    prev_toks_.allocate(config.max_tokens_per_frame);
     bytes_cudaMalloc+=cur_toks_.getCudaMallocBytes()+prev_toks_.getCudaMallocBytes();
-    sub_vec_num_=config.sub_vec_num;
 
     cudaEventCreateWithFlags(&event_pt,cudaEventDisableTiming);
     cudaEventCreateWithFlags(&event_pt_old,cudaEventDisableTiming);
@@ -830,7 +837,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
-    TokenState* ts, int subid, bool use_sub, uint64_t **token_pack, int* update) {
+    TokenState* ts, bool use_sub, uint64_t **token_pack, int* update) {
     //TokenLookupElem lookup_elem;
     //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
@@ -841,7 +848,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       *update=1;
       if (use_sub) 
         params.cur_toks.push_back(TokenState(cur_tok,nextstate), 
-        &lookup_elem.token_pack, subid);
+        &lookup_elem.token_pack);
       else params.cur_toks.push_back(TokenState(cur_tok,nextstate));
     }
       if (use_sub) *token_pack=&lookup_elem.token_pack;
@@ -915,42 +922,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     }
 
     return false;
-  }
-
-  BaseFloat CudaDecoder::FinalRelativeCost() const {
-    // as a special case, if there are no active tokens at all (e.g. some kind of
-    // pruning failure), return infinity.
-    CostType infinity = std::numeric_limits<CostType>::infinity();
-    if (cur_toks_.empty())
-      return infinity;
-    CostType best_cost = infinity,
-             best_cost_with_final = infinity;
-
-
-    //for each active token
-    //compute minimum cost
-    for (int i=0;i<cur_toks_.size();i++) {
-      TokenState ts = cur_toks_[i];
-      StateId state = ts.state;
-      CostType cost = ts.token->cost_;
-
-      // Note: Plus is taking the minimum cost, since we're in the tropical
-      // semiring.
-      best_cost = std::min(best_cost, cost);
-      best_cost_with_final = std::min(best_cost_with_final,
-          cost +
-          fst_.Final(state));
-          //fst_.Final(state).Value());
-    }
-
-    BaseFloat extra_cost = best_cost_with_final - best_cost;
-    if (extra_cost != extra_cost) { // NaN.  This shouldn't happen; it indicates some
-      // kind of error, most likely.
-      KALDI_WARN << "Found NaN (likely search failure in decoding)";
-      return infinity;
-    }
-    // Note: extra_cost will be infinity if no states were final.
-    return extra_cost;
   }
 
   // Outputs an FST corresponding to the single best path
@@ -1030,27 +1001,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     return true;
   }
 
-  inline DEVICE void atomicMin(double *address, double val) {
-    unsigned long long *address_ull = (unsigned long long *)address;
-
-    double minval = *address;
-
-    while (val < minval) {  //if my value is less than minimum
-      minval = val;         //update the minimum to my value locally
-      val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
-    } //if the new value is < the minimum I wrote I need to try again.
-  }
-  inline DEVICE void atomicMin(float *address, float val) {
-    unsigned int *address_ui = (unsigned int  *)address;
-
-    float minval = *address;
-
-    while (val < minval) {  //if my value is less than minimum
-      minval = val;         //update the minimum to my value locally
-      val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
-    } //if the new value is < the minimum I wrote I need to try again.
-  }
-
   void CudaDecoder::ComputeLogLikelihoods(DecodableInterface *decodable) {
     nvtxRangePushA("ComputeLogLikelihoods");
 
@@ -1071,6 +1021,50 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
     nvtxRangePop();
   }
+
+  void CudaDecoder::initParams(processTokens_params& params) {
+    params.prev_toks=prev_toks_;
+    params.cur_toks=cur_toks_;
+    params.allocator=allocator;
+    params.e_offsets=fst_.e_offsets_d;
+    params.ne_offsets=fst_.ne_offsets_d;
+    params.arc_ilabels=fst_.arc_ilabels_d;
+    params.arc_weights=fst_.arc_weights_d;
+    params.arc_nextstates=fst_.arc_nextstates_d;
+    params.cutoff=cutoff_d;
+    params.loglikelihoods=loglikelihoods_d;
+    params.current_tokens_lookup=current_tokens_lookup_d;
+    params.token_locks=token_locks_d;
+    params.modified=modified_d;
+    params.beam=beam_;
+    params.pe_idx=pe_idx_d;
+    params.ne_idx=ne_idx_d;
+    params.ne_queue=ne_queue_d;
+    params.l_ne_idx=l_ne_idx_d;
+    params.fb_idx=fb_idx_d;
+    params.barrier=barrier_d;
+    params.verbose=verbose;
+    params.frame=num_frames_decoded_;
+
+    params.tid2tok=tid2tok_d;
+    params.tok2scansum_numarc=tok2scansum_numarc_d;
+    params.clock_buf=clock_buf_d;
+    params.tid2arc=tid2arc_d;
+    params.max_arcs_per_frame_search=max_arcs_per_frame_search_;    
+    params.token_per_arc=token_per_arc_d;
+    params.token_per_arc_update=token_per_arc_update_d;
+    params.numArcs=fst_.NumArcs();
+    params.cidx=cidx_d;
+    params.cidx2=cidx2_d;
+  }
+
+
+  void CudaDecoder::ClearToks(TokenMergeVector &toks) {
+    //cannot acctually delete tokens as they may still be connected to active tokens
+    toks.clear(stream_comp);
+  }
+
+  
 
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
@@ -1135,19 +1129,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     }
   }
 
-DEVICE void release_semaphore(volatile int *lock){
-  *lock = 0;
-  __threadfence();
-  }
-
-
-DEVICE void acquire_semaphore(volatile int *lock){
-  short cnt=0;
-  while (atomicCAS((int *)lock, 0, 1) != 0) {
-    //if (++cnt==0) release_semaphore(lock); //deadlock hack
-  }
-  }
-
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
   inline DEVICE void processEmittingTokens_function(processTokens_params params) {
@@ -1157,10 +1138,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
     typedef CudaDecoder::CostType CostType;
     typedef CudaDecoder::TokenLookupElem TokenLookupElem; 
     int threadIdxy = threadIdx.x / blockDimx;
-   
-    if (params.verbose>3&&threadIdx.x==0 && blockIdx.x==0) printf("PE: %i %i\n",params.frame, params.prev_toks.size());
-
-
+    
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     CostType cutoff=*params.cutoff;
@@ -1168,8 +1146,12 @@ DEVICE void acquire_semaphore(volatile int *lock){
     //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
     while(true) {
       int i;
-      if(group.thread_rank()==0) //thread 0 nominated to get new token
+      if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.pe_idx,1);      //get token index
+        if (params.verbose>3 && i%1000==0) {
+          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
+        }
+      }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
       if(i>=size) break;
@@ -1208,7 +1190,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
           TokenState *next_ts=NULL;
           //get cur_tok&token_pack addr
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-          acoustic_cost, &ts, (i+j)%params.sub_vec_num,true, &token_pack, params.token_per_arc_update+j);
+          acoustic_cost, &ts, 0,true, &token_pack, params.token_per_arc_update+j);
           //get cur_te&new_token_pack
           uint64_t new_token_pack=pack(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
@@ -1281,7 +1263,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
           TokenState *next_ts=NULL;
           uint64_t* token_pack;
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-            0, &ts, (i+j)%params.sub_vec_num, true, &token_pack, params.token_per_arc_update+j);
+            0, &ts, 0, true, &token_pack, params.token_per_arc_update+j);
           uint64_t new_token_pack=pack(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
@@ -1298,56 +1280,12 @@ DEVICE void acquire_semaphore(volatile int *lock){
     if (threadIdx.x==0&&blockIdx.x==0) { cidx=cidx2=0; }
   }
 
-  //Loop through all tokens repeatdly updating costs until nothing changes
-  //__launch_bounds__(64,32)
-  __global__ void processNonEmittingTokens_cg(processTokens_params params) {
-
-    //auto grid = cooperative_groups::this_grid();
-    //double buffer to reduce synchronization
-    volatile int *modified0 = params.modified;    //modified flag for current iteration
-    volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
-    *modified1 = false;
-
-    CudaDecoder::CostType cutoff=*params.cutoff;
-    do {
-
-      uint32_t size = params.cur_toks.size();
-
-      *params.ne_idx=0;
-      *params.l_ne_idx=0;
-      //grid.sync();  
-      __grid_sync_nv_internal(params.barrier);
-
-      //swap buffers
-      swap(modified0,modified1);
-
-      *modified1 = false;
-
-      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0);
-
-      //grid.sync();
-      __grid_sync_nv_internal(params.barrier);
-
-    } while ((*modified0)==true);
-    
-    //prepare for next iteration
-    *params.cutoff = INFINITY;
-
-    params.cur_toks.clear_sub();
-
-    allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
-    __grid_sync_nv_internal(params.barrier);
-    if(threadIdx.x==0 && blockIdx.x==0)
-      params.allocator.advanceFront(params.cur_toks.size());
-  }
-
   DEVICE inline uint64 gt(uint64 t1, uint64 t2) {
     if (t1>t2) return t1-t2;
     else return t2-t1;
   }
   __launch_bounds__(64,64)
-  __global__ void processTokens_cg(processTokens_params params) {
-//    auto grid = cooperative_groups::this_grid();
+  __global__ void processTokens_cg(processTokens_params params, bool is_init=false) {
 
     bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     int p=0;
@@ -1355,21 +1293,20 @@ DEVICE void acquire_semaphore(volatile int *lock){
     uint64 t[20];
     t[cnt_c]=clock64();
 
-    findBestCutoff_function<32,2>(params);
-    //grid.sync();
-    __grid_sync_nv_internal(params.barrier);
-    if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
-   
+    if (!is_init) {
+        findBestCutoff_function<32,2>(params);
+        __grid_sync_nv_internal(params.barrier);
+    }
+
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
     CudaDecoder::CostType cutoff=*params.cutoff;
 
-    processEmittingTokens_function<32,2>(params);
-    //grid.sync();
-    __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
-    if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
-  
+    if (!is_init) {
+        processEmittingTokens_function<32,2>(params);
+        __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
+    }
     int tok_E;
     int itv = params.verbose>2? 1: 10;
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
@@ -1401,7 +1338,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
       //grid.sync();
       __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
     } while ((*modified0)==true);
-    if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
           printf("TK: %i %i %i %i\n", params.frame, tok_E, params.cur_toks.size(), cnt);
@@ -1417,16 +1353,11 @@ DEVICE void acquire_semaphore(volatile int *lock){
     }
     params.cur_toks.clear_sub();
     __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
-    if (rank0&&params.verbose>1) { uint64 cur=clock64();t[cnt_c+1]=gt(cur,t[cnt_c]);cnt_c++;}
     
     if(rank0) {
       params.allocator.advanceFront(params.cur_toks.size());
     }
-    if (rank0&&params.verbose>1&&params.frame==100) { 
-      for (int k=0; k<=cnt_c;k++) {
-        params.clock_buf[k]+=t[k];
-      }
-    }
+    
   }
 
   void CudaDecoder::ProcessNonemitting() {
@@ -1442,55 +1373,12 @@ DEVICE void acquire_semaphore(volatile int *lock){
 
     initParams(params);
 
-#if 0
-    void *args[] = { (void*) &params };
-
-    cudaLaunchCooperativeKernel((void*)processNonEmittingTokens_cg, blocks, threads, args, 0, stream_comp);
-#else
-    processNonEmittingTokens_cg<<<blocks,threads,0,stream_comp>>>(params);
-#endif
+    processTokens_cg<<<blocks,threads,0,stream_comp>>>(params, true);
 
     cudaCheckError();
     nvtxRangePop();
   }
 
-
-  void CudaDecoder::initParams(processTokens_params& params) {
-    params.prev_toks=prev_toks_;
-    params.cur_toks=cur_toks_;
-    params.allocator=allocator;
-    params.e_offsets=fst_.e_offsets_d;
-    params.ne_offsets=fst_.ne_offsets_d;
-    params.arc_ilabels=fst_.arc_ilabels_d;
-    params.arc_weights=fst_.arc_weights_d;
-    params.arc_nextstates=fst_.arc_nextstates_d;
-    params.cutoff=cutoff_d;
-    params.loglikelihoods=loglikelihoods_d;
-    params.current_tokens_lookup=current_tokens_lookup_d;
-    params.token_locks=token_locks_d;
-    params.modified=modified_d;
-    params.beam=beam_;
-    params.pe_idx=pe_idx_d;
-    params.ne_idx=ne_idx_d;
-    params.ne_queue=ne_queue_d;
-    params.l_ne_idx=l_ne_idx_d;
-    params.fb_idx=fb_idx_d;
-    params.barrier=barrier_d;
-    params.verbose=verbose;
-    params.frame=num_frames_decoded_;
-
-    params.tid2tok=tid2tok_d;
-    params.tok2scansum_numarc=tok2scansum_numarc_d;
-    params.clock_buf=clock_buf_d;
-    params.tid2arc=tid2arc_d;
-    params.max_arcs_per_frame_search=max_arcs_per_frame_search_;    
-    params.sub_vec_num=sub_vec_num_;
-    params.token_per_arc=token_per_arc_d;
-    params.token_per_arc_update=token_per_arc_update_d;
-    params.numArcs=fst_.NumArcs();
-    params.cidx=cidx_d;
-    params.cidx2=cidx2_d;
-  }
 
   void CudaDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
@@ -1521,11 +1409,6 @@ DEVICE void acquire_semaphore(volatile int *lock){
     cur_toks_.copy_size_to_host(stream_comp); //for PreProcessTokens
 
     nvtxRangePop();
-  }
-
-  void CudaDecoder::ClearToks(TokenMergeVector &toks) {
-    //cannot acctually delete tokens as they may still be connected to active tokens
-    toks.clear(stream_comp);
   }
 
 } // end namespace kaldi.
