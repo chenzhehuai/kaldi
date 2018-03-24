@@ -1,8 +1,6 @@
-// decoder/simple-decoder.h
+// decoder/cuda-decoder.h
 
-// Copyright 2009-2013  Microsoft Corporation;  Lukas Burget;
-//                      Saarland University (author: Arnab Ghoshal);
-//                      Johns Hopkins University (author: Daniel Povey)
+// Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -19,8 +17,8 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef KALDI_DECODER_SIMPLE_DECODER_H_
-#define KALDI_DECODER_SIMPLE_DECODER_H_
+#ifndef KALDI_CUDA_DECODER_H_
+#define KALDI_CUDA_DECODER_H_
 
 #ifdef __CUDACC__
   #define HOST __host__
@@ -31,6 +29,14 @@
   #define DEVICE
 #endif
 
+//#define __DEBUG__
+#ifdef __DEBUG__
+#define VERBOSE 5
+#define DEBUG(format,...) printf(format, ##__VA_ARGS__)
+#else
+#define VERBOSE 0
+#define DEBUG(format,...)
+#endif
 #include "util/stl-utils.h"
 #include "fst/fstlib.h"
 #include "lat/kaldi-lattice.h"
@@ -127,23 +133,24 @@ class CudaVector {
       inline void free();
       HOST DEVICE inline uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
-      inline void clear(cudaStream_t stream=0); 
+      HOST DEVICE inline void clear(cudaStream_t stream=0); 
+      HOST DEVICE inline int get_idx_from_addr(T* addr); 
       inline bool empty() const;
       inline void swap(CudaVector<T> &v); 
       inline void copy_all_to_host(cudaStream_t stream=0);
       inline void copy_all_to_device(cudaStream_t stream=0);
       inline void copy_size_to_host(cudaStream_t stream=0);
       inline void copy_size_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_host(cudaStream_t stream=0);
+      inline void copy_data_to_host(cudaStream_t stream=0, T* to_buf=NULL, bool copy_size=true);
       inline void copy_data_to_device(cudaStream_t stream=0);
+      inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
 
       inline size_t getCudaMallocBytes(); 
       
+    public:
       uint32_t *count_d, *count_h;
       uint32_t max_size;
       T* mem_d, *mem_h;
-private:
-
 };
 
 template<typename T>

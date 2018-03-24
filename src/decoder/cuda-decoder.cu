@@ -1,7 +1,4 @@
-// decoder/simple-decoder.cc
-
-// Copyright 2009-2011 Microsoft Corporation
-//           2012-2013 Johns Hopkins University (author: Daniel Povey)
+// Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -136,8 +133,10 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
   template<typename T>
     HOST DEVICE inline T& CudaVector<T>::operator[](uint32_t idx) { 
 #ifdef __CUDA_ARCH__
+      assert(idx<*count_d);
       return mem_d[idx];
 #else
+      assert(idx<*count_h);
       return mem_h[idx];
 #endif
     }
@@ -145,8 +144,10 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
   template<typename T>
     HOST DEVICE inline const T& CudaVector<T>::operator[](uint32_t idx) const { 
 #ifdef __CUDA_ARCH__
+      assert(idx<*count_d);
       return mem_d[idx];
 #else
+      assert(idx<*count_h);
       return mem_h[idx];
 #endif
     } 
@@ -202,14 +203,25 @@ DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
     }
   
 template<typename T>
-    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream) {
-      cudaMemcpyAsync(mem_h,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
+    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream, T* to_buf, bool copy_size) {
+      if (!to_buf) {
+        to_buf=mem_h;
+      }
+      if (copy_size) cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(to_buf,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
     }
 
   template<typename T>
     inline void CudaVector<T>::copy_data_to_device(cudaStream_t stream) {
       cudaMemcpyAsync(mem_d,mem_h,*count_h*sizeof(T),cudaMemcpyHostToDevice, stream);
     }
+
+  template<typename T>
+    inline void CudaVector<T>::copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream) {
+      cudaMemcpyAsync(mem_d+*count_d*sizeof(T),mem_in_d,size*sizeof(T),cudaMemcpyDeviceToDevice, stream);
+      *count_d+=size;
+    }
+
 
 
   //Note:  This will cause page faults back and forth when we switch from host to device.
@@ -243,6 +255,18 @@ template<typename T>
 #else
       *count_h = 0; 
       cudaMemsetAsync(count_d,0,sizeof(int32),stream); 
+#endif
+    }
+  template<typename T> 
+    HOST DEVICE inline int CudaVector<T>::get_idx_from_addr(T* addr) { 
+#ifdef __CUDA_ARCH__
+      int ret=addr-mem_d;
+      assert(ret<*count_d&&ret>=0);
+      return ret;
+#else
+      int ret=addr-mem_h;
+      assert(ret<*count_h&&ret>=0);
+      return ret;
 #endif
     }
   template<typename T> 
