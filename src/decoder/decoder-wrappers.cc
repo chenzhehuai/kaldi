@@ -17,9 +17,15 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include "nvToolsExt.h"
+#include "base/timer.h"
+#include "fst/fstlib.h"
+#include "cuda-decoder-utils.h"
 #include "decoder/decoder-wrappers.h"
 #include "decoder/faster-decoder.h"
 #include "lat/lattice-functions.h"
+#include "omp.h"
+
 
 namespace kaldi {
 
@@ -192,6 +198,137 @@ DecodeUtteranceLatticeFasterClass::~DecodeUtteranceLatticeFasterClass() {
   delete decoder_;
   delete decodable_;
 }
+
+// Takes care of output.  Returns true on success.
+bool DecodeUtteranceLatticeFasterCuda(
+    LatticeFasterDecoderCuda &decoder, // not const but is really an input.
+    DecodableInterface &decodable, // not const but is really an input.
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr,
+    Lattice* olat) { // puts utterance's like in like_ptr on success.
+  using fst::VectorFst;
+
+  if (!decoder.Decode(&decodable)) {
+    KALDI_WARN << "Failed to decode file " << utt;
+    return false;
+  }
+  if (!decoder.ReachedFinal()) {
+    if (allow_partial) {
+      KALDI_WARN << "Outputting partial output for utterance " << utt
+                 << " since no final-state reached\n";
+    } else {
+      KALDI_WARN << "Not producing output for utterance " << utt
+                 << " since no final-state reached and "
+                 << "--allow-partial=false.\n";
+      return false;
+    }
+  }
+
+  nvtxRangePushA("post_decoding");
+  Timer timer;
+  double likelihood;
+  LatticeWeight weight;
+  int32 num_frames;
+  { // First do some stuff with word-level traceback...
+    VectorFst<LatticeArc> decoded;
+  nvtxRangePushA("get_lattice_shortest");
+    if (!decoder.GetBestPath(&decoded))
+ // Shouldn't really reach this point as already checked success.
+      KALDI_ERR << "Failed to get traceback for utterance " << utt;
+  nvtxRangePop();
+    std::vector<int32> alignment;
+    std::vector<int32> words;
+    GetLinearSymbolSequence(decoded, &alignment, &words, &weight);
+    num_frames = alignment.size();
+    if (words_writer->IsOpen())
+      words_writer->Write(utt, words);
+    if (alignment_writer->IsOpen())
+      alignment_writer->Write(utt, alignment);
+    if (word_syms != NULL) {
+      std::cerr << utt << ' ';
+      for (size_t i = 0; i < words.size(); i++) {
+        std::string s = word_syms->Find(words[i]);
+        if (s == "")
+          KALDI_ERR << "Word-id " << words[i] << " not in symbol table.";
+        std::cerr << s << ' ';
+      }
+      std::cerr << '\n';
+    }
+    likelihood = -(weight.Value1() + weight.Value2());
+  }
+  // Get lattice, and do determinization if requested.
+  nvtxRangePushA("get_lattice");
+  Lattice& lat=*olat;
+  decoder.GetRawLattice(&lat);
+  if (lat.NumStates() == 0)
+    KALDI_ERR << "Unexpected problem getting lattice for utterance " << utt;
+  fst::Connect(&lat);
+  nvtxRangePop();
+
+    double t4 = timer.Elapsed();
+    KALDI_VLOG(1)<<"post_decoding: "<<t4;
+
+  KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
+            << (likelihood / num_frames) << " over "
+            << num_frames << " frames.";
+  KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
+                << weight.Value1() << " + " << weight.Value2();
+  *like_ptr = likelihood;
+  nvtxRangePop();
+
+  return true;
+}
+
+bool DecodeUtteranceLatticeFasterCudaOutput(
+    LatticeFasterDecoderCuda &decoder, // not const but is really an input.
+    DecodableInterface &decodable, // not const but is really an input.
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr,
+    Lattice& lat) {
+  if (determinize) {
+    CompactLattice clat;
+    if (!DeterminizeLatticePhonePrunedWrapper(
+            trans_model,
+            &lat,
+            decoder.GetOptions().lattice_beam,
+            &clat,
+            decoder.GetOptions().det_opts))
+      KALDI_WARN << "Determinization finished earlier than the beam for "
+                 << "utterance " << utt;
+    // We'll write the lattice without acoustic scaling.
+    if (acoustic_scale != 0.0)
+      fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &clat);
+    compact_lattice_writer->Write(utt, clat);
+
+  } else {
+  nvtxRangePushA("write_lat");
+    // We'll write the lattice without acoustic scaling.
+    if (acoustic_scale != 0.0)
+      fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &lat);
+    lattice_writer->Write(utt, lat);
+  nvtxRangePop();
+  }
+  return true;
+}
+
 
 
 // Takes care of output.  Returns true on success.
