@@ -90,6 +90,9 @@ const int num_colors = sizeof(colors)/sizeof(uint32_t);
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 
+// Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
+// No stream priorities
+
 
 inline DEVICE uint64_t pack (float cost, int ptr) {
   //assert (!isnan(cost));
@@ -118,92 +121,17 @@ inline DEVICE int unpack_ptr (uint64_t packed) {
   return packed & 0x7FFFFFFF;
 }
 
-template <typename T>
-  DEVICE __forceinline__ void load16(T *a, const T *b) {
-    const ulong2 *src = reinterpret_cast<const ulong2*>(b);
-    ulong2 &dst = *reinterpret_cast<ulong2*>(a);
-    asm("ld.global.v2.u64 {%0,%1}, [%2];" : "=l"(dst.x), "=l"(dst.y) : "l"(src));
-  }
-  
-template <typename T>
-  DEVICE __forceinline__ void store16(T *a, const T *b) {
-    const ulong2 src = *reinterpret_cast<const ulong2*>(b);
-    asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
-  }
+DEVICE void load16(void *a, const void *b);
+DEVICE void store16(void *a, const void *b);
+DEVICE void store32(void *a, const void *b);
 
-  
-template <typename T>
-  DEVICE __forceinline__ void store32(T *a, const T *b) {
-    //const ulong4 src = *reinterpret_cast<const ulong4*>(b);
-    //asm("st.global.v4.u64 [%0], {%1,%2,%3,%4};" :: "l"(a), "l"(src.x), "l"(src.y),
-    //  "l"(src.z), "l"(src.w));
-    memcpy(a, b, 32);
-  }
+DEVICE void atomicMin(double *address, double val);
 
-
-inline DEVICE void atomicMin(double *address, double val) {
-  unsigned long long *address_ull = (unsigned long long *)address;
-
-  double minval = *address;
-
-  while (val < minval) {  //if my value is less than minimum
-    minval = val;         //update the minimum to my value locally
-    val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
-  } //if the new value is < the minimum I wrote I need to try again.
-}
-inline DEVICE void atomicMin(float *address, float val) {
-  unsigned int *address_ui = (unsigned int  *)address;
-
-  float minval = *address;
-
-  while (val < minval) {  //if my value is less than minimum
-    minval = val;         //update the minimum to my value locally
-    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
-  } //if the new value is < the minimum I wrote I need to try again.
-}
-
-
+DEVICE void atomicMin(float *address, float val);
 
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
-// No stream priorities
-DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
-{
-    __syncthreads();
-    if (threadIdx.x == 0) {
-        // gridDim.x-1 blocks are adding 1
-        // and one block is adding 0x80000000 - (gridDim.x-1)
-        // so the whole sum is 0x80000000
-        int nb = 1;
-        if (blockIdx.x == 0) {
-            nb = 0x80000000 - (gridDim.x-1);
-        }
- 
-        int old_epoch = *fast_epoch;
-        __threadfence();
-        atomicAdd((int*)fast_epoch, nb);
- 
-        // wait for the sign bit to commute   
-        int cnt=0;
-        while (((*fast_epoch) ^ old_epoch) >= 0)//&& ++cnt!=(1<<19) //deadlock hack
-            ;
-        //if (blockIdx.x == 0) *fast_epoch=0;
-    }
-    __syncthreads();
-}
+DEVICE void __grid_sync_nv_internal(int *barrier);
 
-DEVICE __noinline__ void __grid_sync_nv_internal(int *barrier)
-{
-    __gpu_sync_fast((volatile int*)barrier);
-}
-
-template<typename T> 
-  inline DEVICE void swap(T &a, T &b) {
-    T c = a;
-    a = b;
-    b = c;
-  }
-
-  
 
 class CudaFst {
   public:
@@ -217,10 +145,10 @@ class CudaFst {
     void initialize(const fst::Fst<StdArc> &fst);
     void finalize();
 
-    inline uint32_t NumStates() const {  return numStates; }
-    inline uint32_t NumArcs() const {  return numArcs; }
-    inline StateId Start() const { return start; }    
-    HOST DEVICE inline float Final(StateId state) const;
+    uint32_t NumStates() const {  return numStates; }
+    uint32_t NumArcs() const {  return numArcs; }
+    StateId Start() const { return start; }    
+    HOST DEVICE float Final(StateId state) const;
     size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
   
     unsigned int numStates;               //total number of states
@@ -252,37 +180,6 @@ class CudaFst {
     size_t bytes_cudaMalloc;
 };
 
-template<typename T>
-class CudaVector {
-    public:
-     inline HOST DEVICE T& operator[](uint32_t idx); 
-     inline HOST DEVICE const T& operator[](uint32_t idx) const; 
-     inline void allocate(uint32_t max_size, 
-        uint32_t* icount_h=NULL, uint32_t* icount_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
-     inline void free(bool create_outside=false);
-     inline HOST DEVICE uint32_t size() const; 
-      HOST DEVICE inline uint32_t push_back(const T &val); 
-      HOST DEVICE inline void clear(cudaStream_t stream=0); 
-      HOST DEVICE inline int get_idx_from_addr(T* addr); 
-      inline bool empty() const;
-      inline void swap(CudaVector<T> &v); 
-      inline void copy_all_to_host(cudaStream_t stream=0);
-      inline void copy_all_to_device(cudaStream_t stream=0);
-      inline void copy_size_to_host(cudaStream_t stream=0);
-      inline void copy_size_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_host(cudaStream_t stream=0, T* to_buf=NULL, bool copy_size=true);
-      inline void copy_data_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
-
-      inline size_t getCudaMallocBytes(); 
-      
-    public:
-      uint32_t *count_d, *count_h;
-      uint32_t max_size;
-      T* mem_d, *mem_h;
-      int alloc_size;
-};
-
 } // end namespace kaldi.
 
-
+#endif
