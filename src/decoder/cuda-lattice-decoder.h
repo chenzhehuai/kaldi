@@ -123,6 +123,34 @@ class CudaVector {
 };
 
 
+
+template<typename T>
+class CudaMergeVector : public CudaVector<T> {
+public:
+  using CudaVector<T>::operator[];
+  using CudaVector<T>::push_back;
+  using CudaVector<T>::size;
+  using CudaVector<T>::count_d;
+  using CudaVector<T>::mem_d;
+  using CudaVector<T>::max_size;
+  
+  DEVICE inline void merge(void* undefined, int* token_per_arc_update, int num_arcs,  bool clear=true);
+  DEVICE inline int update(int i);
+  DEVICE inline void clear_sub();
+  inline void allocate(uint32_t max_size);
+  DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack); 
+  inline void free();
+  inline size_t getCudaMallocBytes(); 
+  inline void swap(CudaMergeVector<T> &v);
+
+  //for arr merge to single; assume create using cudaMallocManaged
+  int *mem_update_d;
+  uint64** mem_pack_buf_d;
+  T* mem_buf_d;
+  int *mem_buf_count_d;
+  int *mem_buf_acc_count_d;
+  int* barrier_;
+};
  public:
   typedef fst::StdArc StdArc;
   typedef StdArc::Weight StdWeight;
@@ -136,10 +164,10 @@ class __align__(16) Token {
   CostType cost_; // accumulated total cost up to this point.
   int32_t frame; //used in generation
   float extra_cost;//used in pruning
-  StateId state_id;
+  //StateId state_id;
   //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
-  HOST DEVICE inline Token(BaseFloat cost, int frame, Token* prev, StateId state_id) : cost_(cost), frame(frame), extra_cost(0), state_id(state_id) {
+  HOST DEVICE inline Token(BaseFloat cost, int frame, Token* prev) : cost_(cost), frame(frame), extra_cost(0) {
     assert(sizeof(Token)==16); 
     if(prev) {
       cost_ += prev->cost_;
@@ -154,16 +182,16 @@ class __align__(16) Token {
     return cost_ > other.cost_;
   }
 };
-
+ 
   //struct to hold pre-allocated tokens (one per state)
-  struct __align__(16) TokenLookupElem{
+  struct  TokenLookupElem{
     Token *token;     //pointer for that token
     uint32_t active;  //tells if token has activiated or not
-    volatile int32_t tokenstate_idx;     //aligning to 16 bytes
+    uint64_t token_pack;     //
+    volatile int32_t tokenstate_idx;     //
   };
 
-
-struct TokenState {
+struct __align__(16) TokenState {
   public:
   
   Token* token; //arc and labels
@@ -175,6 +203,7 @@ struct TokenState {
 };
 
 typedef CudaVector<TokenState> TokenVector;
+typedef CudaMergeVector<TokenState> TokenMergeVector;
 
 #define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx))
 #define DECODE_TOK_ADDR(frame,idx,v) { \
@@ -312,8 +341,8 @@ typedef CudaVector<TokenState> TokenVector;
  
  
   struct processTokens_params {
-    TokenVector prev_toks;
-    TokenVector cur_toks;
+    TokenMergeVector prev_toks;
+    TokenMergeVector cur_toks;
     TokenAllocator allocator;
     CostType *cutoff;
 
@@ -331,7 +360,11 @@ typedef CudaVector<TokenState> TokenVector;
     volatile int *modified;
     int *pe_idx;
     int *ne_idx;
+    int *ne_queue;
+    int *l_ne_idx;
     int *fb_idx;
+    int *cidx2;
+    int *cidx;
     int *barrier;
 
     //debug
@@ -343,6 +376,10 @@ typedef CudaVector<TokenState> TokenVector;
 
     LatticePruner lattice_pruner;
     float lattice_beam;
+
+    Token* token_per_arc;
+    int* token_per_arc_update;
+    int numArcs;
   };
 
 
@@ -403,8 +440,10 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
   TokenLookupElem *current_tokens_lookup_d;
 
   //Lists of active tokens to be iterated through
-  TokenVector* cur_toks_;
-  TokenVector* prev_toks_;  
+  TokenMergeVector* cur_toks_;
+  TokenMergeVector* prev_toks_;  
+  Token* token_per_arc_d;
+  int *token_per_arc_update_d;
 
   const CudaFst fst_;
 
@@ -420,7 +459,7 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
 
   //TODO
   volatile int *token_locks_d;
-  void ClearToks(TokenVector &toks);
+  void ClearToks(TokenMergeVector &toks);
 
   cudaEvent_t event_pt, event_pt_old, event_ll;
   cudaStream_t stream_comp, stream_copy[LAT_BUF_SIZE+1], stream_ll;
@@ -429,9 +468,10 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
 
   //warp assignment indexes
-  int *pe_idx_d, *ne_idx_d, *fb_idx_d;
+  int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d, *ne_queue_d;
   int *barrier_d;  //barrier to allow grid syncs
-  
+ 
+  int *cidx_d,*cidx2_d; //for less NE proc
   int verbose;
   int prune_interval_;
   int max_arcs_;
