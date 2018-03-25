@@ -133,6 +133,7 @@ public:
   using CudaVector<T>::count_d;
   using CudaVector<T>::mem_d;
   using CudaVector<T>::max_size;
+  using CudaVector<T>::clear;
   
   DEVICE inline void merge(void* undefined, int* token_per_arc_update, int num_arcs,  bool clear=true);
   DEVICE inline int update(int i);
@@ -164,7 +165,7 @@ class __align__(16) Token {
   CostType cost_; // accumulated total cost up to this point.
   int32_t frame; //used in generation
   float extra_cost;//used in pruning
-  //StateId state_id;
+  StateId state_id;
   //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
   HOST DEVICE inline Token(BaseFloat cost, int frame, Token* prev) : cost_(cost), frame(frame), extra_cost(0) {

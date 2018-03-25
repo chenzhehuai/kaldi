@@ -328,8 +328,12 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
     int acc=0;
     int i=0;
     mem_buf_acc_count_d[i]=acc;
+    mem_buf_count_d[i]=count_d[0];
     acc+=(mem_buf_count_d[i]);
-    if (clear) mem_buf_count_d[i]=0;
+    if (clear) {
+      mem_buf_count_d[i]=0;
+      count_d[0]=0;
+    }
     assert(acc<=max_size);
     *count_d=acc;
     mem_buf_acc_count_d[1]=acc;
@@ -358,6 +362,7 @@ DEVICE inline void CudaMergeVector<T>::clear_sub() {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   if (rank0) {
     memset(mem_buf_count_d, 0, sizeof(int)*(2));
+    memset(count_d, 0, sizeof(int)*(1));
   }
 }
 
@@ -370,9 +375,9 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
   template<typename T> 
     DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, 
                                     uint64 *val_pack) { 
-      uint32_t idx = atomicAdd(mem_buf_count_d,1);
-      mem_d[idx]=val;
-      mem_pack_buf_d[idx]=val_pack; 
+      uint32_t idx = atomicAdd(count_d,1);
+      mem_d[idx]=val; //TODO: speedup this
+      mem_pack_buf_d[idx]=val_pack;  //TODO: speedup this
       //CudaVector<T>::push_back(val); //do this is only for speedup in PNE; dont need to
       return idx;
     }
@@ -1227,9 +1232,6 @@ namespace CudaLatticeDecoder_kernel {
       int i;
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.pe_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          GPU_PRINTF("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
       }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
@@ -1400,7 +1402,7 @@ namespace CudaLatticeDecoder_kernel {
         *params.ne_idx=0; //psize;
       }
       cnt++;
-      bool aggregate=cnt>1?1:0;
+      bool aggregate=is_init||cnt>1?1:0;
       //grid.sync();  
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
@@ -1488,6 +1490,14 @@ namespace CudaLatticeDecoder_kernel {
     params.lattice_pruner=lattice_pruner_;
     uint idx=(num_frames_decoded_)%LAT_BUF_SIZE;
     params.lattice_beam=lattice_beam_;
+
+    params.ne_queue=ne_queue_d;
+    params.l_ne_idx=l_ne_idx_d;    
+    params.token_per_arc=token_per_arc_d;
+    params.token_per_arc_update=token_per_arc_update_d;
+    params.numArcs=fst_.NumArcs();
+    params.cidx=cidx_d;
+    params.cidx2=cidx2_d;    
   }
   void CudaLatticeDecoder::ProcessNonemitting() {
     nvtxRangePushA("ProcessNonemitting");
