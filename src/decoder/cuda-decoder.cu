@@ -23,6 +23,8 @@
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 #include "omp.h"
+#include "lat/kaldi-lattice.h"
+#include "fst/fstlib.h"
 #include "decoder/cuda-decoder.h"
 
 namespace kaldi {

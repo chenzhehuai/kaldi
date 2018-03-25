@@ -24,9 +24,6 @@
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include "util/stl-utils.h"
-#include "fst/fstlib.h"
-#include "lat/determinize-lattice-pruned.h"
-#include "lat/kaldi-lattice.h"
 #include "itf/decodable-itf.h"
 #include "omp.h"
 #include "cuda_runtime.h"
