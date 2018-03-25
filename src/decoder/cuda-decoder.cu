@@ -15,16 +15,9 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include <algorithm>
-#include <nvToolsExt.h>
-#include <cuda_runtime_api.h>
-#include <float.h>
-#include <math.h>
-#include <cooperative_groups.h>
-#include <cub/cub.cuh>
-#include "omp.h"
 #include "lat/kaldi-lattice.h"
 #include "fst/fstlib.h"
+#include "itf/decodable-itf.h"
 #include "decoder/cuda-decoder.h"
 
 namespace kaldi {
@@ -42,6 +35,34 @@ namespace kaldi {
 
 
 // for speedup purpose, make them inline (5% 0.165->0.158)
+inline DEVICE uint64_t pack (float cost, int ptr) {
+  //assert (!isnan(cost));
+  //assert (ptr >= 0 && ptr < 1L<<32);
+  uint32_t i_cost = *(uint32_t *)&cost;
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  else
+    i_cost = i_cost ^ 0x80000000;
+  return (uint64_t)i_cost << 32 | ptr;
+}
+
+// Unpacks a probability.
+inline DEVICE float unpack_cost (uint64_t packed) {
+  uint32_t i_cost = packed >> 32;
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0x80000000;
+  else
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  return *(float *)&i_cost;
+}
+
+// Unpacks a back-pointer.
+inline DEVICE int unpack_ptr (uint64_t packed) {
+  //assert (!(packed & 0x80000000));
+  return packed & 0x7FFFFFFF;
+}
+
+
 inline  DEVICE void load16(void *a, const void *b) {
     const ulong2 *src = reinterpret_cast<const ulong2*>(b);
     ulong2 &dst = *reinterpret_cast<ulong2*>(a);

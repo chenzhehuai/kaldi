@@ -24,9 +24,8 @@
 #include "itf/options-itf.h"
 #include "util/hash-list.h"
 #include "cudamatrix/cu-common.h"
-#include "fst/fstlib.h"
 #include "itf/decodable-itf.h"
-#include "lat/kaldi-lattice.h" // for CompactLatticeArc
+
 #include "decoder/cuda-decoder.h"
 
 namespace kaldi {

@@ -21,6 +21,7 @@
 #define KALDI_CUDA_LATTICE_DECODER_H_
 
 
+#include "cuda-decoder-utils.h"
 
 namespace kaldi {
 
@@ -90,6 +91,38 @@ struct CudaLatticeDecoderConfig {
 
 
 class CudaLatticeDecoder {
+
+  template<typename T>
+class CudaVector {
+    public:
+     inline HOST DEVICE T& operator[](uint32_t idx); 
+     inline HOST DEVICE const T& operator[](uint32_t idx) const; 
+     inline void allocate(uint32_t max_size, 
+        uint32_t* icount_h=NULL, uint32_t* icount_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
+     inline void free(bool create_outside=false);
+     inline HOST DEVICE uint32_t size() const; 
+      HOST DEVICE inline uint32_t push_back(const T &val); 
+      HOST DEVICE inline void clear(cudaStream_t stream=0); 
+      HOST DEVICE inline int get_idx_from_addr(T* addr); 
+      inline bool empty() const;
+      inline void swap(CudaVector<T> &v); 
+      inline void copy_all_to_host(cudaStream_t stream=0);
+      inline void copy_all_to_device(cudaStream_t stream=0);
+      inline void copy_size_to_host(cudaStream_t stream=0);
+      inline void copy_size_to_device(cudaStream_t stream=0);
+      inline void copy_data_to_host(cudaStream_t stream=0, T* to_buf=NULL, bool copy_size=true);
+      inline void copy_data_to_device(cudaStream_t stream=0);
+      inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
+
+      inline size_t getCudaMallocBytes(); 
+      
+    public:
+      uint32_t *count_d, *count_h;
+      uint32_t max_size;
+      T* mem_d, *mem_h;
+      int alloc_size;
+};
+
 
  public:
   typedef fst::StdArc StdArc;

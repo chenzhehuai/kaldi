@@ -16,19 +16,22 @@
 // limitations under the License.
 
 #include "fstext/remove-eps-local.h"
-#include <algorithm>
-#include <float.h>
-#include <math.h>
-#include <cooperative_groups.h>
-#include "lattice-faster-decoder-cuda.h"
+
+#include "fstext/fstext-lib.h"
+#include "lat/determinize-lattice-pruned.h"
+#include "lat/lattice-functions.h"
+#include "lat/kaldi-lattice.h"
+#include "fst/fstlib.h"
+#include "itf/decodable-itf.h"
+
+//#include "lattice-faster-decoder-cuda.h"
 #include "decoder/cuda-lattice-decoder.h"
-#include <cub/block/block_scan.cuh>
-#include "math_constants.h"
-#include "omp.h"
 
 
 namespace kaldi {
 
+#define CudaVector  CudaLatticeDecoder::CudaVector
+#define CudaMergeVector CudaLatticeDecoder::CudaMergeVector
   typedef CudaLatticeDecoder::Token Token;
   typedef CudaLatticeDecoder::StateId StateId;
   typedef CudaLatticeDecoder::TokenState TokenState;
@@ -47,18 +50,252 @@ namespace kaldi {
   template HOST DEVICE uint32_t  CudaVector<TokenState>::size() const; 
   template HOST DEVICE uint32_t  CudaVector<LatLink>::size() const; 
 
-DEVICE void release_semaphore(volatile int *lock){
+// for speedup purpose, make them inline (5% 0.165->0.158)
+
+inline DEVICE void release_semaphore(volatile int *lock){
   *lock = 0;
   __threadfence();
   }
 
 
-DEVICE void acquire_semaphore(volatile int *lock){
+inline DEVICE void acquire_semaphore(volatile int *lock){
   short cnt=0;
   while (atomicCAS((int *)lock, 0, 1) != 0) {
     //if (++cnt==0) release_semaphore(lock); //deadlock hack
   }
   }
+
+inline  DEVICE void load16(void *a, const void *b) {
+    const ulong2 *src = reinterpret_cast<const ulong2*>(b);
+    ulong2 &dst = *reinterpret_cast<ulong2*>(a);
+    asm("ld.global.v2.u64 {%0,%1}, [%2];" : "=l"(dst.x), "=l"(dst.y) : "l"(src));
+  }
+  
+inline  DEVICE void store16(void *a, const void *b) {
+    const ulong2 src = *reinterpret_cast<const ulong2*>(b);
+    asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
+  }
+
+  
+inline  DEVICE void store32(void *a, const void *b) {
+    //const ulong4 src = *reinterpret_cast<const ulong4*>(b);
+    //asm("st.global.v4.u64 [%0], {%1,%2,%3,%4};" :: "l"(a), "l"(src.x), "l"(src.y),
+    //  "l"(src.z), "l"(src.w));
+    memcpy(a, b, 32);
+  }
+
+inline DEVICE void atomicMin(double *address, double val) {
+  unsigned long long *address_ull = (unsigned long long *)address;
+
+  double minval = *address;
+
+  while (val < minval) {  //if my value is less than minimum
+    minval = val;         //update the minimum to my value locally
+    val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
+  } //if the new value is < the minimum I wrote I need to try again.
+}
+inline DEVICE void atomicMin(float *address, float val) {
+  unsigned int *address_ui = (unsigned int  *)address;
+
+  float minval = *address;
+
+  while (val < minval) {  //if my value is less than minimum
+    minval = val;         //update the minimum to my value locally
+    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
+  } //if the new value is < the minimum I wrote I need to try again.
+}
+
+// end of "for speedup purpose, make them inline (5% 0.165->0.158)"
+
+
+//private, as we need to instantiate them  
+template<typename T> 
+  inline DEVICE void swap(T &a, T &b) {
+    T c = a;
+    a = b;
+    b = c;
+  }
+
+/******************************************CudaVector Implementation*******************************/
+template<typename T>
+  HOST DEVICE inline T& CudaVector<T>::operator[](uint32_t idx) { 
+#ifdef __CUDA_ARCH__
+    assert(idx<*count_d);
+    return mem_d[idx];
+#else
+    assert(idx<*count_h);
+    return mem_h[idx];
+#endif
+  }
+
+template<typename T>
+  HOST DEVICE inline const T& CudaVector<T>::operator[](uint32_t idx) const { 
+#ifdef __CUDA_ARCH__
+    assert(idx<*count_d);
+    return mem_d[idx];
+#else
+    assert(idx<*count_h);
+    return mem_h[idx];
+#endif
+  } 
+
+template<typename T>
+  inline void CudaVector<T>::allocate(uint32_t max_size, 
+     uint32_t* icount_h, uint32_t* icount_d, T* mem_d, T* mem_h) {
+    this->max_size=max_size;
+    alloc_size=0;
+
+    if (icount_h) this->count_h=icount_h;
+    else {
+      cudaMallocHost(&this->count_h,sizeof(uint32_t));
+    }
+      if (icount_d) this->count_d=icount_d;
+      else {
+        alloc_size+=sizeof(uint32_t);
+        cudaMalloc(&this->count_d, sizeof(uint32_t));
+      }
+      cudaMemset(this->count_d, 0,sizeof(uint32_t));
+      *count_h=0;
+
+      if (mem_d) {
+        this->mem_d=mem_d;        
+      } else {
+        alloc_size+=max_size*sizeof(T);
+        cudaMalloc(&this->mem_d,max_size*sizeof(T));
+      }
+      if (mem_h) {
+        this->mem_h=mem_h;        
+      } else {
+        cudaMallocHost(&this->mem_h,max_size*sizeof(T));
+      }
+    }
+
+  template<typename T>
+    inline size_t CudaVector<T>::getCudaMallocBytes() {
+      return alloc_size;
+    }
+
+  template<typename T>
+    inline void CudaVector<T>::free(bool create_outside) { 
+      cudaFreeHost(mem_h);
+      if (!create_outside) {
+        cudaFree(mem_d); 
+      }
+      cudaFreeHost(count_h);
+      cudaFree(count_d);       
+    }
+
+
+  template<typename T>
+    inline void CudaVector<T>::copy_all_to_host(cudaStream_t stream) {
+      cudaStreamSynchronize(stream);
+      cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(mem_h,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
+    }
+
+  template<typename T>
+    inline void CudaVector<T>::copy_all_to_device(cudaStream_t stream) {
+      cudaStreamSynchronize(stream);
+      cudaMemcpyAsync(count_d,count_h,sizeof(int32),cudaMemcpyHostToDevice);
+      cudaMemcpyAsync(mem_d,mem_h,*count_h*sizeof(T),cudaMemcpyHostToDevice, stream);
+    }
+
+  template<typename T>
+    inline void CudaVector<T>::copy_size_to_host(cudaStream_t stream) {
+      cudaMemcpyAsync(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost, stream);
+    }
+
+  template<typename T>
+    inline void CudaVector<T>::copy_size_to_device(cudaStream_t stream) {
+      cudaMemcpyAsync(count_d,count_h,sizeof(int32),cudaMemcpyHostToDevice, stream);
+    }
+  
+template<typename T>
+    inline void CudaVector<T>::copy_data_to_host(cudaStream_t stream, T* to_buf, bool copy_size) {
+      if (!to_buf) {
+        to_buf=mem_h;
+      }
+      if (copy_size) cudaMemcpy(count_h,count_d,sizeof(int32),cudaMemcpyDeviceToHost);
+      cudaMemcpyAsync(to_buf,mem_d,*count_h*sizeof(T),cudaMemcpyDeviceToHost, stream);
+    }
+
+  template<typename T>
+    inline void CudaVector<T>::copy_data_to_device(cudaStream_t stream) {
+      cudaMemcpyAsync(mem_d,mem_h,*count_h*sizeof(T),cudaMemcpyHostToDevice, stream);
+    }
+
+  template<typename T>
+    inline void CudaVector<T>::copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream) {
+      cudaMemcpyAsync(mem_d+*count_d*sizeof(T),mem_in_d,size*sizeof(T),cudaMemcpyDeviceToDevice, stream);
+      *count_d+=size;
+    }
+
+
+
+  //Note:  This will cause page faults back and forth when we switch from host to device.
+  template<typename T>
+    HOST DEVICE inline uint32_t CudaVector<T>::size() const 
+    {
+#ifdef __CUDA_ARCH__
+      return *count_d; 
+#else
+      return *count_h;
+#endif
+    }
+
+  template<typename T> 
+    HOST DEVICE inline uint32_t CudaVector<T>::push_back(const T &val) { 
+#ifdef __CUDA_ARCH__
+      assert(*count_d<max_size);
+      uint32_t idx = atomicAdd(count_d,1);
+      mem_d[idx]=val; 
+#else
+      assert(*count_h<max_size);
+      uint32_t idx = (*count_h)++;
+      mem_h[idx]=val; 
+#endif
+      return idx;
+    }
+  template<typename T> 
+    HOST DEVICE inline void CudaVector<T>::clear(cudaStream_t stream) { 
+#ifdef __CUDA_ARCH__
+      *count_d = 0;
+#else
+      *count_h = 0; 
+      cudaMemsetAsync(count_d,0,sizeof(int32),stream); 
+#endif
+    }
+  template<typename T> 
+    HOST DEVICE inline int CudaVector<T>::get_idx_from_addr(T* addr) { 
+#ifdef __CUDA_ARCH__
+      int ret=addr-mem_d;
+      assert(ret<*count_d&&ret>=0);
+      return ret;
+#else
+      int ret=addr-mem_h;
+      assert(ret<*count_h&&ret>=0);
+      return ret;
+#endif
+    }
+  template<typename T> 
+    inline bool CudaVector<T>::empty() const { return size()==0; }
+  template<typename T> 
+    inline void CudaVector<T>::swap(CudaVector<T> &v) {
+      std::swap(mem_h,v.mem_h);
+      std::swap(mem_d,v.mem_d);
+      std::swap(count_h,v.count_h);
+      std::swap(count_d,v.count_d);
+      std::swap(max_size,v.max_size);
+    }
+  /**************************************End CudaVector Implementation**********************************/
+
+//end of "private, as we need to instantiate them  "
+
+
+
+
+//private
+
     DEVICE void LatticePruner::init_buf_before_cp() {
       if (threadIdx.x!=0||blockIdx.x!=0) return;
       *arcs_apr_used_d=0;
@@ -665,10 +902,12 @@ template <int verbose>
     cur_tok->frame=params.frame;
   }
 
+namespace CudaLatticeDecoder_kernel {
   //putting this into a kernel to avoid extra latency of a memory copy
   __global__ void initializeCutoff(CostType *cutoff) {
     *cutoff = INFINITY;
   }
+}
   void CudaLatticeDecoder::ClearArcVector(LatLinkVector& lat_arcs_sub_vec_) {
     int i=0;
     lat_arcs_sub_vec_.clear();
@@ -707,7 +946,7 @@ template <int verbose>
 
     cudaCheckError();
 
-    initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
+    CudaLatticeDecoder_kernel::initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
     ProcessNonemitting();
     if (verbose>3) printf("CUDA LatticeDecoder End of InitDecoding\n");
   }

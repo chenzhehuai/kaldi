@@ -24,12 +24,16 @@
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include "util/stl-utils.h"
-#include "itf/decodable-itf.h"
 #include "omp.h"
 #include "cuda_runtime.h"
-
-namespace kaldi {
-
+#include <algorithm>
+#include <nvToolsExt.h>
+#include <cuda_runtime_api.h>
+#include <float.h>
+#include <math.h>
+#include <cooperative_groups.h>
+#include "math_constants.h"
+#include "omp.h"
 
 #ifdef __CUDACC__
   #define HOST __host__
@@ -87,36 +91,13 @@ const int num_colors = sizeof(colors)/sizeof(uint32_t);
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 
+
+
+namespace kaldi {
+
+
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 // No stream priorities
-
-
-inline DEVICE uint64_t pack (float cost, int ptr) {
-  //assert (!isnan(cost));
-  //assert (ptr >= 0 && ptr < 1L<<32);
-  uint32_t i_cost = *(uint32_t *)&cost;
-  if (i_cost & 0x80000000)
-    i_cost = i_cost ^ 0xFFFFFFFF;
-  else
-    i_cost = i_cost ^ 0x80000000;
-  return (uint64_t)i_cost << 32 | ptr;
-}
-
-// Unpacks a probability.
-inline DEVICE float unpack_cost (uint64_t packed) {
-  uint32_t i_cost = packed >> 32;
-  if (i_cost & 0x80000000)
-    i_cost = i_cost ^ 0x80000000;
-  else
-    i_cost = i_cost ^ 0xFFFFFFFF;
-  return *(float *)&i_cost;
-}
-
-// Unpacks a back-pointer.
-inline DEVICE int unpack_ptr (uint64_t packed) {
-  //assert (!(packed & 0x80000000));
-  return packed & 0x7FFFFFFF;
-}
 
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 DEVICE void __grid_sync_nv_internal(int *barrier);
