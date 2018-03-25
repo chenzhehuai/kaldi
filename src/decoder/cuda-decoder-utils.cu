@@ -16,7 +16,6 @@
 // limitations under the License.
 
 #include "fst/fstlib.h"
-#include "fstext/fstext-lib.h"
 #include "cuda-decoder-utils.h"
 
 namespace kaldi {
