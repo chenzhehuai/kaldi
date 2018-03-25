@@ -27,7 +27,44 @@ namespace kaldi {
   
 class CudaDecoder;
 
-template<typename T>
+
+
+struct CudaDecoderConfig {
+  BaseFloat beam;
+  double gpu_fraction;
+  uint32_t max_tokens_per_frame;
+  uint32_t max_tokens;
+  int verbose;
+  uint32_t max_lat_arc_per_frame;
+  
+  CudaDecoderConfig(): beam(16.0),
+                       gpu_fraction(1.0/8.0),
+                       max_tokens_per_frame(1<<17),
+                       max_tokens(60000000),
+                       verbose(0),
+                       max_lat_arc_per_frame(1<<18)
+                       {}
+  
+  void Register(OptionsItf *opts) {
+    opts->Register("verbose", &verbose, "debug log verbose.");
+    opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
+    opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this decoder.  "
+                                                  "A single decoding cannot saturate the device.  "
+                                                  "Use multiple decoders in parallel for the best performance.");
+    opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Maximum tokens used per frame.  If decoding exceeds this resutls are undefined.");
+    opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
+                                                        "  If actual usaged exceeds this the results are undefined.");
+    opts->Register("max-lat-arc-per-frame", &max_lat_arc_per_frame, "Total number of lat arc allocated.  ");
+  }
+  void Check() const {
+    KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 && max_tokens_per_frame > 0 && max_tokens>0);
+  }
+};
+
+
+class CudaDecoder {
+
+  template<typename T>
 class CudaVector {
     public:
      inline HOST DEVICE T& operator[](uint32_t idx); 
@@ -87,42 +124,6 @@ public:
   int* barrier_;
 };
  
-
-struct CudaDecoderConfig {
-  BaseFloat beam;
-  double gpu_fraction;
-  uint32_t max_tokens_per_frame;
-  uint32_t max_tokens;
-  int verbose;
-  uint32_t max_lat_arc_per_frame;
-  
-  CudaDecoderConfig(): beam(16.0),
-                       gpu_fraction(1.0/8.0),
-                       max_tokens_per_frame(1<<17),
-                       max_tokens(60000000),
-                       verbose(0),
-                       max_lat_arc_per_frame(1<<18)
-                       {}
-  
-  void Register(OptionsItf *opts) {
-    opts->Register("verbose", &verbose, "debug log verbose.");
-    opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
-    opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this decoder.  "
-                                                  "A single decoding cannot saturate the device.  "
-                                                  "Use multiple decoders in parallel for the best performance.");
-    opts->Register("max-tokens-per-frame", &max_tokens_per_frame, "Maximum tokens used per frame.  If decoding exceeds this resutls are undefined.");
-    opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
-                                                        "  If actual usaged exceeds this the results are undefined.");
-    opts->Register("max-lat-arc-per-frame", &max_lat_arc_per_frame, "Total number of lat arc allocated.  ");
-  }
-  void Check() const {
-    KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 && max_tokens_per_frame > 0 && max_tokens>0);
-  }
-};
-
-
-class CudaDecoder {
-
  public:
   typedef fst::StdArc StdArc;
   typedef StdArc::Weight StdWeight;

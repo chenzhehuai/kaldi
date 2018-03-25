@@ -29,6 +29,8 @@
 
 namespace kaldi {
 
+#define CudaVector  CudaDecoder::CudaVector
+#define CudaMergeVector CudaDecoder::CudaMergeVector
   typedef CudaDecoder::Token Token;
   typedef CudaDecoder::StateId StateId;
   typedef CudaDecoder::TokenState TokenState;
