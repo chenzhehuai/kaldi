@@ -20,138 +20,11 @@
 #ifndef KALDI_CUDA_DECODER_H_
 #define KALDI_CUDA_DECODER_H_
 
-#ifdef __CUDACC__
-  #define HOST __host__
-  #define DEVICE __device__
-
-#else
-  #define HOST
-  #define DEVICE
-#endif
-
-//#define __DEBUG__
-#ifdef __DEBUG__
-#define VERBOSE 5
-#define DEBUG(format,...) printf(format, ##__VA_ARGS__)
-#else
-#define VERBOSE 0
-#define DEBUG(format,...)
-#endif
-#include "util/stl-utils.h"
-#include "fst/fstlib.h"
-#include "lat/kaldi-lattice.h"
-#include "itf/decodable-itf.h"
-#include "omp.h"
-#include "cuda_runtime.h"
+#include "cuda-decoder-utils.h"
 
 namespace kaldi {
   
 class CudaDecoder;
-//typedef uint64_t uint64_t;
-inline DEVICE uint64_t pack (float cost, int ptr) {
-  //assert (!isnan(cost));
-  //assert (ptr >= 0 && ptr < 1L<<32);
-  uint32_t i_cost = *(uint32_t *)&cost;
-  if (i_cost & 0x80000000)
-    i_cost = i_cost ^ 0xFFFFFFFF;
-  else
-    i_cost = i_cost ^ 0x80000000;
-  return (uint64_t)i_cost << 32 | ptr;
-}
-
-// Unpacks a probability.
-inline DEVICE float unpack_cost (uint64_t packed) {
-  uint32_t i_cost = packed >> 32;
-  if (i_cost & 0x80000000)
-    i_cost = i_cost ^ 0x80000000;
-  else
-    i_cost = i_cost ^ 0xFFFFFFFF;
-  return *(float *)&i_cost;
-}
-
-// Unpacks a back-pointer.
-inline DEVICE int unpack_ptr (uint64_t packed) {
-  //assert (!(packed & 0x80000000));
-  return packed & 0x7FFFFFFF;
-}
-
-
-class CudaFst {
-  public:
-    typedef fst::StdArc StdArc;
-    typedef StdArc::Weight StdWeight;
-    typedef StdArc::Label Label;
-    typedef StdArc::StateId StateId;
-    
-    CudaFst() {};
-    void initialize(const fst::Fst<StdArc> &fst);
-    void finalize();
-
-    inline uint32_t NumStates() const {  return numStates; }
-    inline uint32_t NumArcs() const {  return numArcs; }
-    inline StateId Start() const { return start; }    
-    HOST DEVICE inline float Final(StateId state) const;
-    size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
-  private:
-    friend class CudaDecoder;
-  
-    unsigned int numStates;               //total number of states
-    unsigned int numArcs;               //total number of states
-    StateId  start;
-
-    unsigned int max_ilabel;              //the largest ilabel
-    unsigned int e_count, ne_count, arc_count;       //number of emitting and non-emitting states
-  
-    //This data structure is similar to a CSR matrix format 
-    //where I have 2 matrices (one emitting one non-emitting).
- 
-    //Offset arrays are numStates+1 in size. 
-    //Arc values for state i are stored in the range of [i,i+1)
-    //size numStates+1
-    unsigned int *e_offsets_h,*e_offsets_d;               //Emitting offset arrays 
-    unsigned int *ne_offsets_h, *ne_offsets_d;            //Non-emitting offset arrays
- 
-    //These are the values for each arc. Arcs belonging to state i are found in the range of [offsets[i], offsets[i+1]) 
-    //non-zeros (Size arc_count+1)
-    BaseFloat *arc_weights_h, *arc_weights_d;
-    StateId *arc_nextstates_h, *arc_nextstates_d;
-    int32 *arc_ilabels_h, *arc_ilabels_d;
-    int32 *arc_olabels_h;
-
-    //final costs
-    float *final_h, *final_d;
-    //allocation size
-    size_t bytes_cudaMalloc;
-};
-
-template<typename T>
-class CudaVector {
-    public:
-      HOST DEVICE inline T& operator[](uint32_t idx); 
-      HOST DEVICE inline const T& operator[](uint32_t idx) const; 
-      inline void allocate(uint32_t max_size);
-      inline void free();
-      HOST DEVICE inline uint32_t size() const; 
-      HOST DEVICE inline uint32_t push_back(const T &val); 
-      HOST DEVICE inline void clear(cudaStream_t stream=0); 
-      HOST DEVICE inline int get_idx_from_addr(T* addr); 
-      inline bool empty() const;
-      inline void swap(CudaVector<T> &v); 
-      inline void copy_all_to_host(cudaStream_t stream=0);
-      inline void copy_all_to_device(cudaStream_t stream=0);
-      inline void copy_size_to_host(cudaStream_t stream=0);
-      inline void copy_size_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_host(cudaStream_t stream=0, T* to_buf=NULL, bool copy_size=true);
-      inline void copy_data_to_device(cudaStream_t stream=0);
-      inline void copy_data_to_device(int size, T* mem_in_d, cudaStream_t stream=0);
-
-      inline size_t getCudaMallocBytes(); 
-      
-    public:
-      uint32_t *count_d, *count_h;
-      uint32_t max_size;
-      T* mem_d, *mem_h;
-};
 
 template<typename T>
 class CudaMergeVector : public CudaVector<T> {
@@ -445,7 +318,7 @@ class CudaDecoder {
   int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d, *ne_queue_d;
   int *barrier_d;  //barrier to allow grid syncs
  
-  int *cidx_d,*cidx2_d;
+  int *cidx_d,*cidx2_d; //for less NE proc
   int verbose;
   
   int max_arcs_per_frame_search_;
