@@ -35,7 +35,7 @@ namespace kaldi {
   typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem;
   typedef CudaLatticeDecoder::LatLink LatLink;
   typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
-  typedef CudaLatticeDecoder::TokenVector TokenVector;
+  //typedef CudaLatticeDecoder::TokenVector TokenVector;
   typedef CudaLatticeDecoder::TokenMergeVector TokenMergeVector;
   typedef CudaLatticeDecoder::processTokens_params processTokens_params;
   typedef CudaLatticeDecoder::LatticePruner LatticePruner;
@@ -737,7 +737,7 @@ template <int verbose>
      }
   }
 
-  DEVICE inline void allocateNewTokens_function(TokenLookupElem *current_tokens_lookup, TokenVector cur_toks, CudaLatticeDecoder::TokenAllocator allocator) {
+  DEVICE inline void allocateNewTokens_function(TokenLookupElem *current_tokens_lookup, TokenMergeVector cur_toks, CudaLatticeDecoder::TokenAllocator allocator) {
     int32 size = cur_toks.size();
     for(int i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
       Token *token = allocator.getToken(i);
@@ -902,8 +902,6 @@ template <int verbose>
     cudaMalloc(&cutoff_d, sizeof(CostType)); bytes_cudaMalloc+=sizeof(CostType);
     cudaMalloc(&modified_d, sizeof(int)*2); bytes_cudaMalloc+=sizeof(CostType)*2;
 
-    cudaMalloc(&token_locks_d,sizeof(int)*fst_.numStates);  bytes_cudaMalloc+=sizeof(int)*fst_.numStates;
-    cudaMemset((void*)token_locks_d,0,sizeof(int)*fst_.numStates);
 
     cudaMalloc((void**)&current_tokens_lookup_d,sizeof(TokenLookupElem)*fst_.numStates); bytes_cudaMalloc+=sizeof(TokenLookupElem)*fst_.numStates;
 
@@ -980,11 +978,9 @@ template <int verbose>
     cudaFree(fb_idx_d);
     cudaFree(barrier_d);
 
-    cudaFree((void*)token_locks_d);
     cudaFree(cutoff_d);
     cudaFree(modified_d);
 
-    cudaFree(clock_buf_d);
     cudaFree(token_per_arc_d);
     cudaFree(token_per_arc_update_d);
 
@@ -1002,7 +998,7 @@ template <int verbose>
   DEVICE inline Token* FindOrAddTokenArc(processTokens_params& params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
     TokenState* ts, uint32_t j, bool add_arc, TokenState** next_ts,
-    bool use_sub, uint64_t **token_pack, int* update) {
+   uint64_t **token_pack, int* update) {
     //TokenLookupElem lookup_elem;
     //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
@@ -1038,12 +1034,12 @@ template <int verbose>
     int j=0;
     if (threadIdx.x!=0 || blockIdx.x!=0) return;
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
-      0, NULL, -1, false,  &next_ts,
-     true, &token_pack, params.token_per_arc_update+j);
+      0, NULL, j, false,  &next_ts,
+      &token_pack, params.token_per_arc_update+j);
         uint64_t new_token_pack=pack(0, j);
     Token* cur_te=params.token_per_arc+j;
     params.token_per_arc_update[j]=1;
-    store16(cur_te, &(Token(0, NULL, j)));
+    store16(cur_te, &(Token(0, params.frame, NULL)));
     atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
     params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
   }
@@ -1097,7 +1093,7 @@ namespace CudaLatticeDecoder_kernel {
     if (verbose>3) printf("CUDA LatticeDecoder End of InitDecoding\n");
   }
 
-  void CudaLatticeDecoder::PreFinalizeDecoding(TokenVector** last_tokv,
+  void CudaLatticeDecoder::PreFinalizeDecoding(TokenMergeVector** last_tokv,
     Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size) { 
     cudaStreamSynchronize(stream_comp);//after fini comp. we can start copy 
     lattice_pruner_.copy_toks_to_host(num_frames_decoded_, stream_copy[1]);
@@ -1273,7 +1269,7 @@ namespace CudaLatticeDecoder_kernel {
           TokenState *next_ts=NULL;
           //get cur_tok&token_pack addr
           Token *cur_tok = FindOrAddTokenArc(params, nextstate, total_cost, 
-          acoustic_cost, &ts, true, 
+          acoustic_cost, &ts, j, true, 
           &next_ts, &token_pack, params.token_per_arc_update+j);
           //get cur_te&new_token_pack
           uint64_t new_token_pack=pack(-total_cost, j);
@@ -1291,7 +1287,7 @@ namespace CudaLatticeDecoder_kernel {
   }
   
     template<int blockDimx, int blockDimy>
-  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CudaDecoder::CostType cutoff, uint32_t size,  volatile int *modified, bool aggregate=false) {
+  DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int *modified, bool aggregate=false) {
 
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
@@ -1479,7 +1475,6 @@ namespace CudaLatticeDecoder_kernel {
     params.arc_weights=fst_.arc_weights_d;
     params.arc_nextstates=fst_.arc_nextstates_d;
     params.current_tokens_lookup=current_tokens_lookup_d;
-    params.token_locks=token_locks_d;
     params.modified=modified_d;
     params.beam=beam_;
     params.pe_idx=pe_idx_d;
@@ -1585,7 +1580,7 @@ namespace CudaLatticeDecoder_kernel {
     POP_RANGE
   }
 
-  void CudaLatticeDecoder::ClearToks(TokenVector &toks) {
+  void CudaLatticeDecoder::ClearToks(TokenMergeVector &toks) {
     //cannot acctually delete tokens as they may still be connected to active tokens
     toks.clear(stream_comp);
   }

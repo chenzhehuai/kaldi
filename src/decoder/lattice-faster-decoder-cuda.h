@@ -40,7 +40,7 @@ class LatticeFasterDecoderCuda {
   typedef Arc::StateId StateId;
   typedef Arc::Weight Weight;
   typedef CudaLatticeDecoder::Token cuToken;
-  typedef CudaLatticeDecoder::TokenVector cuTokenVector;
+  typedef CudaLatticeDecoder::TokenMergeVector cuTokenVector;
   typedef CudaLatticeDecoder::TokenState TokenState;
   typedef CudaLatticeDecoder::LatLink LatLink;
   // instantiate this class once for each thing you have to decode.

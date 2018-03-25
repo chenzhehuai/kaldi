@@ -202,7 +202,7 @@ struct __align__(16) TokenState {
     : token(token), state(state), cost_(cost) { }
 };
 
-typedef CudaVector<TokenState> TokenVector;
+//typedef CudaVector<TokenState> TokenVector;
 typedef CudaMergeVector<TokenState> TokenMergeVector;
 
 #define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx))
@@ -355,7 +355,6 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
     const __restrict__ StateId *arc_nextstates;
     const __restrict__ BaseFloat *loglikelihoods;
     TokenLookupElem *current_tokens_lookup;
-    volatile int *token_locks;
     BaseFloat beam;
     volatile int *modified;
     int *pe_idx;
@@ -409,7 +408,7 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
   void ClearArcVector(LatLinkVector& lat_arcs_sub_vec_);
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding(
-TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);
+TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);
   void CallLaunchPruneActiveTokens(cudaStream_t wait_st, 
     cudaStream_t st, float ratio);
 
@@ -458,7 +457,6 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
   int *modified_d;
 
   //TODO
-  volatile int *token_locks_d;
   void ClearToks(TokenMergeVector &toks);
 
   cudaEvent_t event_pt, event_pt_old, event_ll;
@@ -481,7 +479,7 @@ TokenVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, 
   LatLinkVector* lat_arcs_sub_vec_;
   LatLinkVector lat_arcs_sub_vec_buf_;
   
-  TokenVector toks_buf_[LAT_BUF_SIZE];
+  TokenMergeVector toks_buf_[LAT_BUF_SIZE];
   /*
   LatLinkVectorMerge* arc_copy_buf_;  //used to cur_vec.load() data from sub_vecs
   LatLink* arcs_buf_; //as GPU is so fast, we have to need this; assume cpuLatLink has same size as LatLink
