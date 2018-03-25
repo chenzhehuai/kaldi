@@ -118,14 +118,6 @@ inline DEVICE int unpack_ptr (uint64_t packed) {
   return packed & 0x7FFFFFFF;
 }
 
-DEVICE void load16(void *a, const void *b);
-DEVICE void store16(void *a, const void *b);
-DEVICE void store32(void *a, const void *b);
-
-DEVICE void atomicMin(double *address, double val);
-
-DEVICE void atomicMin(float *address, float val);
-
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 DEVICE void __grid_sync_nv_internal(int *barrier);
 

@@ -40,6 +40,52 @@ namespace kaldi {
   typedef CudaDecoder::TokenMergeVector TokenMergeVector;
   typedef CudaDecoder::processTokens_params processTokens_params;
 
+
+// for speedup purpose, make them inline (5% 0.165->0.158)
+inline  DEVICE void load16(void *a, const void *b) {
+    const ulong2 *src = reinterpret_cast<const ulong2*>(b);
+    ulong2 &dst = *reinterpret_cast<ulong2*>(a);
+    asm("ld.global.v2.u64 {%0,%1}, [%2];" : "=l"(dst.x), "=l"(dst.y) : "l"(src));
+  }
+  
+inline  DEVICE void store16(void *a, const void *b) {
+    const ulong2 src = *reinterpret_cast<const ulong2*>(b);
+    asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
+  }
+
+  
+inline  DEVICE void store32(void *a, const void *b) {
+    //const ulong4 src = *reinterpret_cast<const ulong4*>(b);
+    //asm("st.global.v4.u64 [%0], {%1,%2,%3,%4};" :: "l"(a), "l"(src.x), "l"(src.y),
+    //  "l"(src.z), "l"(src.w));
+    memcpy(a, b, 32);
+  }
+
+inline DEVICE void atomicMin(double *address, double val) {
+  unsigned long long *address_ull = (unsigned long long *)address;
+
+  double minval = *address;
+
+  while (val < minval) {  //if my value is less than minimum
+    minval = val;         //update the minimum to my value locally
+    val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
+  } //if the new value is < the minimum I wrote I need to try again.
+}
+inline DEVICE void atomicMin(float *address, float val) {
+  unsigned int *address_ui = (unsigned int  *)address;
+
+  float minval = *address;
+
+  while (val < minval) {  //if my value is less than minimum
+    minval = val;         //update the minimum to my value locally
+    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
+  } //if the new value is < the minimum I wrote I need to try again.
+}
+
+// end of "for speedup purpose, make them inline (5% 0.165->0.158)"
+
+
+//private, as we need to instantiate them  
 template<typename T> 
   inline DEVICE void swap(T &a, T &b) {
     T c = a;
@@ -220,6 +266,7 @@ template<typename T>
     }
   /**************************************End CudaVector Implementation**********************************/
 
+//end of "private, as we need to instantiate them  "
 
   template<typename T> 
     inline void CudaMergeVector<T>::swap(CudaMergeVector<T> &v) {
