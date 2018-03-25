@@ -15,15 +15,11 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include "fstext/remove-eps-local.h"
-
-#include "fstext/fstext-lib.h"
 #include "lat/determinize-lattice-pruned.h"
-#include "lat/lattice-functions.h"
 #include "lat/kaldi-lattice.h"
-#include "fst/fstlib.h"
 #include "itf/decodable-itf.h"
 
+#include "cuda-decoder-utils.h"
 //#include "lattice-faster-decoder-cuda.h"
 #include "decoder/cuda-lattice-decoder.h"
 

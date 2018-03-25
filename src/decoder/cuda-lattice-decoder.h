@@ -21,7 +21,6 @@
 #define KALDI_CUDA_LATTICE_DECODER_H_
 
 
-#include "cuda-decoder-utils.h"
 
 namespace kaldi {
 

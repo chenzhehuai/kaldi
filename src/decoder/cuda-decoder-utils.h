@@ -27,7 +27,6 @@
 #include "omp.h"
 #include "cuda_runtime.h"
 #include <algorithm>
-#include <nvToolsExt.h>
 #include <cuda_runtime_api.h>
 #include <float.h>
 #include <math.h>

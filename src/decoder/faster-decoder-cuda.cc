@@ -18,6 +18,8 @@
 // limitations under the License.
 
 #include "lat/lattice-functions.h"
+
+#include "cuda-decoder-utils.h"
 #include "decoder/faster-decoder-cuda.h"
 
 namespace kaldi {

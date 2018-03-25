@@ -16,8 +16,8 @@
 // limitations under the License.
 
 #include "lat/kaldi-lattice.h"
-#include "fst/fstlib.h"
 #include "itf/decodable-itf.h"
+#include "cuda-decoder-utils.h"
 #include "decoder/cuda-decoder.h"
 
 namespace kaldi {
