@@ -1329,7 +1329,7 @@ namespace CudaLatticeDecoder_kernel {
       TokenState& ts = params.cur_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
-      
+      assert(params.ne_offsets); 
       uint32_t start=params.ne_offsets[state], finish=params.ne_offsets[state+1];
       for(int j=start+group.thread_rank();j<finish;j+=blockDimx) {
         BaseFloat weight = params.arc_weights[j];
