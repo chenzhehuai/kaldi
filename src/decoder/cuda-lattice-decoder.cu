@@ -1325,7 +1325,7 @@ namespace CudaLatticeDecoder_kernel {
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
       if(aggregate&&i>=size) break;
-      if(aggregate==0&&i>=params.cur_toks.size()) break;
+      if(aggregate==0&&i>=size) break; //TODO: optimize this to reduce iteration
       
       TokenState& ts = params.cur_toks[i];
       Token * tok = ts.token;
