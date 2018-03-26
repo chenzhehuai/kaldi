@@ -846,7 +846,7 @@ template <int verbose>
   }
 
 
-  CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst, const CudaLatticeDecoderConfig &config): fst_(fst), bytes_cudaMalloc(0), bytes_cudaMallocManaged(0) {
+  CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst, const CudaLatticeDecoderConfig &config): config_(config), fst_(fst), bytes_cudaMalloc(0), bytes_cudaMallocManaged(0) {
     printf("CudaLatticeDecoder Constructor\n");
     int device;
     cudaGetDevice(&device);
