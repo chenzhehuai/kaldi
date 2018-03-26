@@ -1400,7 +1400,7 @@ namespace CudaLatticeDecoder_kernel {
         *params.ne_idx=0; //psize;
       }
       cnt++;
-      bool aggregate=is_init||cnt>1?1:0;
+      bool aggregate=(!is_init)&&cnt>1?1:0;
       //grid.sync();  
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 

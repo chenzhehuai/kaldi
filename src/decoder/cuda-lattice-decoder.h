@@ -168,7 +168,7 @@ class __align__(16) Token {
   StateId state_id;
   //BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
-  HOST DEVICE inline Token(BaseFloat cost, int frame, Token* prev) : cost_(cost), frame(frame), extra_cost(0) {
+  HOST DEVICE inline Token(BaseFloat cost, int iframe, Token* prev) : cost_(cost), frame(iframe), extra_cost(0) {
     assert(sizeof(Token)==16); 
     if(prev) {
       cost_ += prev->cost_;
