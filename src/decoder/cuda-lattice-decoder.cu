@@ -1289,6 +1289,7 @@ namespace CudaLatticeDecoder_kernel {
     template<int blockDimx, int blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int *modified, bool aggregate=false) {
 
+    assert(size);
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
     int& cidx=*params.cidx;
