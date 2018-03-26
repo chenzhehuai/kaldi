@@ -148,7 +148,6 @@ public:
   int *mem_update_d;
   uint64** mem_pack_buf_d;
   T* mem_buf_d;
-  int *mem_buf_count_d;
   int *mem_buf_acc_count_d;
   int* barrier_;
 };

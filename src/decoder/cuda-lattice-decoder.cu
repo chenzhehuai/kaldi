@@ -308,7 +308,6 @@ template<typename T>
   template<typename T> 
     inline void CudaMergeVector<T>::swap(CudaMergeVector<T> &v) {
       CudaVector<T>::swap(v);
-      std::swap(mem_buf_count_d,v.mem_buf_count_d);
       std::swap(mem_update_d,v.mem_update_d);
     }
 
@@ -326,16 +325,10 @@ DEVICE inline void CudaMergeVector<TokenState>::merge(void* token_per_arc, int* 
   int batch=blockDim.x*gridDim.x; 
   if (rank0) {
     int acc=0;
-    int i=0;
-    mem_buf_acc_count_d[i]=acc;
-    mem_buf_count_d[i]=count_d[0];
-    acc+=(mem_buf_count_d[i]);
-    if (clear) {
-      mem_buf_count_d[i]=0;
-      count_d[0]=0;
-    }
+    acc+=(count_d[0]);
+    if (clear) count_d[0]=0;
     assert(acc<=max_size);
-    *count_d=acc;
+    mem_buf_acc_count_d[0]=0;
     mem_buf_acc_count_d[1]=acc;
   }
   __grid_sync_nv_internal(barrier_);
@@ -361,7 +354,6 @@ template<typename T>
 DEVICE inline void CudaMergeVector<T>::clear_sub() {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   if (rank0) {
-    memset(mem_buf_count_d, 0, sizeof(int)*(2));
   }
 }
 
@@ -389,7 +381,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       cudaMalloc(&mem_pack_buf_d,sizeof(uint64_t*)*max_size);
       cudaMalloc(&mem_update_d,sizeof(int)*max_size);
       cudaMemset(mem_update_d,0,sizeof(int)*max_size);
-      cudaMalloc(&mem_buf_count_d,sizeof(int)*(2));
       cudaMalloc(&mem_buf_acc_count_d,sizeof(int)*(2));
       cudaMalloc(&barrier_,sizeof(int)*1);
     }
@@ -405,7 +396,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       CudaVector<T>::free();
       cudaFree(mem_pack_buf_d);
       cudaFree(mem_update_d);
-      cudaFree(mem_buf_count_d);
       cudaFree(mem_buf_acc_count_d);
       cudaFree(barrier_);
     }
