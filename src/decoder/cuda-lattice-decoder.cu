@@ -362,7 +362,6 @@ DEVICE inline void CudaMergeVector<T>::clear_sub() {
   int rank0=blockIdx.x==0&&threadIdx.x==0?1:0;
   if (rank0) {
     memset(mem_buf_count_d, 0, sizeof(int)*(2));
-    memset(count_d, 0, sizeof(int)*(1));
   }
 }
 
@@ -376,6 +375,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     DEVICE inline uint32_t CudaMergeVector<T>::push_back(const T &val, 
                                     uint64 *val_pack) { 
       uint32_t idx = atomicAdd(count_d,1);
+      assert(*count_d<max_size);
       mem_d[idx]=val; //TODO: speedup this
       mem_pack_buf_d[idx]=val_pack;  //TODO: speedup this
       //CudaVector<T>::push_back(val); //do this is only for speedup in PNE; dont need to
@@ -387,7 +387,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       CudaVector<T>::allocate(max_size);
 
       cudaMalloc(&mem_pack_buf_d,sizeof(uint64_t*)*max_size);
-      cudaMalloc(&mem_buf_d,sizeof(T)*max_size);
       cudaMalloc(&mem_update_d,sizeof(int)*max_size);
       cudaMemset(mem_update_d,0,sizeof(int)*max_size);
       cudaMalloc(&mem_buf_count_d,sizeof(int)*(2));
@@ -405,7 +404,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     inline void CudaMergeVector<T>::free() { 
       CudaVector<T>::free();
       cudaFree(mem_pack_buf_d);
-      cudaFree(mem_buf_d);
       cudaFree(mem_update_d);
       cudaFree(mem_buf_count_d);
       cudaFree(mem_buf_acc_count_d);
