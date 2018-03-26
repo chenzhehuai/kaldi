@@ -24,9 +24,6 @@
 
 namespace kaldi {
 
-// TODO:
-#define LAT_BUF_SIZE 2
-
 class CudaLatticeDecoder;
 
 struct CudaLatticeDecoderConfig {
@@ -360,10 +357,8 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
     int *pe_idx;
     int *ne_idx;
     int *ne_queue;
-    int *l_ne_idx;
     int *fb_idx;
-    int *cidx2;
-    int *cidx;
+    int *agg_idx;
     int *barrier;
 
     //debug
@@ -405,7 +400,6 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
   /// to call this.  You can call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance. 
   void InitDecoding(); 
-  void ClearArcVector(LatLinkVector& lat_arcs_sub_vec_);
   void initParams(processTokens_params& params);
   void PreFinalizeDecoding(
 TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);
@@ -432,21 +426,14 @@ TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_
   void ProcessTokens();
   void PostProcessTokens(); 
   void SetTokArcPointerByFrame(uint frame);
-
+  void ClearToks(TokenMergeVector &toks);
  
   //token lookup table.  Provides constant time lookup for active tokens.
   //One entry per state.  If entry is NULL token is not active.
   TokenLookupElem *current_tokens_lookup_d;
 
-  //Lists of active tokens to be iterated through
-  TokenMergeVector* cur_toks_;
-  TokenMergeVector* prev_toks_;  
-  Token* token_per_arc_d;
-  int *token_per_arc_update_d;
-
   const CudaFst fst_;
 
-  BaseFloat beam_;
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
 
@@ -456,38 +443,32 @@ TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_
   CostType *cutoff_d;
   int *modified_d;
 
-  //TODO
-  void ClearToks(TokenMergeVector &toks);
 
-  cudaEvent_t event_pt, event_pt_old, event_ll;
-  cudaStream_t stream_comp, stream_copy[LAT_BUF_SIZE+1], stream_ll;
-
-  uint32_t total_threads;
+  // GPU usage
+  uint32_t total_threads; // GPU utilization
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
-
-  //warp assignment indexes
-  int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d, *ne_queue_d;
   int *barrier_d;  //barrier to allow grid syncs
- 
-  int *cidx_d,*cidx2_d; //for less NE proc
-  int verbose;
-  int prune_interval_;
-  int max_arcs_;
-  float lattice_beam_;
-
-  //for recording lattice
-  LatLinkVector* lat_arcs_sub_vec_;
-  LatLinkVector lat_arcs_sub_vec_buf_;
-  
-  TokenMergeVector toks_buf_[LAT_BUF_SIZE];
-  /*
-  LatLinkVectorMerge* arc_copy_buf_;  //used to cur_vec.load() data from sub_vecs
-  LatLink* arcs_buf_; //as GPU is so fast, we have to need this; assume cpuLatLink has same size as LatLink
-  LatLink* arcs_ready2cpu_[LAT_BUF_SIZE]; //from arcs_buf_
-  int arcs_buf_used_;
-  */
- 
+  cudaEvent_t event_pt; // token passing
+  cudaEvent_t event_ll; // log likelihoods calculation
+  cudaStream_t stream_comp; //decoding
+  cudaStream_t stream_lat[kLatBufSize]; // lattice processing and copying
+  cudaStream_t stream_ll; // log likelihoods calculation
+  // 2-stage atomic token recombination
+  Token* token_per_arc_d; // token array whose length equal to size of WFST arcs
+  int *token_per_arc_update_d; // to check whether the token is updated at this frame
+  //dynamic load balancing
+  int *pe_idx_d, *ne_idx_d, *fb_idx_d; // warp assignment indexes
+  int *agg_idx_d, *ne_queue_d; // for aggregation of token idx
+  //token passing
+  TokenMergeVector* cur_toks_;
+  TokenMergeVector* prev_toks_;  
+  //lattice
+  TokenMergeVector lat_toks_bufs_[kLatBufSize];
+  LatLinkVector lat_arcs_buf_;
   LatticePruner lattice_pruner_;
+  const int kLatBufSize = 2;
+
+  CudaLatticeDecoderConfig config_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };
