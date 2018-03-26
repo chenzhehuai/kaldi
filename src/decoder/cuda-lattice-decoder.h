@@ -443,16 +443,10 @@ TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_
   CostType *cutoff_d;
   int *modified_d;
 
+  // configurations
+  CudaLatticeDecoderConfig config_;
+  #define kLatBufSize 2
 
-  // GPU usage
-  uint32_t total_threads; // GPU utilization
-  size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
-  int *barrier_d;  //barrier to allow grid syncs
-  cudaEvent_t event_pt; // token passing
-  cudaEvent_t event_ll; // log likelihoods calculation
-  cudaStream_t stream_comp; //decoding
-  cudaStream_t stream_lat[kLatBufSize]; // lattice processing and copying
-  cudaStream_t stream_ll; // log likelihoods calculation
   // 2-stage atomic token recombination
   Token* token_per_arc_d; // token array whose length equal to size of WFST arcs
   int *token_per_arc_update_d; // to check whether the token is updated at this frame
@@ -466,10 +460,16 @@ TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_
   TokenMergeVector lat_toks_bufs_[kLatBufSize];
   LatLinkVector lat_arcs_buf_;
   LatticePruner lattice_pruner_;
-  const int kLatBufSize = 2;
 
-  CudaLatticeDecoderConfig config_;
-
+  // GPU usage
+  uint32_t total_threads; // GPU utilization
+  size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
+  int *barrier_d;  //barrier to allow grid syncs
+  cudaEvent_t event_pt; // token passing
+  cudaEvent_t event_ll; // log likelihoods calculation
+  cudaStream_t stream_comp; //decoding
+  cudaStream_t stream_lat[kLatBufSize]; // lattice processing and copying
+  cudaStream_t stream_ll; // log likelihoods calculation
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };
 

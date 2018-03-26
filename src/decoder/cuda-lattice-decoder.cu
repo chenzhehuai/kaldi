@@ -1252,7 +1252,7 @@ namespace CudaLatticeDecoder_kernel {
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int *modified, bool aggregate=false) {
     assert(size);
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
-    int* agg_tok_idx=*params.agg_idx;
+    int* agg_tok_idx=params.agg_idx;
     int* cur_tok_idx=params.ne_idx;
     int tid=threadIdx.x+blockIdx.x*blockDim.x;
     if (aggregate) {
