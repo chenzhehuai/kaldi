@@ -43,7 +43,7 @@
   #define DEVICE
 #endif
 
-//#define __DEBUG__
+#define __DEBUG__
 #ifdef __DEBUG__
 #define VERBOSE 5
 #define GPU_PRINTF(format,...) printf(format, ##__VA_ARGS__)
