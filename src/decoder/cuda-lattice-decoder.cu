@@ -376,9 +376,9 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
                                     uint64 *val_pack) { 
       uint32_t idx = atomicAdd(count_d,1);
       assert(*count_d<max_size);
-      mem_d[idx]=val; //TODO: speedup this
-      mem_pack_buf_d[idx]=val_pack;  //TODO: speedup this
-      //CudaVector<T>::push_back(val); //do this is only for speedup in PNE; dont need to
+      assert(sizeof(val)==16);
+      store16(&mem_d[idx],&val); 
+      mem_pack_buf_d[idx]=val_pack;  
       return idx;
     }
 
