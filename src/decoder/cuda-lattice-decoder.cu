@@ -646,7 +646,6 @@ template <int verbose>
         }
         __grid_sync_nv_internal(barrier_);
       }
-
       
       /*{
         //update tok
