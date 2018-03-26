@@ -1255,6 +1255,8 @@ namespace CudaLatticeDecoder_kernel {
     int* agg_tok_idx=params.agg_idx;
     int* cur_tok_idx=params.ne_idx;
     int tid=threadIdx.x+blockIdx.x*blockDim.x;
+    if (threadIdx.x==0&&blockIdx.x==0) { *agg_tok_idx=*cur_tok_idx=0; }
+    __grid_sync_nv_internal(params.barrier);
     if (aggregate) {
       for (tid;tid<size;tid+=blockDim.x*gridDim.x) {
         if(params.cur_toks.update(tid)) {
@@ -1316,7 +1318,6 @@ namespace CudaLatticeDecoder_kernel {
     }
     __grid_sync_nv_internal(params.barrier);
     params.cur_toks.merge(params.token_per_arc,params.token_per_arc_update, params.numArcs, false);
-    if (threadIdx.x==0&&blockIdx.x==0) { *agg_tok_idx=*cur_tok_idx=0; }
   }
 
   __launch_bounds__(64,64)
@@ -1343,16 +1344,12 @@ namespace CudaLatticeDecoder_kernel {
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
       tok_E=params.cur_toks.size();
 
-      *params.ne_idx=0;
       int cnt=0;
       uint32_t size = 0;
       uint32_t psize=size;
     do {
       psize=size;
       size = params.cur_toks.size();
-      if (rank0) {
-        *params.ne_idx=0; //psize;
-      }
       cnt++;
       bool aggregate=(!is_init)&&cnt>1?1:0;
       //grid.sync();  
