@@ -439,6 +439,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
       sz=sizeof(int);
       cudaMalloc((void**)&barrier_,sz); bytes_cudaMalloc+=sz;
+      sz=sizeof(int)*2;
       cudaMalloc((void**)&modified_d,sz); bytes_cudaMalloc+=sz;
       sz=sizeof(int)*(2);
       cudaMalloc((void**)&count_vec_acc_d,sz); bytes_cudaMalloc+=sz;
@@ -554,6 +555,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       int prev_cidx;
       int c=0;
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
+      volatile int *modified0 = modified_d;
+      volatile int *modified1 = modified_d+1;
       if (rank0&&verbose>3) GPU_PRINTF("%i %i\n",c++, GetSize(toks_bpr_fr_sidx_d,frame-1));
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
@@ -563,19 +566,21 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           tok->extra_cost=FLT_MAX;
         }
         if (rank0) {//wait for last iteration(frame+1) finish
-          *modified_d=1;
+          *modified0 = 1;
+          *modified1 = 0;
           prev_cidx=*arcs_apr_used_d;
         }
         __grid_sync_nv_internal(barrier_);
+        if (rank0&&verbose>3) GPU_PRINTF("%i\n",c++);
       }
-
       //update arc //need some loop here
       int cnt=0;
-      while (cnt++<10&&*modified_d!=0){
+      while (cnt++<10&&*modified0!=0){
+        swap(modified0, modified1);
+        __grid_sync_nv_internal(barrier_); //wait for every thread to enter while
+        if (rank0) *modified1=0;
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
         int size=GetSize(arcs_bpr_fr_sidx_d,frame);
-        if (rank0) *modified_d=0;
-        __grid_sync_nv_internal(barrier_);
         for (;tid<size;tid+=gridDim.x*blockDim.x) {
           LatLink* link=GetActiveArcs(frame,tid);
           Token* next_tok=GetActiveToks(link->p1,true,frame);
@@ -592,11 +597,12 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
             }
             if (link_extra_cost < tok->extra_cost) {
               atomicMin(&tok->extra_cost,link_extra_cost);
-              if (*modified_d==0) atomicAdd(modified_d,1);
+              if (*modified0==0) atomicAdd((int *)modified0,1);
             }
           }
         }
         __grid_sync_nv_internal(barrier_);
+        if (rank0&&verbose>3) GPU_PRINTF("%i %i\n",c++, cnt);
         //if we do this always in 25 frames, we might dont need this
         //some flag to show whether it is changed   
       }
@@ -622,6 +628,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           }
         }
         __grid_sync_nv_internal(barrier_);
+        if (rank0&&verbose>3) GPU_PRINTF("%i\n",c++);
       }
       
       /*{
@@ -644,7 +651,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           //size_tok_of_frame[f-1]=cidx-prev_cidx
           //prev_cidx=cidx
       }
-      __grid_sync_nv_internal(barrier_);
+      //__grid_sync_nv_internal(barrier_);
+      if (rank0&&verbose>3) GPU_PRINTF("%i\n",c++);
     }
     //#define GET_ARC_BUF_HOST_BY_FRAME(frame) (arcs_apr_h+arcs_apr_h_used)
 
@@ -1019,7 +1027,7 @@ namespace CudaLatticeDecoder_kernel {
 }
  
   void CudaLatticeDecoder::InitDecoding() {
-    printf("CUDA LatticeDecoder InitDecoding\n");
+    if (config_.verbose > 1 ) printf("CUDA LatticeDecoder InitDecoding\n");
     num_frames_decoded_ = 0;
     for (int i=0; i<LAT_BUF_SIZE; i++) {
       ClearToks(lat_toks_bufs_[i]);
@@ -1053,7 +1061,7 @@ namespace CudaLatticeDecoder_kernel {
 
     CudaLatticeDecoder_kernel::initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
     ProcessNonemitting();
-    printf("end of CUDA LatticeDecoder InitDecoding\n");
+    if (config_.verbose > 1 ) printf("end of CUDA LatticeDecoder InitDecoding\n");
   }
 
   void CudaLatticeDecoder::FinalProcessLattice(
@@ -1062,7 +1070,7 @@ namespace CudaLatticeDecoder_kernel {
     cudaStreamSynchronize(stream_comp); // after fini comp. we can start copy 
     // copy unpruned toks to host
     lattice_pruner_.CopyToksToHost(num_frames_decoded_, stream_lat[0]);
-    PruneActiveTokens(stream_comp, stream_comp, 1); // GPU lattice pruning
+    PruneActiveTokens(stream_comp, stream_comp, config_.lat_fraction); // GPU lattice pruning
     // copy the TokenState vector in the last frame, used by ComputeFinalCosts()
     (lat_toks_bufs_[num_frames_decoded_%LAT_BUF_SIZE]).copy_data_to_host(stream_lat[1]);
     *toks_vec_last_fr=&(lat_toks_bufs_[num_frames_decoded_%LAT_BUF_SIZE]);

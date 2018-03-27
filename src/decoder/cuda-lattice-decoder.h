@@ -29,6 +29,7 @@ class CudaLatticeDecoder;
 struct CudaLatticeDecoderConfig {
   BaseFloat beam;
   double gpu_fraction;
+  double lat_fraction;
   uint32_t max_tokens_per_frame;
   uint32_t max_lat_tok_per_frame;
   uint32_t max_lat_arc_per_frame;
@@ -44,6 +45,7 @@ struct CudaLatticeDecoderConfig {
   
   CudaLatticeDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
+                       lat_fraction(1.0/8.0),
                        max_tokens_per_frame(200000),
                        max_lat_tok_per_frame(200000),
                        max_lat_arc_per_frame(600000),
@@ -59,6 +61,7 @@ struct CudaLatticeDecoderConfig {
     det_opts.Register(opts);
     opts->Register("cuda-verbose", &verbose, "debug log verbose.");
     opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
+    opts->Register("lat-fraction", &lat_fraction, "Percent of GPU to use for lattice processing, i.e. gpu_fraction*lat_fraction");
     opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this LatticeDecoder.  "
                                                   "A single decoding cannot saturate the device.  "
                                                   "Use multiple LatticeDecoders in parallel for the best performance.");
@@ -78,7 +81,8 @@ struct CudaLatticeDecoderConfig {
                    "best pdf-sequence for each word-sequence).");    
   }
   void Check() const {
-    KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 
+    KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 &&
+     lat_fraction>0 && lat_fraction <= 1 
       && max_tokens_per_frame > 0 && max_tokens>0 && lattice_beam > 0.0
                  && prune_interval > 0);
   }
