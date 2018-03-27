@@ -523,7 +523,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     }
     inline DEVICE Token* LatticePruner::GetActiveToks(void* p, bool check, int iframe) const {
       int frame, id;
-      DecodeFrIdxFromPair(frame, id, p);
+      DecodeFrIdxFromPair(frame, id, (uint64)p);
       if (check) assert(frame==iframe||frame==iframe-1);
       return GetActiveToks(frame,id,check);
     }
@@ -661,7 +661,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       cudaMemset(toks_bpr_fr_sidx_d,0,sizeof(int)*(prune_interval+1));
       cudaMemset(arcs_bpr_fr_sidx_d,0,sizeof(int)*(prune_interval+1));
     }
-    inline DEVICE void LatticePruner::DecodeFrIdxFromPair(int& frame, int& idx, uint64 v) {
+    inline DEVICE void LatticePruner::DecodeFrIdxFromPair(int& frame, int& idx, uint64 v) const {
       frame=(((uint64)v)>>32);
       idx=(((uint64)v)&(((uint64)1<<32)-1));
     }
@@ -695,9 +695,9 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
 
     void LatticePruner::GetHostData (Token** toks_buf, 
       int** toks_fr_sidx, LatLink** arcs_buf, int** arcs_fr_size) {
-      *toks_sidx=toks_bpr_fr_sidx_h;
+      *toks_fr_sidx=toks_bpr_fr_sidx_h;
       *toks_buf=toks_bpr_h;
-      *arcs_size=arcs_apr_fr_size_h;  //next prune_interval len
+      *arcs_fr_size=arcs_apr_fr_size_h;  //next prune_interval len
       *arcs_buf=arcs_apr_h; //start of next prune_interval len arcs
     }
 
@@ -1058,6 +1058,7 @@ namespace CudaLatticeDecoder_kernel {
 
     CudaLatticeDecoder_kernel::initializeCutoff<<<1,1,0,stream_comp>>>(cutoff_d);
     ProcessNonemitting();
+    printf("end of CUDA LatticeDecoder InitDecoding\n");
   }
 
   void CudaLatticeDecoder::FinalProcessLattice(
@@ -1328,7 +1329,7 @@ namespace CudaLatticeDecoder_kernel {
       __grid_sync_nv_internal(params.barrier);
     }
    
-    volatile int *modified0 = params.modified;    //modified flag for current iteration
+    volatile int *modified = params.modified;    //modified flag for current iteration
     CostType cutoff=*params.cutoff;
 
     if (!is_init) {
@@ -1345,17 +1346,18 @@ namespace CudaLatticeDecoder_kernel {
       uint32_t size = 0;
       uint32_t psize=size;
     do {
-      if (rank0) *modified0 = false;
       psize=size;
       size = params.cur_toks.size();
       cnt++;
       bool aggregate=(!is_init)&&cnt>1?1:0;
-      __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
+      __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified
+      if (rank0) *modified = false;
+      __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified
 
-      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0, aggregate);
+      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified, aggregate);
 
-      __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
-    } while ((*modified0)==true);
+      __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified
+    } while ((*modified)==true);
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
           GPU_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
@@ -1454,10 +1456,10 @@ namespace CudaLatticeDecoder_kernel {
     processTokens_params params;
     initParams(params);
     dim3 threads(64,1);
-    dim3 blocks(DIV_ROUND_UP(total_threads*ratio,(threads.x*threads.y)));
+    dim3 blocks(DIV_ROUND_UP(total_threads*gpu_ratio,(threads.x*threads.y)));
     cudaStreamSynchronize(wait_st);
     if (params.verbose>1) KALDI_LOG <<"PruneActiveTokens, # of blocks: "<<blocks.x<<std::endl;
-    cuda_decoder_lat_prune_active_tokens<<<blocks,threads,0,st>>>(params);
+    cuda_decoder_lat_prune_active_tokens<<<blocks,threads,0,run_st>>>(params);
     //lattice_pruner_.CopyArcsToHost(num_frames_decoded_, st);
   }
   void CudaLatticeDecoder::PreProcessTokens() {

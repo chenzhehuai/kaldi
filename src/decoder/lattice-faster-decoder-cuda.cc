@@ -240,8 +240,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   LatLink* arcs_buf;
   int* arcs_size;
   cuTokenVector* last_tokv;
-  decoder_.FinalProcessLattice(&last_tokv,
-    &toks_buf, &toks_sidx, &arcs_buf, &arcs_size);
+  decoder_.FinalProcessLattice(
+    &toks_buf, &toks_sidx, &arcs_buf, &arcs_size, &last_tokv);
   FinalProcessLattice(last_tokv, toks_buf, toks_sidx, arcs_buf, arcs_size, num_frames_decoded_);
   FinalizeDecoding();   //final lattice pruning
   // Returns true if we have any kind of traceback available (not necessarily

@@ -199,6 +199,11 @@ struct __align__(16) TokenState {
     : token(token), state(state), cost_(cost) { }
 };
 
+#define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx)) // TODO
+#define DECODE_TOK_ADDR(frame,idx,v) { \
+    frame=(((uint64)v)>>32); \
+    idx=(((uint64)v)&(((uint64)1<<32)-1)); \
+}
 //typedef CudaVector<TokenState> TokenVector;
 typedef CudaMergeVector<TokenState> TokenMergeVector;
 
@@ -260,6 +265,8 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
   //for lattice pruning
   class LatticePruner {
   public:  
+    inline DEVICE void PruneActiveTokens(int frame, float lattice_beam, int verbose);
+    
     void CopyArcsToHost(int frame, cudaStream_t st);
     void CopyToksToHost(int frame, cudaStream_t st);
     void GetHostData(Token** toks_buf, int** toks_fr_sidx, 
@@ -278,11 +285,10 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
 
   private:    
     // get frame & index in the per-frame vector of a tok address packed in uint64   
-    inline DEVICE void DecodeFrIdxFromPair(int& frame, int& idx, uint64 v);
+    inline DEVICE void DecodeFrIdxFromPair(int& frame, int& idx, uint64 v) const;
     // #define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx))
     inline DEVICE int AddArc(LatLink* arc);
     inline DEVICE void SetNextSidx(int* sidx_buf, int size, int frame);
-    inline DEVICE void PruneActiveTokens(int frame, float lattice_beam, int verbose);
     inline DEVICE Token* GetActiveToks(void* p, bool check=false, int frame=-1) const;
     inline DEVICE Token* GetActiveToks(int frame, int id, bool check=false) const;
     inline DEVICE LatLink* GetActiveArcs(int frame, int id) const;
