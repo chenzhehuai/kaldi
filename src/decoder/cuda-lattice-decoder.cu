@@ -554,8 +554,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
       int prev_cidx;
       int c=0;
       int rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
-      
-        __grid_sync_nv_internal(barrier_);
       if (rank0&&verbose>3) GPU_PRINTF("%i %i\n",c++, GetSize(toks_bpr_fr_sidx_d,frame-1));
       {
         int tid=threadIdx.x+blockIdx.x*blockDim.x;
@@ -568,10 +566,8 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           *modified_d=1;
           prev_cidx=*arcs_apr_used_d;
         }
-        if (rank0&&verbose>3) GPU_PRINTF("%i %p\n",c++,barrier_);
         __grid_sync_nv_internal(barrier_);
       }
-      if (rank0&&verbose>3) GPU_PRINTF("%i\n",c++);
 
       //update arc //need some loop here
       int cnt=0;
@@ -649,7 +645,6 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
           //prev_cidx=cidx
       }
       __grid_sync_nv_internal(barrier_);
-        if (rank0&&verbose>3) GPU_PRINTF("%i %p\n",c++,barrier_);
     }
     //#define GET_ARC_BUF_HOST_BY_FRAME(frame) (arcs_apr_h+arcs_apr_h_used)
 
@@ -1252,11 +1247,9 @@ namespace CudaLatticeDecoder_kernel {
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int *modified, bool aggregate=false) {
     assert(size);
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
-    int* agg_tok_idx=params.agg_idx;
-    int* cur_tok_idx=params.ne_idx;
+    int* agg_tok_idx=params.agg_idx; // need to make it 0 before enter this func
+    int* cur_tok_idx=params.ne_idx; // need to make it 0 before enter this func
     int tid=threadIdx.x+blockIdx.x*blockDim.x;
-    if (threadIdx.x==0&&blockIdx.x==0) { *agg_tok_idx=*cur_tok_idx=0; }
-    __grid_sync_nv_internal(params.barrier);
     if (aggregate) {
       for (tid;tid<size;tid+=blockDim.x*gridDim.x) {
         if(params.cur_toks.update(tid)) {
@@ -1344,12 +1337,14 @@ CostType cutoff=*params.cutoff;
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
       tok_E=params.cur_toks.size();
 
-      int cnt=0;
-      uint32_t size = 0;
-      uint32_t psize=size;
+    int cnt=0;
+    uint32_t size = 0;
     do {
-      psize=size;
       size = params.cur_toks.size();
+      if (rank0) {
+        *params.ne_idx = 0;  // need to make it 0 before enter processNonEmittingTokens_function
+        *params.agg_idx = 0;  // need to make it 0 before enter processNonEmittingTokens_function
+      }
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
       //swap buffers
@@ -1360,7 +1355,8 @@ CostType cutoff=*params.cutoff;
 
       processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0, aggregate);
 
-      __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
+      // we have sync in the end of processNonEmittingTokens_function
+      // __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
     } while ((*modified0)==true);
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
