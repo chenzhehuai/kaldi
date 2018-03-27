@@ -175,7 +175,7 @@ class LatticeFasterDecoderCuda {
   };
 
   typedef HashList<StateId, Token*>::Elem Elem;
-  void ProcessLattices(cuTokenVector* last_toks, cuToken* toks_buf, 
+  void FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf, 
   int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int proc_frame);
   inline Token* ActiveToksMap(void*) const;
   inline Token* ActiveToksMap(int frame, int i) const;

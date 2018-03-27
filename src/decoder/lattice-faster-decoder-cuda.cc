@@ -64,7 +64,7 @@ void LatticeFasterDecoderCuda::InitDecoding() {
   StateId start_state = fst_.Start();
   KALDI_ASSERT(start_state != fst::kNoStateId);
   num_frames_decoded_=0;
-  //change to init in ProcessLattices()
+  //change to init in FinalProcessLattice()
   //active_toks_.resize(1);
   //Token *start_tok = new Token(0.0, 0.0, NULL, NULL);
   //active_toks_[0].toks = start_tok;
@@ -117,11 +117,11 @@ POP_RANGE
   return num_arcs;
 }
 
-void LatticeFasterDecoderCuda::ProcessLattices(cuTokenVector* last_toks, cuToken* toks_buf, 
+void LatticeFasterDecoderCuda::FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf, 
   int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int proc_frame) {
   //add current
   if (proc_frame<0) return;
-PUSH_RANGE("ProcessLattices",3)
+PUSH_RANGE("FinalProcessLattice",3)
   assert(proc_frame<config_.prune_interval);
   active_toks_.resize(proc_frame + 1);
   assert(proc_frame<active_toks_.size());
@@ -195,36 +195,36 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   decoder_.InitDecoding(); //GPU init
   //GPU transfers lattice to CPU
   //TODO:modify parameters
-  //decoder_.PreProcessLattices(&pprev_toks_, &cur_num_toks, (void **)&pprev_arcs_, &cur_num_arcs, 0, &proc_lat_frame, num_frames_decoded_);
-  //decoder_.PostProcessLattices(0, num_frames_decoded_); //CPU is always faster than GPU, so wait for GPU here
+  //decoder_.PreFinalProcessLattice(&pprev_toks_, &cur_num_toks, (void **)&pprev_arcs_, &cur_num_arcs, 0, &proc_lat_frame, num_frames_decoded_);
+  //decoder_.PostFinalProcessLattice(0, num_frames_decoded_); //CPU is always faster than GPU, so wait for GPU here
   decoder_.ComputeLogLikelihoods(decodable); //get posteriors
   while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     bool last_frame=decodable->IsLastFrame(num_frames_decoded_ - 0); //do twice process tok in the last frame
     decoder_.PreProcessTokens(); //clear Token&Arc vector for decoding&lattice //we can hide this func in ComputeLogLikelihoods, however, it's too fast so we might dont need to do so
     decoder_.ProcessTokens(); //GPU decoding&lattice generation
-    //decoder_.PreProcessLattices(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
+    //decoder_.PreFinalProcessLattice(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
     //  &proc_lat_frame, num_frames_decoded_);  //GPU transfers lattice to CPU
     //recording lattice in GPU, do pruning
-    //ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
+    //FinalProcessLattice(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
 
     //CPU is always faster than GPU, so wait for GPU here
     decoder_.ComputeLogLikelihoods(decodable);
-    //decoder_.PostProcessLattices(last_frame, num_frames_decoded_);
+    //decoder_.PostFinalProcessLattice(last_frame, num_frames_decoded_);
     if (last_frame) {
       /*
       int copied_frame=num_frames_decoded_-1;  //has finished
       while (proc_lat_frame!=num_frames_decoded_) {
         copied_frame++;
-        decoder_.PreProcessLattices(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
+        decoder_.PreFinalProcessLattice(&pprev_toks_, (void**)&pprev_arcs_, &cur_num_arcs, last_frame, 
           &proc_lat_frame, copied_frame+1);
         
-        decoder_.PostProcessLattices(last_frame, copied_frame+1);
+        decoder_.PostFinalProcessLattice(last_frame, copied_frame+1);
       }
       assert(copied_frame==proc_lat_frame+1);
       */
 
       
-      //ProcessLattices(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
+      //FinalProcessLattice(*pprev_toks_, *pprev_arcs_, cur_num_arcs, proc_lat_frame);
     }
     //decoder_.PostProcessTokens();   //pre-allocate tokens to the map<state,token>
     if (last_frame) {
@@ -240,10 +240,9 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   LatLink* arcs_buf;
   int* arcs_size;
   cuTokenVector* last_tokv;
-  decoder_.PreFinalizeDecoding(&last_tokv,
+  decoder_.FinalProcessLattice(&last_tokv,
     &toks_buf, &toks_sidx, &arcs_buf, &arcs_size);
-  //TODO
-  ProcessLattices(last_tokv, toks_buf, toks_sidx, arcs_buf, arcs_size, num_frames_decoded_);
+  FinalProcessLattice(last_tokv, toks_buf, toks_sidx, arcs_buf, arcs_size, num_frames_decoded_);
   FinalizeDecoding();   //final lattice pruning
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).

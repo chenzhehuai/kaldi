@@ -93,9 +93,9 @@ class CudaVector {
     public:
      inline HOST DEVICE T& operator[](uint32_t idx); 
      inline HOST DEVICE const T& operator[](uint32_t idx) const; 
-     inline void allocate(uint32_t max_size, 
+     inline void Allocate(uint32_t max_size, 
         uint32_t* icount_h=NULL, uint32_t* icount_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
-     inline void free(bool create_outside=false);
+     inline void Free(bool create_outside=false);
      inline HOST DEVICE uint32_t size() const; 
       HOST DEVICE inline uint32_t push_back(const T &val); 
       HOST DEVICE inline void clear(cudaStream_t stream=0); 
@@ -135,9 +135,9 @@ public:
   DEVICE inline void merge(void* undefined, int* token_per_arc_update, int num_arcs,  bool clear=true);
   DEVICE inline int update(int i);
   DEVICE inline void clear_sub();
-  inline void allocate(uint32_t max_size);
+  inline void Allocate(uint32_t max_size);
   DEVICE inline uint32_t push_back(const T &val, uint64 *val_pack); 
-  inline void free();
+  inline void Free();
   inline size_t getCudaMallocBytes(); 
   inline void swap(CudaMergeVector<T> &v);
 
@@ -193,7 +193,7 @@ struct __align__(16) TokenState {
   
   Token* token; //arc and labels
   StateId state;  //to state
-  CostType cost_; //for CPU to copy lattice without prefetch allocator
+  CostType cost_; //for CPU to copy lattice without prefetch token_allocator_
   //int32_t lat_tok_idx;   //-1: havent init 
   HOST DEVICE inline TokenState (Token *token, StateId state, CostType cost)
     : token(token), state(state), cost_(cost) { }
@@ -202,11 +202,6 @@ struct __align__(16) TokenState {
 //typedef CudaVector<TokenState> TokenVector;
 typedef CudaMergeVector<TokenState> TokenMergeVector;
 
-#define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx))
-#define DECODE_TOK_ADDR(frame,idx,v) { \
-    frame=(((uint64)v)>>32); \
-    idx=(((uint64)v)&(((uint64)1<<32)-1)); \
-}
   class __align__(32) LatLink {  //300000*50*24=240MB __align__(16)
    public:
      //below value are totally the same to ForwardLink, which enable memcpy
@@ -231,11 +226,6 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
 
   typedef CudaVector<LatLink> LatLinkVector;
 
-  union __align__(16) TokenOrSize {
-    Token tok;
-    int size[4];
-  };
-
   //Preallocates tokens and allocates them in a circular buffer.
   //This allows threads to concurrently allocate/deallocate objects quickly in CUDA
   class TokenAllocator {
@@ -258,90 +248,99 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
 
       void reset();   //returns all memory to the allocator (essentially a garbage collection of oustanding memory.  
     private:
-
       uint32_t size;
       int32_t device;
       uint32_t *front_d, *front_h, *last_front_h, *last2_front_h;    //next free token index
 
-      Token *tokens_allocation;  //TODO we could have a list of these and dynamically add more.  Just going static for now.
+      Token *tokens_allocation; //TODO we could have a list of these and dynamically add more.  Just going static for now.
       size_t bytes_cudaMallocManaged;
-      uint32_t prefetch_size;         //amount of elements to prefetch beyond front
+      uint32_t prefetch_size; //amount of elements to prefetch beyond front
   };
 
-  //for pruning
+  //for lattice pruning
   class LatticePruner {
   public:  
-    #define DECODE_TOK_ADDR(frame,idx,v) { \
-    frame=(((uint64)v)>>32); \
-    idx=(((uint64)v)&(((uint64)1<<32)-1)); \
-    }
-    inline DEVICE void init_buf_before_cp();
-    inline DEVICE int merge_arc(LatLink* arc);
-    int allocate(int max_tokens_per_frame, int max_lat_arc_per_frame, 
+    void CopyArcsToHost(int frame, cudaStream_t st);
+    void CopyToksToHost(int frame, cudaStream_t st);
+    void GetHostData(Token** toks_buf, int** toks_fr_sidx, 
+                              LatLink** arcs_buf, int** arcs_fr_size);
+    
+    inline DEVICE void CollectToksPerFrame(TokenState* cur_toks, int size, int frame);
+    inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
+                                            uint32_t* count_vec_d, int frame);
+    
+    void Initialize();
+    int Allocate(int max_tokens_per_frame, int max_lat_arc_per_frame, 
       int prune_interval, int max_toks, int max_arcs);
-    void free();
-    inline DEVICE void set_next_sidx(int* sidx_buf, int size, int frame);
-    inline DEVICE void collect_tok_per_frame(TokenState* cur_toks, int size, int frame);
-    inline DEVICE void collect_arc_per_frame(LatLinkVector& cur_arc_array,
-        uint* count_vec_d, int frame);
-    template <int verbose>
-    inline DEVICE void PruneActiveTokens(int frame, float lattice_beam);
-    inline DEVICE Token* ActiveToksMap(void* p, bool check=false, int frame=-1) const;
-    inline DEVICE Token* ActiveToksMap(int frame, int id, bool check=false) const;
-    inline DEVICE LatLink* ActiveArcsMap(int frame, int id) const;
+    void Free();
+    // the GPU memory of lattice arcs is shared with LatLinkVector
+    LatLink* GetDeviceArcsBpr() { return arcs_bpr_d; } 
+
+  private:    
+    // get frame & index in the per-frame vector of a tok address packed in uint64   
+    inline DEVICE void DecodeFrIdxFromPair(int& frame, int& idx, uint64 v);
+    // #define ENCODE_TOK_ADDR(frame,idx) (((uint64)(frame)<<32)+(idx))
+    inline DEVICE int AddArc(LatLink* arc);
+    inline DEVICE void SetNextSidx(int* sidx_buf, int size, int frame);
+    inline DEVICE void PruneActiveTokens(int frame, float lattice_beam, int verbose);
+    inline DEVICE Token* GetActiveToks(void* p, bool check=false, int frame=-1) const;
+    inline DEVICE Token* GetActiveToks(int frame, int id, bool check=false) const;
+    inline DEVICE LatLink* GetActiveArcs(int frame, int id) const;
     inline DEVICE int GetSize(int* acc_len, int frame) const;
-    template <int verbose>
-    inline DEVICE void PruneForwardLinks_PruneTokensForFrame(int frame, 
-                  bool merge, float lattice_beam);
-    LatLink* GetArcBpr() { return arcs_bpr_d; }
-        
-    void init();
-    void copy_arcs_to_host(int frame, cudaStream_t st);
-    void copy_toks_to_host(int frame, cudaStream_t st);
-    void get_data_copied_to_host(Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);
+    inline DEVICE void PruneLatticeForFrame(int frame, 
+                  bool merge, float lattice_beam, int verbose);
 
   private:
-    //after pruning
-    //Arc
-    //it's in reverse seq, it includes a header to contain sizeof arc&tok per frame, of [frame-2*prune_interval, frame-1*prune_interval-1]
-    int* arcs_apr_size_d; //single buffer to contain all size, so that we can copy in a command
-    //int* arcs_buf_after_pr_size_arr_used_d;
-    int* arcs_apr_size_h; //only used to save size, currently
-    //it's in reverse seq; of [frame-2*prune_interval+1, frame-1*prune_interval]
+    // before pruning (bpr)
+    // aggregate Token data from per-frame TokenState in decoding
+    Token* toks_bpr_d; 
+    Token* toks_bpr_h;
+    // we keep start idx per-frame to fast index a token by (frame, idx) pair
+    // see GetActiveToks() & GetActiveArcs()
+    int* toks_bpr_fr_sidx_d; 
+    int* toks_bpr_fr_sidx_h;
+    // the GPU memory of lattice arcs is shared with LatLinkVector
+    // see CudaLatticeDecoder::CudaLatticeDecoder()
+    LatLink* arcs_bpr_d;
+    // we keep start idx per-frame to fast index a arc by (frame, idx) pair
+    int* arcs_bpr_fr_sidx_d; 
+    int* arcs_bpr_used_d; // used in CollectArcsPerFrame() to get the size per-frame
+
+    // after pruning (apr)
+    // save size but not start idx because: i) it's in reverse order; 
+    // of [frame-2*prune_interval+1, frame-1*prune_interval]
+    // ii) we organize arcs by frame in CPU, which needs arc size per frame
+    int* arcs_apr_fr_size_d; 
+    int* arcs_apr_fr_size_h; 
     LatLink* arcs_apr_d;
     LatLink* arcs_apr_h;
-    //for mergeArc
-    int* arcs_apr_used_d;
-    int* arcs_apr_used_h;
-    //TokenState
-    //TokenState* ts_exact_after_pr_h;
-    //int ts_exact_after_pr_h_used;
-    //int* ts_exact_after_pr_size_arr_h;
+    int* arcs_apr_used_d; // for atomic operations in mergeArc
+    int* arcs_apr_used_h; // for final copying arcs to CPU
 
-    //before
-    Token* toks_bpr_d;  
-    Token* toks_bpr_h;
-    int* toks_bpr_sidx_d;
-    int* toks_bpr_sidx_h;
-    LatLink* arcs_bpr_d;
-    int* arcs_bpr_sidx_d;
-    int* arcs_bpr_used_d;
-
+    // GPU global memory temp variables
     int *barrier_;
     int* count_vec_acc_d;
+    int* modified_d;
+
+    //configurations
     int prune_interval;
     int toks_buf_before_pr_size;
     int arcs_buf_before_pr_size;
-    int* modified_d;
-    int* merge_d;
   };
  
- 
   struct processTokens_params {
+    // data
     TokenMergeVector prev_toks;
     TokenMergeVector cur_toks;
-    TokenAllocator allocator;
+    TokenLookupElem *current_tokens_lookup;
     CostType *cutoff;
+    LatLinkVector lat_arcs_sub_vec;
+    Token* token_per_arc;
+    int* token_per_arc_update;
+
+    // tools
+    TokenAllocator token_allocator;
+    LatticePruner lattice_pruner;
 
     //never change
     const __restrict__ uint32_t *e_offsets;
@@ -351,8 +350,8 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
     const __restrict__ BaseFloat *arc_weights;
     const __restrict__ StateId *arc_nextstates;
     const __restrict__ BaseFloat *loglikelihoods;
-    TokenLookupElem *current_tokens_lookup;
-    BaseFloat beam;
+
+    // GPU global memory temp variables
     volatile int *modified;
     int *pe_idx;
     int *ne_idx;
@@ -361,103 +360,81 @@ typedef CudaMergeVector<TokenState> TokenMergeVector;
     int *agg_idx;
     int *barrier;
 
-    //debug
-    int verbose;
-
-    uint32_t frame;
-    int prune_interval;
-    LatLinkVector lat_arcs_sub_vec;
-
-    LatticePruner lattice_pruner;
+    // configurations
+    BaseFloat beam;
+    int verbose; //for debug 
     float lattice_beam;
-
-    Token* token_per_arc;
-    int* token_per_arc_update;
+    int prune_interval;
     int numArcs;
+    uint32_t frame;    
   };
 
-
+public:
   CudaLatticeDecoder(const CudaFst &fst, const CudaLatticeDecoderConfig &config);  
   ~CudaLatticeDecoder();
 
+  //pre-computes log likelihoods for the current frame
+  void ComputeLogLikelihoods(DecodableInterface *decodable);
+
+  //decoding functions
+  void initParams(processTokens_params& params);  // parameters for calling GPU
+  // You can call InitDecoding if you have already decoded an
+  // utterance and want to start with a new utterance. 
+  void InitDecoding(); 
+  void UpdateTokPointersByFrame(uint frame);
+  /// Returns the number of frames already decoded.  
+  int32 NumFramesDecoded() const { return num_frames_decoded_; }
+  void ClearToks(TokenMergeVector &toks); 
+  void PreProcessTokens();  //called before ProcessTokens()
+  // ProcessTokens decodes the frame num_frames_decoded_ of the
+  // decodable object, then increments num_frames_decoded_.
+  void ProcessTokens();
+  void ProcessNonemitting(); // only called at frame 0
+
+  //lattice processing functions
+  void FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx, 
+    LatLink** arcs_buf, int** arcs_fr_size,
+    TokenMergeVector** toks_vec_last_fr);
+  void PruneActiveTokens(cudaStream_t wait_st, cudaStream_t run_st, 
+      float gpu_ratio); // prune lattice in GPU
+
+  // other functions
+  bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
+  bool ReachedFinal() const;
   inline size_t getCudaMallocBytes() const { return bytes_cudaMalloc; } 
   inline size_t getCudaMallocManagedBytes() const { return bytes_cudaMallocManaged;  }
 
-  bool ReachedFinal() const;
-
-  // GetBestPath gets the decoding traceback. If "use_final_probs" is true
-  // AND we reached a final state, it limits itself to final states;
-  // otherwise it gets the most likely token not taking into account final-probs.
-  // fst_out will be empty (Start() == kNoStateId) if nothing was available due to
-  // search error.
-  // If Decode() returned true, it is safe to assume GetBestPath will return true.
-  // It returns true if the output lattice was nonempty (i.e. had states in it);
-  // using the return value is deprecated.
-  bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
-
-  /// InitDecoding initializes the decoding, and should only be used if you
-  /// intend to call AdvanceDecoding().  If you call Decode(), you don't need
-  /// to call this.  You can call InitDecoding if you have already decoded an
-  /// utterance and want to start with a new utterance. 
-  void InitDecoding(); 
-  void initParams(processTokens_params& params);
-  void PreFinalizeDecoding(
-TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_buf, int** arcs_size);
-  void CallLaunchPruneActiveTokens(cudaStream_t wait_st, 
-    cudaStream_t st, float ratio);
-
-  void PreProcessTokens();
-
-  /// Returns the number of frames already decoded.  
-  int32 NumFramesDecoded() const { return num_frames_decoded_; }
-
-
- 
-  TokenAllocator allocator;
-
-  //pre-computes log likelihoods for the current frame
-  void ComputeLogLikelihoods(DecodableInterface *decodable);
- 
-  // ProcessEmitting decodes the frame num_frames_decoded_ of the
-  // decodable object, then increments num_frames_decoded_.
-  //void ProcessEmitting(DecodableInterface *decodable);
-
-  void ProcessNonemitting();
-  void ProcessTokens();
-  void PostProcessTokens(); 
-  void SetTokArcPointerByFrame(uint frame);
-  void ClearToks(TokenMergeVector &toks);
- 
-  //token lookup table.  Provides constant time lookup for active tokens.
-  //One entry per state.  If entry is NULL token is not active.
-  TokenLookupElem *current_tokens_lookup_d;
-
-  const CudaFst fst_;
-
-  // Keep track of the number of frames decoded in the current file.
-  int32 num_frames_decoded_;
-
-  //data store for log likelihoods needed in the current frame.  Double buffering to avoid synchronization.
-  BaseFloat *loglikelihoods_h, *loglikelihoods_old_h, *loglikelihoods_d, *loglikelihoods_old_d;  
-
-  CostType *cutoff_d;
-  int *modified_d;
-
+private:
   // configurations
   CudaLatticeDecoderConfig config_;
-  #define kLatBufSize 2
+  #define LAT_BUF_SIZE 2
+  const CudaFst fst_;
 
-  // 2-stage atomic token recombination
-  Token* token_per_arc_d; // token array whose length equal to size of WFST arcs
-  int *token_per_arc_update_d; // to check whether the token is updated at this frame
   //dynamic load balancing
   int *pe_idx_d, *ne_idx_d, *fb_idx_d; // warp assignment indexes
   int *agg_idx_d, *ne_queue_d; // for aggregation of token idx
   //token passing
   TokenMergeVector* cur_toks_;
   TokenMergeVector* prev_toks_;  
+  CostType *cutoff_d;
+  int *modified_d; //used in processTokens_cg()
+  // Keep track of the number of frames decoded in the current file.
+  int32 num_frames_decoded_;
+  // 2-stage atomic token recombination
+  Token* token_per_arc_d; // token array whose length equal to size of WFST arcs
+  int *token_per_arc_update_d; // to check whether the token is updated at this frame  
+  //token lookup table.  Provides constant time lookup for active tokens.
+  //One entry per state. TokenLookupElem::active to denote whether it is active.
+  TokenLookupElem *current_tokens_lookup_d;
+  TokenAllocator token_allocator_; // allocate new tokens to current_tokens_lookup_d
+
+  //data store for log likelihoods needed in the current frame.  
+  //Double buffering to avoid synchronization.
+  BaseFloat *loglikelihoods_h, *loglikelihoods_old_h,
+            *loglikelihoods_d, *loglikelihoods_old_d;    
+
   //lattice
-  TokenMergeVector lat_toks_bufs_[kLatBufSize];
+  TokenMergeVector lat_toks_bufs_[LAT_BUF_SIZE];
   LatLinkVector lat_arcs_buf_;
   LatticePruner lattice_pruner_;
 
@@ -468,7 +445,7 @@ TokenMergeVector**last_tokv,  Token** toks_buf, int** toks_sidx, LatLink** arcs_
   cudaEvent_t event_pt; // token passing
   cudaEvent_t event_ll; // log likelihoods calculation
   cudaStream_t stream_comp; //decoding
-  cudaStream_t stream_lat[kLatBufSize]; // lattice processing and copying
+  cudaStream_t stream_lat[LAT_BUF_SIZE]; // lattice processing and copying
   cudaStream_t stream_ll; // log likelihoods calculation
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };
