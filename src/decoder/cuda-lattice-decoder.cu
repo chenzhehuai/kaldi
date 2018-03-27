@@ -881,7 +881,7 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     cudaCheckError();
 
     cudaMalloc(&cutoff_d, sizeof(CostType)); bytes_cudaMalloc+=sizeof(CostType);
-    cudaMalloc(&modified_d, sizeof(int)*1); bytes_cudaMalloc+=sizeof(int)*1;
+    cudaMalloc(&modified_d, sizeof(int)*2); bytes_cudaMalloc+=sizeof(int)*2;
 
 
     cudaMalloc((void**)&current_tokens_lookup_d,sizeof(TokenLookupElem)*fst_.numStates); bytes_cudaMalloc+=sizeof(TokenLookupElem)*fst_.numStates;
@@ -1329,8 +1329,10 @@ namespace CudaLatticeDecoder_kernel {
       __grid_sync_nv_internal(params.barrier);
     }
    
-    volatile int *modified = params.modified;    //modified flag for current iteration
-    CostType cutoff=*params.cutoff;
+    volatile int *modified0 = params.modified;    //modified flag for current iteration
+    volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
+    *modified1 = false;    
+CostType cutoff=*params.cutoff;
 
     if (!is_init) {
       processEmittingTokens_function<32,2>(params);
@@ -1348,16 +1350,18 @@ namespace CudaLatticeDecoder_kernel {
     do {
       psize=size;
       size = params.cur_toks.size();
+      __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
+
+      //swap buffers
+      swap(modified0,modified1); //double buffered to avoid extra sync when resetting modified to false, 3% speedup
+      *modified1 = false;
       cnt++;
       bool aggregate=(!is_init)&&cnt>1?1:0;
-      __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified
-      if (rank0) *modified = false;
-      __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified
 
-      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified, aggregate);
+      processNonEmittingTokens_function<32,2>(params,cutoff,size,modified0, aggregate);
 
-      __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified
-    } while ((*modified)==true);
+      __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
+    } while ((*modified0)==true);
 
     if (rank0&&params.verbose>1&&params.frame%itv==0) 
           GPU_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.size(), cutoff);
