@@ -99,6 +99,8 @@ class CudaLatticeDecoder {
   typedef StdArc::Label Label;
   typedef StdArc::StateId StateId;
   typedef BaseFloat CostType;
+  
+  class LatticePruner;
 
 
   // general cuda vector
@@ -127,7 +129,7 @@ class CudaLatticeDecoder {
                                bool copy_size=true);
     inline void CopyDataToDevice(cudaStream_t stream=0);
       
-   private:
+   protected:
     uint32_t *count_d, *count_h; // current T number in buf
     uint32_t max_size;  // buf size
     T* mem_d, *mem_h; // mem buf for T
@@ -143,6 +145,7 @@ class CudaLatticeDecoder {
     using CudaVector<T>::operator[];
     using CudaVector<T>::PushBack;
     using CudaVector<T>::Clear;
+    using CudaVector<T>::Size;
 
     inline void Allocate(uint32_t max_size);
     inline void Free();   
@@ -159,7 +162,6 @@ class CudaLatticeDecoder {
     DEVICE inline uint32_t PushBack(const T &val, uint64 *val_pack);  
   
    private:
-    using CudaVector<T>::size;
     using CudaVector<T>::count_d;
     using CudaVector<T>::mem_d;
     using CudaVector<T>::max_size;
@@ -196,25 +198,6 @@ class CudaLatticeDecoder {
     }
   };
 
-  // align to 16 bits so as to fast memcpy, see store16()
-  struct __align__(16) TokenState {
-   public:
-    Token* token; // record the corresponding Token data address
-    StateId state;  // record WFST state
-    CostType cost_; // for CPU to copy lattice without prefetch token_allocator_
-    
-    HOST DEVICE inline TokenState (Token *token, StateId state, CostType cost)
-      : token(token), state(state), cost_(cost) { }
-  };
-
-  //struct to hold pre-allocated tokens (one per WFST state) for fast lookup
-  struct  TokenLookupElem{
-    Token *token; // pointer to the Token
-    uint32_t active;  // the token has been passed to or not
-    uint64_t token_pack; // used in atomic operation based token recombination
-    volatile int32_t tokenstate_idx; // used to index the corresponding TokenState
-  };
-
   // we save all info in this structure, so as to collect all info together
   // in GPU memory and use memcpy to move to CPU memory
   class __align__(32) LatLink {  
@@ -236,6 +219,29 @@ class CudaLatticeDecoder {
         p2=(void*)ENCODE_TOK_IDX_PAIR(prev_tok_fr,prev_tok_id);
     }
   };
+
+  // align to 16 bits so as to fast memcpy, see store16()
+  struct __align__(16) TokenState {
+   public:
+    Token* token; // record the corresponding Token data address
+    StateId state;  // record WFST state
+    CostType cost_; // for CPU to copy lattice without prefetch token_allocator_
+    
+    HOST DEVICE inline TokenState (Token *token, StateId state, CostType cost)
+      : token(token), state(state), cost_(cost) { }
+  };
+
+  //struct to hold pre-allocated tokens (one per WFST state) for fast lookup
+  struct  TokenLookupElem{
+    Token *token; // pointer to the Token
+    uint32_t active;  // the token has been passed to or not
+    uint64_t token_pack; // used in atomic operation based token recombination
+    volatile int32_t tokenstate_idx; // used to index the corresponding TokenState
+  };
+  //typedef CudaVector<TokenState> TokenVector;
+  typedef CudaMergeVector<TokenState> TokenMergeVector;
+  typedef CudaVector<LatLink> LatLinkVector;
+
 
   // Preallocates tokens, allows threads to concurrently
   // allocate/deallocate objects quickly in GPU
@@ -282,7 +288,7 @@ class CudaLatticeDecoder {
     inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, 
                                            int32 frame);
     inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
-                                            uint32_t* count_vec_d, int32 frame);
+                                             int32 frame);
     
     void Initialize();
     int32 Allocate(int max_tokens_per_frame, int32 max_lat_arc_per_frame, 
@@ -381,9 +387,6 @@ class CudaLatticeDecoder {
     uint32_t frame;    
   };
 
-  //typedef CudaVector<TokenState> TokenVector;
-  typedef CudaMergeVector<TokenState> TokenMergeVector;
-  typedef CudaVector<LatLink> LatLinkVector;
 
  public:
   CudaLatticeDecoder(const CudaFst &fst, const CudaLatticeDecoderConfig &config);  

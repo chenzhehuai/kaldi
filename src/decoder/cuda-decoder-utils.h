@@ -126,12 +126,12 @@ class CudaFst {
     HOST DEVICE BaseFloat Final(StateId state) const;
     size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
   
-    unsigned int32 numStates;               //total number of states
-    unsigned int32 numArcs;               //total number of states
+    uint32 numStates;               //total number of states
+    uint32 numArcs;               //total number of states
     StateId  start;
 
-    unsigned int32 max_ilabel;              //the largest ilabel
-    unsigned int32 e_count, ne_count, arc_count;       //number of emitting and non-emitting states
+    uint32 max_ilabel;              //the largest ilabel
+    uint32 e_count, ne_count, arc_count;       //number of emitting and non-emitting states
   
     //This data structure is similar to a CSR matrix format 
     //where I have 2 matrices (one emitting one non-emitting).
@@ -139,8 +139,8 @@ class CudaFst {
     //Offset arrays are numStates+1 in size. 
     //Arc values for state i are stored in the range of [i,i+1)
     //size numStates+1
-    unsigned int32 *e_offsets_h,*e_offsets_d;               //Emitting offset arrays 
-    unsigned int32 *ne_offsets_h, *ne_offsets_d;            //Non-emitting offset arrays
+    uint32 *e_offsets_h,*e_offsets_d;               //Emitting offset arrays 
+    uint32 *ne_offsets_h, *ne_offsets_d;            //Non-emitting offset arrays
  
     //These are the values for each arc. Arcs belonging to state i are found in the range of [offsets[i], offsets[i+1]) 
     //non-zeros (Size arc_count+1)

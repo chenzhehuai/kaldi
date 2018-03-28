@@ -624,7 +624,7 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
   BaseFloat best_cost = infinity, best_cost_with_final = infinity;
 
   cuTokenVector& cur_toks=*this->pprev_toks_;
-  for (int i=0;i<cur_toks.size();i++) {
+  for (int i=0;i<cur_toks.Size();i++) {
     StateId state = cur_toks[i].state;
     Token* tok = ActiveToksMap(NumFramesDecoded(), i);
 

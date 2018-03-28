@@ -106,7 +106,7 @@ inline DEVICE void atomicMin(double *address, double val) {
   } //if the new value is < the minimum I wrote I need to try again.
 }
 inline DEVICE void atomicMin(float *address, BaseFloat val) {
-  unsigned int32 *address_ui = (unsigned int32  *)address;
+  uint32 *address_ui = (uint32  *)address;
 
   BaseFloat minval = *address;
 
@@ -166,7 +166,7 @@ template<typename T>
       cudaMalloc(&this->count_d, sizeof(uint32_t));
     }
     cudaMemset(this->count_d, 0,sizeof(uint32_t));
-    *count_h=0;
+    *this->count_h=0;
 
     if (mem_d) {
       this->mem_d=mem_d;        
@@ -734,7 +734,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
 #endif
   }
 
-  void CudaLatticeDecoder::TokenAllocator::PrefetchAllocatedToHost_force(cudaStream_t stream) {
+  void CudaLatticeDecoder::TokenAllocator::PrefetchAllocatedToHostForce(cudaStream_t stream) {
     if (!*front_h) return;
     cudaMemcpyAsync(tokens_allocation, tokens_allocation,sizeof(Token)* *front_h,cudaMemcpyDeviceToHost, stream);
   }
@@ -1344,7 +1344,6 @@ CostType cutoff=*params.cutoff;
       *params.fb_idx=0;  
       *params.pe_idx=0;
     }
-    params.cur_toks.clear_sub();
     __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
     
     if(rank0) {
