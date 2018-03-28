@@ -178,7 +178,7 @@ class LatticeFasterDecoderCuda {
   void FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf, 
   int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int32 proc_frame);
   inline Token* ActiveToksMap(void*) const;
-  inline Token* ActiveToksMap(int frame, int32 i) const;
+  inline Token* ActiveToksMap(int32 frame, int32 i) const;
   void FinalizeDecoding();
 
 
@@ -195,7 +195,7 @@ class LatticeFasterDecoderCuda {
                          bool *links_pruned,
                          BaseFloat delta);
   bool CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok, bool last);
-  int32 AddLatticeArcs(int proc_frame);
+  int32 AddLatticeArcs(int32 proc_frame);
 
 
   // This function computes the final-costs for tokens active on the final

@@ -102,7 +102,6 @@ class CudaLatticeDecoder {
   
   class LatticePruner;
 
-
   // general cuda vector
   template<typename T>
   class CudaVector {
@@ -157,7 +156,7 @@ class CudaLatticeDecoder {
     DEVICE inline void StoreDataFromPackIdx(void* temp_data_buf, 
                       int* temp_data_buf_update, int32 buf_size);
     // check whether data at index i is updated
-    DEVICE inline int32 IsUpdated(int i);
+    DEVICE inline int32 IsUpdated(int32 i);
     // push back data & data_pack to vectors respectively
     DEVICE inline uint32_t PushBack(const T &val, uint64 *val_pack);  
   
@@ -203,14 +202,14 @@ class CudaLatticeDecoder {
   class __align__(32) LatLink {  
    public:
      //below variables are with the same size as ForwardLink, so as to enable memcpy
-    void *p1; // pack of (int next_tok_id, int32 next_tok_fr;)
+    void *p1; // pack of (int32 next_tok_id, int32 next_tok_fr;)
     int32 ilabel; // ilabel on link.
     int32 olabel; // olabel on link.
     BaseFloat graph_cost; // graph cost of traversing link (contains LM, etc.)
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
-    void *p2; // pack of (int prev_tok_id, int32 prev_tok_fr;)
+    void *p2; // pack of (int32 prev_tok_id, int32 prev_tok_fr;)
 
-    HOST DEVICE inline LatLink(int prev_tok_id, int32 prev_tok_fr,     
+    HOST DEVICE inline LatLink(int32 prev_tok_id, int32 prev_tok_fr,     
                                int32 next_tok_id, int32 next_tok_fr, 
         int32 ilabel, int32 olabel, BaseFloat graph_cost, BaseFloat acoustic_cost): 
         ilabel(ilabel), olabel(olabel), graph_cost(graph_cost), 
@@ -278,10 +277,10 @@ class CudaLatticeDecoder {
   //for lattice pruning
   class LatticePruner {
    public:  
-    inline DEVICE void PruneActiveTokens(int frame, BaseFloat lattice_beam, int32 verbose);
+    inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);
     
-    void CopyArcsToHost(int frame, cudaStream_t st);
-    void CopyToksToHost(int frame, cudaStream_t st);
+    void CopyArcsToHost(int32 frame, cudaStream_t st);
+    void CopyToksToHost(int32 frame, cudaStream_t st);
     void GetHostData(Token** toks_buf, int** toks_fr_sidx, 
                               LatLink** arcs_buf, int** arcs_fr_size);
     
@@ -291,7 +290,7 @@ class CudaLatticeDecoder {
                                              int32 frame);
     
     void Initialize();
-    int32 Allocate(int max_tokens_per_frame, int32 max_lat_arc_per_frame, 
+    int32 Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
       int32 prune_interval, int32 max_toks, int32 max_arcs);
     void Free();
     // the GPU memory of lattice arcs is shared with LatLinkVector
@@ -302,10 +301,10 @@ class CudaLatticeDecoder {
     inline DEVICE int32 AddArc(LatLink* arc);
     inline DEVICE void SetNextSidx(int* sidx_buf, int32 size, int32 frame);
     inline DEVICE Token* GetActiveToks(void* p, bool check=false, int32 frame=-1) const;
-    inline DEVICE Token* GetActiveToks(int frame, int32 id, bool check=false) const;
-    inline DEVICE LatLink* GetActiveArcs(int frame, int32 id) const;
+    inline DEVICE Token* GetActiveToks(int32 frame, int32 id, bool check=false) const;
+    inline DEVICE LatLink* GetActiveArcs(int32 frame, int32 id) const;
     inline DEVICE int32 GetSize(int* acc_len, int32 frame) const;
-    inline DEVICE void PruneLatticeForFrame(int frame, 
+    inline DEVICE void PruneLatticeForFrame(int32 frame, 
                   bool merge, BaseFloat lattice_beam, int32 verbose);
 
    private:
@@ -400,7 +399,7 @@ class CudaLatticeDecoder {
   // You can call InitDecoding if you have already decoded an
   // utterance and want to start with a new utterance. 
   void InitDecoding(); 
-  void UpdateTokPointersByFrame(uint frame);
+  void UpdateTokPointersByFrame(uint32 frame);
   /// Returns the number of frames already decoded.  
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
   void ClearToks(TokenMergeVector &toks); 

@@ -26,32 +26,31 @@
 
 namespace kaldi {
 
-#define CudaVector  CudaLatticeDecoder::CudaVector
-#define CudaMergeVector CudaLatticeDecoder::CudaMergeVector
-  typedef CudaLatticeDecoder::Token Token;
-  typedef CudaLatticeDecoder::StateId StateId;
-  typedef CudaLatticeDecoder::TokenState TokenState;
-  typedef CudaLatticeDecoder::CostType CostType;
-  typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem;
-  typedef CudaLatticeDecoder::LatLink LatLink;
-  typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
-  //typedef CudaLatticeDecoder::TokenVector TokenVector;
-  typedef CudaLatticeDecoder::TokenMergeVector TokenMergeVector;
-  typedef CudaLatticeDecoder::processTokens_params processTokens_params;
-  typedef CudaLatticeDecoder::LatticePruner LatticePruner;
-  //template class CudaVector<LatToken>; 
-  //template class CudaVector<LatLink>; 
-  //http://en.cppreference.com/w/cpp/language/class_template
-  template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
-  template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
-  template HOST DEVICE uint32_t  CudaVector<TokenState>::Size() const; 
-  template HOST DEVICE uint32_t  CudaVector<LatLink>::Size() const; 
+typedef CudaLatticeDecoder::Token Token;
+typedef CudaLatticeDecoder::StateId StateId;
+typedef CudaLatticeDecoder::TokenState TokenState;
+typedef CudaLatticeDecoder::CostType CostType;
+typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem;
+typedef CudaLatticeDecoder::LatLink LatLink;
+typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
+typedef CudaLatticeDecoder::TokenMergeVector TokenMergeVector;
+typedef CudaLatticeDecoder::processTokens_params processTokens_params;
+typedef CudaLatticeDecoder::LatticePruner LatticePruner;
+typedef CudaLatticeDecoder::CudaVector CudaVector;
+typedef CudaLatticeDecoder::CudaMergeVector CudaMergeVector;
 
+// instantiation of templates
+template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
+template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx); 
+template HOST DEVICE uint32_t  CudaVector<TokenState>::Size() const; 
+template HOST DEVICE uint32_t  CudaVector<LatLink>::Size() const; 
+
+// inline static functions
 // for speedup purpose, make them inline (5% 0.165->0.158)
-inline DEVICE uint64_t pack (float cost, int32 ptr) {
+inline DEVICE uint64_t PackCostIdxIntoPair(BaseFloat cost, int32 ptr) {
   //assert (!isnan(cost));
   //assert (ptr >= 0 && ptr < 1L<<32);
-  uint32_t i_cost = *(uint32_t *)&cost;
+  uint32_t i_cost = *(uint32_t *) & cost;
   if (i_cost & 0x80000000)
     i_cost = i_cost ^ 0xFFFFFFFF;
   else
@@ -59,18 +58,18 @@ inline DEVICE uint64_t pack (float cost, int32 ptr) {
   return (uint64_t)i_cost << 32 | ptr;
 }
 
-// Unpacks a probability.
-inline DEVICE BaseFloat unpack_cost (uint64_t packed) {
+// Unpacks a cost
+inline DEVICE BaseFloat UnpackCostFromPair(uint64_t packed) {
   uint32_t i_cost = packed >> 32;
   if (i_cost & 0x80000000)
     i_cost = i_cost ^ 0x80000000;
   else
     i_cost = i_cost ^ 0xFFFFFFFF;
-  return *(float *)&i_cost;
+  return *(BaseFloat *) & i_cost;
 }
 
-// Unpacks a back-pointer.
-inline DEVICE int32 unpack_ptr (uint64_t packed) {
+// Unpacks a idx for tracing the data
+inline DEVICE int32 UnpackIdxFromPair(uint64_t packed) {
   //assert (!(packed & 0x80000000));
   return packed & 0x7FFFFFFF;
 }
@@ -105,14 +104,14 @@ inline DEVICE void atomicMin(double *address, double val) {
     val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
   } //if the new value is < the minimum I wrote I need to try again.
 }
-inline DEVICE void atomicMin(float *address, BaseFloat val) {
+inline DEVICE void atomicMin(BaseFloat *address, BaseFloat val) {
   uint32 *address_ui = (uint32  *)address;
 
   BaseFloat minval = *address;
 
   while (val < minval) {  //if my value is less than minimum
     minval = val;         //update the minimum to my value locally
-    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
+    val = __uint_as_BaseFloat(atomicExch(address_ui, __BaseFloat_as_uint(val))); //write minimum and read back value
   } //if the new value is < the minimum I wrote I need to try again.
 }
 
@@ -306,7 +305,7 @@ template<typename T>
 
 
 template<typename T> 
-  DEVICE inline int32 CudaMergeVector<T>::IsUpdated(int i) {
+  DEVICE inline int32 CudaMergeVector<T>::IsUpdated(int32 i) {
     if (i>=*count_d) return 0;
     return mem_update_d[i];
   }
@@ -319,7 +318,7 @@ DEVICE inline void CudaMergeVector<TokenState>::StoreDataFromPackIdx(
   int32 size = *count_d; // count_d is cleared in Clear() called by InitDecoding()
   for(; tid < size; tid += batch) {
     uint64_t* pack_v=mem_pack_buf_d[tid];
-    int32 ptr=unpack_ptr(*pack_v);
+    int32 ptr=UnpackIdxFromPair(*pack_v);
     assert(ptr<buf_size);
     mem_update_d[(tid+0)]=temp_data_buf_update[ptr];
     if (temp_data_buf_update[ptr]) temp_data_buf_update[ptr]=0;
@@ -354,15 +353,15 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       CudaVector<T>::Allocate(max_size);
 
       cudaMalloc(&mem_pack_buf_d,sizeof(uint64_t*)*max_size);
-      cudaMalloc(&mem_update_d,sizeof(int)*max_size);
-      cudaMemset(mem_update_d,0,sizeof(int)*max_size);
-      cudaMalloc(&barrier_,sizeof(int)*1);
+      cudaMalloc(&mem_update_d,sizeof(int32)*max_size);
+      cudaMemset(mem_update_d,0,sizeof(int32)*max_size);
+      cudaMalloc(&barrier_,sizeof(int32)*1);
     }
 
   template<typename T>
     inline size_t CudaMergeVector<T>::GetCudaMallocBytes() {
       return CudaVector<T>::GetCudaMallocBytes()+
-        sizeof(uint32_t)*(1+2*(2))+max_size*(sizeof(T)+sizeof(uint64_t*)+sizeof(int));
+        sizeof(uint32_t)*(1+2*(2))+max_size*(sizeof(T)+sizeof(uint64_t*)+sizeof(int32));
     }
 
   template<typename T>
@@ -377,21 +376,21 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       store32(arcs_apr_d+i, arc);
     }
     #define PRUNE_RATIO_ASSUME 0.25
-    int32 LatticePruner::Allocate(int max_tokens_per_frame, int32 max_lat_arc_per_frame, 
+    int32 LatticePruner::Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
       int32 prune_interval, int32 max_toks, int32 max_arcs) {
       int32 sz;
       int32 bytes_cuda_malloc=0;
       
       //after
-      sz=sizeof(int)*(prune_interval+1);
+      sz=sizeof(int32)*(prune_interval+1);
       cudaMalloc((void**)&arcs_apr_fr_size_d,sz); bytes_cuda_malloc+=sz;
       cudaMallocHost((void**)&arcs_apr_fr_size_h,sz);
       sz=PRUNE_RATIO_ASSUME*sizeof(LatLink)*max_arcs;
       cudaMalloc((void**)&arcs_apr_d,sz); bytes_cuda_malloc+=sz;
       cudaMallocHost((void**)&arcs_apr_h,sz); 
-      /*sz=sizeof(int);
+      /*sz=sizeof(int32);
       cudaMalloc((void**)&arcs_buf_after_pr_size_arr_used_d,sz); bytes_cuda_malloc+=sz;*/
-      sz=sizeof(int);
+      sz=sizeof(int32);
       cudaMalloc((void**)&arcs_apr_used_d,sz); bytes_cuda_malloc+=sz;
       cudaMalloc((void**)&arcs_bpr_used_d,sz); bytes_cuda_malloc+=sz;
       cudaMallocHost((void**)&arcs_apr_used_h,sz); 
@@ -404,17 +403,17 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       sz=sizeof(LatLink)*max_arcs;
       cudaMalloc((void**)&arcs_bpr_d,sz); bytes_cuda_malloc+=sz;
       arcs_buf_before_pr_size=sz/sizeof(LatLink);
-      sz=sizeof(int)*(prune_interval+1);
+      sz=sizeof(int32)*(prune_interval+1);
       cudaMalloc((void**)&toks_bpr_fr_sidx_d,sz); bytes_cuda_malloc+=sz;
       cudaMallocHost((void**)&toks_bpr_fr_sidx_h,sz); 
-      sz=sizeof(int)*(prune_interval+1);
+      sz=sizeof(int32)*(prune_interval+1);
       cudaMalloc((void**)&arcs_bpr_fr_sidx_d,sz); bytes_cuda_malloc+=sz;
 
-      sz=sizeof(int);
+      sz=sizeof(int32);
       cudaMalloc((void**)&barrier_,sz); bytes_cuda_malloc+=sz;
-      sz=sizeof(int)*2;
+      sz=sizeof(int32)*2;
       cudaMalloc((void**)&modified_d,sz); bytes_cuda_malloc+=sz;
-      sz=sizeof(int)*(2);
+      sz=sizeof(int32)*(2);
       cudaMalloc((void**)&count_vec_acc_d,sz); bytes_cuda_malloc+=sz;
       this->prune_interval=prune_interval;
       
@@ -486,12 +485,12 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       }
       */
     }
-    inline DEVICE void LatticePruner::PruneActiveTokens(int frame, BaseFloat lattice_beam, int32 verbose) {
+    inline DEVICE void LatticePruner::PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose) {
       int32 rank0=threadIdx.x==0&&blockIdx.x==0?1:0;
       if (frame==0) return;
       if (rank0) *arcs_apr_used_d=0;
       __grid_sync_nv_internal(barrier_);
-      for (int f = frame; f > 0; f--) {
+      for (int32 f = frame; f > 0; f--) {
           PruneLatticeForFrame(f,1,lattice_beam, verbose);
       }
       //see CopyDataToHost
@@ -504,7 +503,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       if (check) assert(frame==iframe||frame==iframe-1);
       return GetActiveToks(frame,id,check);
     }
-    inline DEVICE Token* LatticePruner::GetActiveToks(int frame, int32 id, bool check) const {
+    inline DEVICE Token* LatticePruner::GetActiveToks(int32 frame, int32 id, bool check) const {
       
       int32 cur_sidx=toks_bpr_fr_sidx_d[frame];
       assert(cur_sidx+id<toks_buf_before_pr_size);
@@ -514,7 +513,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       }
       return tok;
     }
-    inline DEVICE LatLink* LatticePruner::GetActiveArcs(int frame, int32 id) const {
+    inline DEVICE LatLink* LatticePruner::GetActiveArcs(int32 frame, int32 id) const {
       int32 cur_sidx=arcs_bpr_fr_sidx_d[(frame)];
       assert(cur_sidx+id<arcs_buf_before_pr_size);
       LatLink* arc=arcs_bpr_d+cur_sidx+id;
@@ -525,7 +524,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       assert(size>=0&&size<=arcs_buf_before_pr_size);
       return size;
     }
-    inline DEVICE void LatticePruner::PruneLatticeForFrame(int frame, 
+    inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame, 
                                   bool merge, BaseFloat lattice_beam, int32 verbose) {
       //init
       int32 prev_cidx;
@@ -573,7 +572,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
             }
             if (link_extra_cost < tok->extra_cost) {
               atomicMin(&tok->extra_cost,link_extra_cost);
-              if (*modified0==0) atomicAdd((int *)modified0,1);
+              if (*modified0==0) atomicAdd((int32 *)modified0,1);
             }
           }
         }
@@ -633,17 +632,17 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
 
     void LatticePruner::Initialize() {
       //arcs_apr_h_used=0;
-      cudaMemset(arcs_apr_fr_size_d,0,sizeof(int)*(prune_interval+1));
-      cudaMemset(arcs_apr_used_d,0,sizeof(int));
-      cudaMemset(arcs_bpr_used_d,0,sizeof(int));      
-      cudaMemset(toks_bpr_fr_sidx_d,0,sizeof(int)*(prune_interval+1));
-      cudaMemset(arcs_bpr_fr_sidx_d,0,sizeof(int)*(prune_interval+1));
+      cudaMemset(arcs_apr_fr_size_d,0,sizeof(int32)*(prune_interval+1));
+      cudaMemset(arcs_apr_used_d,0,sizeof(int32));
+      cudaMemset(arcs_bpr_used_d,0,sizeof(int32));      
+      cudaMemset(toks_bpr_fr_sidx_d,0,sizeof(int32)*(prune_interval+1));
+      cudaMemset(arcs_bpr_fr_sidx_d,0,sizeof(int32)*(prune_interval+1));
     }
-    void LatticePruner::CopyArcsToHost(int frame, cudaStream_t st) {
+    void LatticePruner::CopyArcsToHost(int32 frame, cudaStream_t st) {
       int32 sz;
       //TODO: optimize out this
       cudaMemcpy(arcs_apr_used_h,arcs_apr_used_d,
-        sizeof(int), cudaMemcpyDeviceToHost);
+        sizeof(int32), cudaMemcpyDeviceToHost);
       //
       sz=sizeof(LatLink)*(*arcs_apr_used_h);
       //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*0.5); //assume 0.5 parts are pruned
@@ -651,14 +650,14 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
         sz, cudaMemcpyDeviceToHost, st);
       //we can call it because currently *arcs_buf_after_pr_size_arr_used_d is static len, 
       //which is only used to save size but not any token
-      sz=sizeof(int)*(frame+1)*(1);
+      sz=sizeof(int32)*(frame+1)*(1);
       cudaMemcpyAsync(arcs_apr_fr_size_h,arcs_apr_fr_size_d,
         sz, cudaMemcpyDeviceToHost, st);
       // clear arcs_apr_used_d in GPU
     }
-    void LatticePruner::CopyToksToHost(int frame, cudaStream_t st) {
+    void LatticePruner::CopyToksToHost(int32 frame, cudaStream_t st) {
       int32 sz;
-      sz=sizeof(int)*(frame+1+1)*(1); //include frame 0 & finalsum
+      sz=sizeof(int32)*(frame+1+1)*(1); //include frame 0 & finalsum
       cudaMemcpy(toks_bpr_fr_sidx_h,toks_bpr_fr_sidx_d,
         sz, cudaMemcpyDeviceToHost);
       sz=sizeof(Token)*(toks_bpr_fr_sidx_h[frame+1]);
@@ -676,7 +675,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
     }
 
   DEVICE inline void allocateAllTokens_function(TokenLookupElem *current_tokens_lookup, int32 numStates,  CudaLatticeDecoder::TokenAllocator allocator) {
-    for(int i=blockIdx.x*blockDim.x+threadIdx.x; i<numStates; i+=blockDim.x*gridDim.x) {
+    for(int32 i=blockIdx.x*blockDim.x+threadIdx.x; i<numStates; i+=blockDim.x*gridDim.x) {
       Token *token = allocator.GetToken(i);
       token->cost_ = INFINITY;
       token->extra_cost = 0;
@@ -686,7 +685,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       elem.token=token;
       elem.active=false;
       elem.tokenstate_idx=-1;
-     elem.token_pack=pack(-FLT_MAX, 0);
+     elem.token_pack=PackCostIdxIntoPair(-FLT_MAX, 0);
       memcpy(&current_tokens_lookup[i], &elem, sizeof(TokenLookupElem));
     }
   }
@@ -700,7 +699,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
 
   DEVICE inline void allocateNewTokens_function(TokenLookupElem *current_tokens_lookup, TokenMergeVector cur_toks, CudaLatticeDecoder::TokenAllocator allocator) {
     int32 size = cur_toks.Size();
-    for(int i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
+    for(int32 i=blockIdx.x*blockDim.x+threadIdx.x;i<size;i+=blockDim.x*gridDim.x) {
       Token *token = allocator.GetToken(i);
       token->cost_ = INFINITY;
       token->extra_cost = 0;
@@ -713,7 +712,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       elem.token=token;
       elem.active=false;
       elem.tokenstate_idx=-1;
-      elem.token_pack=pack(-FLT_MAX, 0);
+      elem.token_pack=PackCostIdxIntoPair(-FLT_MAX, 0);
       memcpy(&current_tokens_lookup[state], &elem, sizeof(TokenLookupElem));
     }
   }
@@ -754,7 +753,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
 
   void CudaLatticeDecoder::TokenAllocator::Reset() {
     *front_h=0;
-    cudaMemset(front_d,0,sizeof(int));
+    cudaMemset(front_d,0,sizeof(int32));
   }
 
   void CudaLatticeDecoder::TokenAllocator::Initialize(uint32_t size)  {
@@ -821,26 +820,26 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
     cudaEventCreateWithFlags(&event_ll,cudaEventDisableTiming);
 
     cudaStreamCreateWithFlags(&stream_comp, cudaStreamNonBlocking);
-    for (int i=0; i<LAT_BUF_SIZE; i++) 
+    for (int32 i=0; i<LAT_BUF_SIZE; i++) 
       cudaStreamCreateWithFlags(&stream_lat[i], cudaStreamNonBlocking);    
     cudaStreamCreateWithPriority(&stream_ll, cudaStreamNonBlocking, -1);
 
-    cudaMalloc(&pe_idx_d, sizeof(int)); bytes_cuda_malloc+=sizeof(int);
-    cudaMalloc(&agg_idx_d, sizeof(int)); bytes_cuda_malloc+=sizeof(int);
-    cudaMalloc(&ne_idx_d, sizeof(int)); bytes_cuda_malloc+=sizeof(int);
-    cudaMalloc(&ne_queue_d, sizeof(int)*config.max_tokens_per_frame); bytes_cuda_malloc+=sizeof(int);
-    cudaMalloc(&fb_idx_d, sizeof(int)); bytes_cuda_malloc+=sizeof(int);
-    cudaMalloc(&barrier_d, sizeof(int)); bytes_cuda_malloc+=sizeof(int);
+    cudaMalloc(&pe_idx_d, sizeof(int32)); bytes_cuda_malloc+=sizeof(int32);
+    cudaMalloc(&agg_idx_d, sizeof(int32)); bytes_cuda_malloc+=sizeof(int32);
+    cudaMalloc(&ne_idx_d, sizeof(int32)); bytes_cuda_malloc+=sizeof(int32);
+    cudaMalloc(&ne_queue_d, sizeof(int32)*config.max_tokens_per_frame); bytes_cuda_malloc+=sizeof(int32);
+    cudaMalloc(&fb_idx_d, sizeof(int32)); bytes_cuda_malloc+=sizeof(int32);
+    cudaMalloc(&barrier_d, sizeof(int32)); bytes_cuda_malloc+=sizeof(int32);
 
-    cudaMemset(pe_idx_d,0,sizeof(int));
-    cudaMemset(ne_idx_d,0,sizeof(int));
-    cudaMemset(agg_idx_d,0,sizeof(int));
-    cudaMemset(fb_idx_d,0,sizeof(int));
-    cudaMemset(barrier_d,0,sizeof(int));
+    cudaMemset(pe_idx_d,0,sizeof(int32));
+    cudaMemset(ne_idx_d,0,sizeof(int32));
+    cudaMemset(agg_idx_d,0,sizeof(int32));
+    cudaMemset(fb_idx_d,0,sizeof(int32));
+    cudaMemset(barrier_d,0,sizeof(int32));
     cudaCheckError();
 
     cudaMalloc(&cutoff_d, sizeof(CostType)); bytes_cuda_malloc+=sizeof(CostType);
-    cudaMalloc(&modified_d, sizeof(int)*2); bytes_cuda_malloc+=sizeof(int)*2;
+    cudaMalloc(&modified_d, sizeof(int32)*2); bytes_cuda_malloc+=sizeof(int32)*2;
 
 
     cudaMalloc((void**)&current_tokens_lookup_d,sizeof(TokenLookupElem)*fst_.numStates); bytes_cuda_malloc+=sizeof(TokenLookupElem)*fst_.numStates;
@@ -864,15 +863,15 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       NULL); 
     bytes_cuda_malloc += lat_arcs_buf_.GetCudaMallocBytes();  
 
-    for (int j=0; j<LAT_BUF_SIZE; j++) {
+    for (int32 j=0; j<LAT_BUF_SIZE; j++) {
       lat_toks_bufs_[j].Allocate(config.max_tokens_per_frame);
       bytes_cuda_malloc+=lat_toks_bufs_[j].GetCudaMallocBytes();
     }
 
     cudaMalloc((void**)&token_per_arc_d,sizeof(Token)*fst.NumArcs()); //temp solution
-    cudaMalloc((void**)&token_per_arc_update_d,sizeof(int)*fst.NumArcs()); //temp solution
-    cudaMemset(token_per_arc_update_d,0,sizeof(int)*fst.NumArcs()); //temp solution
-    bytes_cuda_malloc+=(sizeof(Token)+sizeof(int))*(fst.NumArcs());
+    cudaMalloc((void**)&token_per_arc_update_d,sizeof(int32)*fst.NumArcs()); //temp solution
+    cudaMemset(token_per_arc_update_d,0,sizeof(int32)*fst.NumArcs()); //temp solution
+    bytes_cuda_malloc+=(sizeof(Token)+sizeof(int32))*(fst.NumArcs());
 
     num_frames_decoded_=0;
     UpdateTokPointersByFrame(num_frames_decoded_);
@@ -888,7 +887,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
 
     printf("CUDA LatticeDecoder DESTRUCTOR\n");
 
-    for (int j=0; j<LAT_BUF_SIZE; j++) {
+    for (int32 j=0; j<LAT_BUF_SIZE; j++) {
       lat_toks_bufs_[j].Free();
     }
     lat_arcs_buf_.Free(true);
@@ -921,7 +920,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
     cudaEventDestroy(event_ll);
 
     cudaStreamDestroy(stream_comp);
-    for (int i=0; i<LAT_BUF_SIZE; i++) 
+    for (int32 i=0; i<LAT_BUF_SIZE; i++) 
       cudaStreamDestroy(stream_lat[i]);
     cudaStreamDestroy(stream_ll);
 
@@ -967,7 +966,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
     Token* cur_tok=FindOrAddTokenArc(params, state, 0, //add first token
       0, NULL, j, false,  &next_ts,
       &token_pack, params.token_per_arc_update+j);
-        uint64_t new_token_pack=pack(0, j);
+        uint64_t new_token_pack=PackCostIdxIntoPair(0, j);
     Token* cur_te=params.token_per_arc+j;
     params.token_per_arc_update[j]=1;
     store16(cur_te, &(Token(0, params.frame, NULL)));
@@ -985,7 +984,7 @@ namespace CudaLatticeDecoder_kernel {
   void CudaLatticeDecoder::InitDecoding() {
     if (config_.verbose > 1 ) printf("CUDA LatticeDecoder InitDecoding\n");
     num_frames_decoded_ = 0;
-    for (int i=0; i<LAT_BUF_SIZE; i++) {
+    for (int32 i=0; i<LAT_BUF_SIZE; i++) {
       ClearToks(lat_toks_bufs_[i]);
     }    
     lat_arcs_buf_.Clear();
@@ -1042,7 +1041,7 @@ namespace CudaLatticeDecoder_kernel {
   }
 
   bool CudaLatticeDecoder::ReachedFinal() const {
-    for (int i=0;i<cur_toks_->Size();i++) {
+    for (int32 i=0;i<cur_toks_->Size();i++) {
       TokenState ts = (*cur_toks_)[i];
 
       if (ts.token->cost_ != std::numeric_limits<BaseFloat>::infinity() &&
@@ -1083,7 +1082,7 @@ namespace CudaLatticeDecoder_kernel {
   //structs to hold kernel parameters.  Large numbers of parameters can slow down launch latency which matters when we are launching very short kernels
 
   //blockDim.x threads per token
-  template<int blockDimx, int32 blockDimy>
+  template<int32 blockDimx, int32 blockDimy>
   inline DEVICE void findBestCutoff_function(processTokens_params params) {
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
@@ -1140,7 +1139,7 @@ namespace CudaLatticeDecoder_kernel {
 
 
   //blockDim.x threads per token
-  template<int blockDimx, int32 blockDimy>
+  template<int32 blockDimx, int32 blockDimy>
   inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
 
@@ -1193,7 +1192,7 @@ namespace CudaLatticeDecoder_kernel {
           acoustic_cost, &ts, j, true, 
           &next_ts, &token_pack, params.token_per_arc_update+j);
           //get cur_te&new_token_pack
-          uint64_t new_token_pack=pack(-total_cost, j);
+          uint64_t new_token_pack=PackCostIdxIntoPair(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
@@ -1207,7 +1206,7 @@ namespace CudaLatticeDecoder_kernel {
     params.cur_toks.StoreDataFromPackIdx(params.token_per_arc,params.token_per_arc_update, params.numArcs);
   }
   
-    template<int blockDimx, int32 blockDimy>
+    template<int32 blockDimx, int32 blockDimy>
   DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params &params, CostType cutoff, uint32_t size,  volatile int32 *modified, bool aggregate=false) {
     assert(size);
     auto group = cooperative_groups::tiled_partition<blockDimx>(cooperative_groups::this_thread_block());
@@ -1245,7 +1244,7 @@ namespace CudaLatticeDecoder_kernel {
       StateId state = ts.state;
       assert(params.ne_offsets); 
       uint32_t start=params.ne_offsets[state], finish=params.ne_offsets[state+1];
-      for(int j=start+group.thread_rank();j<finish;j+=blockDimx) {
+      for(int32 j=start+group.thread_rank();j<finish;j+=blockDimx) {
         BaseFloat weight = params.arc_weights[j];
         StateId nextstate = params.arc_nextstates[j];
 
@@ -1261,7 +1260,7 @@ namespace CudaLatticeDecoder_kernel {
             0, &ts, j, true, &next_ts,
           &token_pack, params.token_per_arc_update+j);
 
-         uint64_t new_token_pack=pack(-total_cost, j);
+         uint64_t new_token_pack=PackCostIdxIntoPair(-total_cost, j);
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
@@ -1400,7 +1399,7 @@ CostType cutoff=*params.cutoff;
     cudaCheckError();
     nvtxRangePop();
   }
-  void CudaLatticeDecoder::UpdateTokPointersByFrame(uint frame) {
+  void CudaLatticeDecoder::UpdateTokPointersByFrame(uint32 frame) {
     cur_toks_=&lat_toks_bufs_[frame%LAT_BUF_SIZE];
     prev_toks_=&lat_toks_bufs_[(frame-1)%LAT_BUF_SIZE];
     //single buffer in lat_arcs_buf_;

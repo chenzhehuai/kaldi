@@ -91,14 +91,14 @@ inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(
   DECODE_TOK_IDX_PAIR(frame, id, p);
   return ActiveToksMap(frame,id);
 }
-inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int frame, int32 id) const {
+inline LatticeFasterDecoderCuda::Token* LatticeFasterDecoderCuda::ActiveToksMap(int32 frame, int32 id) const {
   assert(frame<active_tok_frames_.size());  //frame 0 has idx 0
   assert(id<active_tok_size_frames_[frame]);
   Token* tok=active_tok_frames_[frame]+id;
   assert(tok);
   return tok;
 }
-inline int32 LatticeFasterDecoderCuda::AddLatticeArcs(int proc_frame) {
+inline int32 LatticeFasterDecoderCuda::AddLatticeArcs(int32 proc_frame) {
   int32 num_arcs=0;
   num_arcs=active_arc_size_frames_[proc_frame];
   ForwardLink* newarcs=active_arc_frames_[proc_frame];
@@ -126,7 +126,7 @@ PUSH_RANGE("FinalProcessLattice",3)
   active_toks_.resize(proc_frame + 1);
   assert(proc_frame<active_toks_.size());
   pprev_toks_=last_toks;
-  for (int i=0; i<=num_frames_decoded_; i++) {
+  for (int32 i=0; i<=num_frames_decoded_; i++) {
     Token* newtoks;
     int32 cur_toks_size=toks_sidx[i+1]-toks_sidx[i];
     GET_FROM_BUF(newtoks,toks_buf_,toks_buf_used_,cur_toks_size, config_.max_tokens);
@@ -139,29 +139,29 @@ PUSH_RANGE("FinalProcessLattice",3)
   std::vector<ForwardLink*> active_arc_frames_t;
   std::vector<int> active_arc_size_frames_t;
 
-  for (int i=num_frames_decoded_; i>=0; i--) {
+  for (int32 i=num_frames_decoded_; i>=0; i--) {
     int32 num_arcs=arcs_size[i];
     KALDI_VLOG(4)<<i<<" "<<num_arcs;
     active_arc_frames_t.push_back((ForwardLink*)arcs_buf+acc);
     acc+=num_arcs;
     active_arc_size_frames_t.push_back(num_arcs);
   }
-  for (int i=num_frames_decoded_; i>=0; i--) {
+  for (int32 i=num_frames_decoded_; i>=0; i--) {
     active_arc_frames_.push_back(active_arc_frames_t[i]);
     active_arc_size_frames_.push_back(active_arc_size_frames_t[i]);
   }
   assert(proc_frame==active_arc_frames_.size()-1); //frame 0 has idx 0
-  for (int j=0; j<=num_frames_decoded_; j++) {
+  for (int32 j=0; j<=num_frames_decoded_; j++) {
     AddLatticeArcs(j);
     //only allocate memory, but don't need to iteration here
     //after AddLatticeArcs(), if (!new_tok->links) return;
     //while arc prune is done in GPU
   }
-  for (int j=0; j<=num_frames_decoded_; j++) {
+  for (int32 j=0; j<=num_frames_decoded_; j++) {
     int32 cur_toks_size=toks_sidx[j+1]-toks_sidx[j];
     Token* newtoks=active_tok_frames_[j];
     int32 survive=0;
-    for (int i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
+    for (int32 i=0;i<cur_toks_size;i++) { //always add into active_toks_map_, the newer key will replace the older
       cuToken& cur_tok=toks_buf[toks_sidx[j]+i];
       survive+=CreateTokAndRegister(cur_tok.cost_, active_toks_[j].toks, newtoks+i, j==num_frames_decoded_);
     }
@@ -190,7 +190,7 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
   //decoder_.Decode(decodable);
 
   nvtxRangePushA("CudaLatticeDecoder::Decode::init_search");
-  //int proc_lat_frame;
+  //int32 proc_lat_frame;
   InitDecoding(); //CPU init
   decoder_.InitDecoding(); //GPU init
   //GPU transfers lattice to CPU
@@ -624,7 +624,7 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
   BaseFloat best_cost = infinity, best_cost_with_final = infinity;
 
   cuTokenVector& cur_toks=*this->pprev_toks_;
-  for (int i=0;i<cur_toks.Size();i++) {
+  for (int32 i=0;i<cur_toks.Size();i++) {
     StateId state = cur_toks[i].state;
     Token* tok = ActiveToksMap(NumFramesDecoded(), i);
 
