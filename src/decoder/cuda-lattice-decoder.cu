@@ -46,6 +46,7 @@ template HOST DEVICE uint32_t  CudaVector<TokenState>::Size() const;
 template HOST DEVICE uint32_t  CudaVector<LatLink>::Size() const; 
 
 // inline functions
+
 // for speedup purpose, make them inline (5% 0.165->0.158)
 // we define them here but not in a shared header file, because they 
 // are device code and can't be defined in a header file
@@ -76,111 +77,109 @@ inline DEVICE int32 UnpackIdxFromPair(uint64_t packed) {
   return packed & 0x7FFFFFFF;
 }
 
+// fast load 16 bits using CUDA ASM
+inline  DEVICE void CudaLoad16(void *a, const void *b) {
+  const ulong2 *src = reinterpret_cast<const ulong2*>(b);
+  ulong2 &dst = *reinterpret_cast<ulong2*>(a);
+  asm("ld.global.v2.u64 {%0,%1}, [%2];" : "=l"(dst.x), "=l"(dst.y) : "l"(src));
+}
 
-inline  DEVICE void load16(void *a, const void *b) {
-    const ulong2 *src = reinterpret_cast<const ulong2*>(b);
-    ulong2 &dst = *reinterpret_cast<ulong2*>(a);
-    asm("ld.global.v2.u64 {%0,%1}, [%2];" : "=l"(dst.x), "=l"(dst.y) : "l"(src));
-  }
-  
-inline  DEVICE void store16(void *a, const void *b) {
-    const ulong2 src = *reinterpret_cast<const ulong2*>(b);
-    asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
-  }
+// fast store 16 bits using CUDA ASM  
+inline  DEVICE void CudaStore16(void *a, const void *b) {
+  const ulong2 src = *reinterpret_cast<const ulong2*>(b);
+  asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
+}
 
-  
-inline  DEVICE void store32(void *a, const void *b) {
-    //const ulong4 src = *reinterpret_cast<const ulong4*>(b);
-    //asm("st.global.v4.u64 [%0], {%1,%2,%3,%4};" :: "l"(a), "l"(src.x), "l"(src.y),
-    //  "l"(src.z), "l"(src.w));
-    memcpy(a, b, 32);
-  }
+// TODO: we need a fast 32 bits storing function
+inline  DEVICE void CudaStore32(void *a, const void *b) {
+  memcpy(a, b, 32);
+}
 
+// overload CUDA atomicMin to consume double
 inline DEVICE void atomicMin(double *address, double val) {
   unsigned long long *address_ull = (unsigned long long *)address;
-
   double minval = *address;
-
   while (val < minval) {  //if my value is less than minimum
     minval = val;         //update the minimum to my value locally
-    val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val))); //write minimum and read back value
+    //write minimum and read back value
+    val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val)));
   } //if the new value is < the minimum I wrote I need to try again.
 }
+
+// overload CUDA atomicMin to consume BaseFloat
 inline DEVICE void atomicMin(BaseFloat *address, BaseFloat val) {
   uint32 *address_ui = (uint32  *)address;
-
   BaseFloat minval = *address;
-
   while (val < minval) {  //if my value is less than minimum
     minval = val;         //update the minimum to my value locally
-    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
+    //write minimum and read back value
+    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); 
   } //if the new value is < the minimum I wrote I need to try again.
 }
 
-// end of "for speedup purpose, make them inline (5% 0.165->0.158)"
-
-
-//private, as we need to instantiate them  
+// swap code in device, as we need to instantiate them, so we define it here
 template<typename T> 
-  inline DEVICE void Swap(T &a, T &b) {
-    T c = a;
-    a = b;
-    b = c;
-  }
+inline DEVICE void CudaSwap(T &a, T &b) {
+  T c = a;
+  a = b;
+  b = c;
+}
 
-/******************************************CudaVector Implementation*******************************/
+// end of inline functions
+
+// CudaVector Implementation
 template<typename T>
-  HOST DEVICE inline T& CudaVector<T>::operator[](uint32_t idx) { 
+HOST DEVICE inline T& CudaVector<T>::operator[](uint32_t idx) { 
 #ifdef __CUDA_ARCH__
-    assert(idx<*count_d);
-    return mem_d[idx];
+  assert(idx < *count_d);
+  return mem_d[idx];
 #else
-    assert(idx<*count_h);
-    return mem_h[idx];
+  assert(idx < *count_h);
+  return mem_h[idx];
 #endif
-  }
+}
 
 template<typename T>
-  HOST DEVICE inline const T& CudaVector<T>::operator[](uint32_t idx) const { 
+HOST DEVICE inline const T& CudaVector<T>::operator[](uint32_t idx) const { 
 #ifdef __CUDA_ARCH__
-    assert(idx<*count_d);
-    return mem_d[idx];
+  assert(idx < *count_d);
+  return mem_d[idx];
 #else
-    assert(idx<*count_h);
-    return mem_h[idx];
+  assert(idx < *count_h);
+  return mem_h[idx];
 #endif
-  } 
+} 
 
 template<typename T>
-  inline void CudaVector<T>::Allocate(uint32_t max_size, 
-     uint32_t* count_h, uint32_t* count_d, T* mem_d, T* mem_h) {
-    this->max_size=max_size;
-    alloc_size=0;
+inline void CudaVector<T>::Allocate(uint32_t max_size, 
+   uint32_t* count_h, uint32_t* count_d, T* mem_h, T* mem_d) {
+  alloc_size=0;
+  this->max_size = max_size;
 
-    if (count_h) this->count_h=count_h;
-    else {
-      cudaMallocHost(&this->count_h,sizeof(uint32_t));
-    }
-    if (count_d) this->count_d=count_d;
-    else {
-      alloc_size+=sizeof(uint32_t);
-      cudaMalloc(&this->count_d, sizeof(uint32_t));
-    }
-    cudaMemset(this->count_d, 0,sizeof(uint32_t));
-    *this->count_h=0;
-
-    if (mem_d) {
-      this->mem_d=mem_d;        
-    } else {
-      alloc_size+=max_size*sizeof(T);
-      cudaMalloc(&this->mem_d,max_size*sizeof(T));
-    }
-    if (mem_h) {
-      this->mem_h=mem_h;        
-    } else {
-      cudaMallocHost(&this->mem_h,max_size*sizeof(T));
-    }
+  if (count_h) this->count_h = count_h;
+  else {
+    cudaMallocHost(&this->count_h, sizeof(uint32_t));
   }
+  if (count_d) this->count_d=count_d;
+  else {
+    alloc_size+=sizeof(uint32_t);
+    cudaMalloc(&this->count_d, sizeof(uint32_t));
+  }
+  cudaMemset(this->count_d, 0,sizeof(uint32_t));
+  *this->count_h=0;
+
+  if (mem_d) {
+    this->mem_d=mem_d;        
+  } else {
+    alloc_size+=max_size*sizeof(T);
+    cudaMalloc(&this->mem_d,max_size*sizeof(T));
+  }
+  if (mem_h) {
+    this->mem_h=mem_h;        
+  } else {
+    cudaMallocHost(&this->mem_h,max_size*sizeof(T));
+  }
+}
 
   template<typename T>
     inline size_t CudaVector<T>::GetCudaMallocBytes() {
@@ -285,7 +284,7 @@ template<typename T>
   template<typename T> 
     inline bool CudaVector<T>::Empty() const { return Size()==0; }
   template<typename T> 
-    inline void CudaVector<T>::Swap(CudaVector<T> &v) {
+    inline void CudaVector<T>::CudaSwap(CudaVector<T> &v) {
       std::swap(mem_h,v.mem_h);
       std::swap(mem_d,v.mem_d);
       std::swap(count_h,v.count_h);
@@ -300,8 +299,8 @@ template<typename T>
 
 
   template<typename T> 
-    inline void CudaMergeVector<T>::Swap(CudaMergeVector<T> &v) {
-      CudaVector<T>::Swap(v);
+    inline void CudaMergeVector<T>::CudaSwap(CudaMergeVector<T> &v) {
+      CudaVector<T>::CudaSwap(v);
       std::swap(mem_update_d,v.mem_update_d);
     }
 
@@ -328,7 +327,7 @@ DEVICE inline void CudaMergeVector<TokenState>::StoreDataFromPackIdx(
     TokenState* to_ts=mem_d+(tid+0);
     Token* cur_tok=((Token *)temp_data_buf)+ptr;
     Token* to_tok=to_ts->token;
-    store16(to_tok, cur_tok);
+    CudaStore16(to_tok, cur_tok);
     //memcpy(to_tok,cur_tok,sizeof(T));
   }    
 }
@@ -345,7 +344,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       uint32_t idx = atomicAdd(count_d,1);
       assert(*count_d<max_size);
       assert(sizeof(val)==16);
-      store16(&mem_d[idx],&val); 
+      CudaStore16(&mem_d[idx],&val); 
       mem_pack_buf_d[idx]=val_pack;  
       return idx;
     }
@@ -375,7 +374,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
     }
     DEVICE int32 LatticePruner::AddArc(LatLink* arc) {
       int32 i=atomicAdd(arcs_apr_used_d, 1);
-      store32(arcs_apr_d+i, arc);
+      CudaStore32(arcs_apr_d+i, arc);
     }
     #define PRUNE_RATIO_ASSUME 0.25
     int32 LatticePruner::Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
@@ -456,7 +455,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       }
       for (;tid<size;tid+=gridDim.x*blockDim.x) {
         Token* to_tok=GetActiveToks(frame,tid,false);
-        store16(to_tok, cur_toks[tid].token);
+        CudaStore16(to_tok, cur_toks[tid].token);
         //debug
         //assert(cur_toks[tid].token->frame==frame);
         //GetActiveToks(frame,tid,true);
@@ -480,7 +479,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       /*      
       for(; idx < size; idx += batch) {
         LatLink* to_arc=GetActiveArcs(frame,(idx));
-        store32(to_arc, cur_arc_array.mem_d+idx);
+        CudaStore32(to_arc, cur_arc_array.mem_d+idx);
         //debug
         GetActiveToks((cur_arc_array.mem_d+idx)->p1,true,frame);
         GetActiveToks(to_arc->p1,true,frame);
@@ -553,7 +552,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       //update arc //need some loop here
       int32 cnt=0;
       while (cnt++<10&&*modified0!=0){
-        Swap(modified0, modified1);
+        CudaSwap(modified0, modified1);
         __grid_sync_nv_internal(barrier_); //wait for every thread to enter while
         if (rank0) *modified1=0;
         int32 tid=threadIdx.x+blockIdx.x*blockDim.x;
@@ -861,8 +860,8 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
       config.max_arcs,
       NULL,
       NULL, 
-      lattice_pruner_.GetDeviceArcsBpr(),
-      NULL); 
+      NULL,
+      lattice_pruner_.GetDeviceArcsBpr()); 
     bytes_cuda_malloc += lat_arcs_buf_.GetCudaMallocBytes();  
 
     for (int32 j=0; j<LAT_BUF_SIZE; j++) {
@@ -932,7 +931,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
     TokenState* ts, uint32_t j, bool add_arc, TokenState** next_ts,
    uint64_t **token_pack, int* update) {
     //TokenLookupElem lookup_elem;
-    //load16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
+    //CudaLoad16(&lookup_elem, &params.current_tokens_lookup[nextstate]);
     TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
     Token *cur_tok = lookup_elem.token;  
     //check if token is active or not.  Double check the lock.
@@ -971,7 +970,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataFromPackIdx(
         uint64_t new_token_pack=PackCostIdxIntoPair(0, j);
     Token* cur_te=params.token_per_arc+j;
     params.token_per_arc_update[j]=1;
-    store16(cur_te, &(Token(0, params.frame, NULL)));
+    CudaStore16(cur_te, &(Token(0, params.frame, NULL)));
     atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
     params.cur_toks.StoreDataFromPackIdx(params.token_per_arc,params.token_per_arc_update, params.numArcs);
   }
@@ -1198,7 +1197,7 @@ namespace CudaLatticeDecoder_kernel {
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
-            store16(cur_te, &(Token(acoustic_cost+weight, params.frame, tok)));
+            CudaStore16(cur_te, &(Token(acoustic_cost+weight, params.frame, tok)));
             params.token_per_arc_update[j]=1;
           }
         } //end total_cost<=cutoff
@@ -1266,7 +1265,7 @@ namespace CudaLatticeDecoder_kernel {
           uint64_t ret=atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
           if (ret<new_token_pack) {
             Token* cur_te=params.token_per_arc+j;
-            store16(cur_te, &(Token(weight, params.frame, tok)));
+            CudaStore16(cur_te, &(Token(weight, params.frame, tok)));
             params.token_per_arc_update[j]=1;
             (*modified) = true;
           }
@@ -1313,7 +1312,7 @@ CostType cutoff=*params.cutoff;
       __grid_sync_nv_internal(params.barrier); //wait for everyone to read size and modified0
 
       //swap buffers
-      Swap(modified0,modified1); //double buffered to avoid extra sync when resetting modified to false, 3% speedup
+      CudaSwap(modified0,modified1); //double buffered to avoid extra sync when resetting modified to false, 3% speedup
       *modified1 = false;
       cnt++;
       bool aggregate=(!is_init)&&cnt>1?1:0;
