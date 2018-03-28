@@ -145,8 +145,8 @@ int main(int argc, char *argv[]) {
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
             if(omp_get_thread_num()==0) {
               printf("cudaMallocMemory: %lg GB, cudaMallocManagedMemory: %lg GB\n", 
-                  (decoder.Decoder().getCudaMallocBytes()*omp_get_num_threads()+decode_fst_cuda.getCudaMallocBytes())/1024.0/1024/1024, 
-                  decoder.Decoder().getCudaMallocManagedBytes()/1024.0/1024/1024*omp_get_num_threads());
+                  (decoder.Decoder().GetCudaMallocBytes()*omp_get_num_threads()+decode_fst_cuda.GetCudaMallocBytes())/1024.0/1024/1024, 
+                  decoder.Decoder().GetCudaMallocManagedBytes()/1024.0/1024/1024*omp_get_num_threads());
             }
   nvtxRangePushA("whole decoding");
   nvtxRangePushA("before_decoding");

@@ -123,7 +123,7 @@ class CudaFst {
     uint32 NumArcs() const {  return numArcs; }
     StateId Start() const { return start; }    
     HOST DEVICE BaseFloat Final(StateId state) const;
-    size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
+    size_t GetCudaMallocBytes() const { return bytes_cudaMalloc; }
   
     uint32 numStates;               //total number of states
     uint32 numArcs;               //total number of states

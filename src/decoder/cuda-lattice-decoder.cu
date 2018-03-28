@@ -63,7 +63,7 @@ inline DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
     i_cost = i_cost ^ 0xFFFFFFFF;
   else
     i_cost = i_cost ^ 0x80000000;
-  return (uint64)i_cost << 32 | ptr;
+  return (uint64)i_cost << 32 | idx;
 }
 
 // Unpacks a cost
@@ -435,7 +435,7 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   // GPU global memory temp variables
   sz = sizeof(int32);
   cudaMalloc((void**)&barrier_, sz); bytes_cuda_malloc += sz;
-  sz = sizeof(int32) * 2;
+  sz = sizeof(int32) * 3;
   cudaMalloc((void**)&modified_d, sz); bytes_cuda_malloc += sz;
   sz = sizeof(int32) * (2);
   cudaMalloc((void**)&count_vec_acc_d, sz); bytes_cuda_malloc += sz;
@@ -608,13 +608,22 @@ inline DEVICE int32 LatticePruner::GetSize(int* acc_len, int32 frame) const {
 // be changed. ii) the lattice is constructed in CPU by iterating
 // remaining arcs, thus nodes are implicitly pruned. iii) node D2H
 // copy is done in each frame asynchronously, which does not introduce overheads.
+inline DEVICE void UpdateModifiedBuf(volatile int32 **modified0, volatile int32** modified1,
+    volatile int32 ** modified2, int cnt, int32* modified_d) {
+  *modified0=modified_d+cnt%3;
+  *modified1=modified_d+(cnt+1)%3;
+  *modified2=modified_d+(cnt+2)%3;
+}
 inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     bool merge, BaseFloat lattice_beam, int32 verbose) {
   int32 prev_cidx;
   int32 c = 0;
   int32 rank0 = threadIdx.x == 0 && blockIdx.x == 0 ? 1 : 0;
-  volatile int32 *modified0 = modified_d;
-  volatile int32 *modified1 = modified_d + 1;
+  volatile int32 *modified0;
+  volatile int32 *modified1;
+  volatile int32 *modified2;
+  int32 cnt = 0;
+  UpdateModifiedBuf(&modified0, &modified1, &modified2, cnt, modified_d);
   if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, GetSize(toks_bpr_fr_sidx_d,
                                           frame - 1)); //size before pruning
   { // initialize
@@ -627,17 +636,18 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     if (rank0) {//wait for last iteration(frame+1) finish
       *modified0 = 1;
       *modified1 = 0;
+      *modified2 = 0;
       prev_cidx = *arcs_apr_used_d;
     }
     __grid_sync_nv_internal(barrier_);
   }
 
   //update arc, need a loop here until lattice stop modifying
-  int32 cnt = 0;
   while (cnt++ < 10 && *modified0 != 0) {
-    cuda_swap(modified0, modified1); // double buffer to eliminate a grid sync
     //__grid_sync_nv_internal(barrier_); //wait for every thread to enter while
-    if (rank0) *modified1 = 0;
+    //cuda_swap(modified0, modified1); // double buffer to eliminate a grid sync after *modified1 = 0;
+    UpdateModifiedBuf(&modified0, &modified1, &modified2, cnt, modified_d);
+    if (rank0) *modified1 = 0; // till now, threads are using modified0 & modified2, so we clear modified1 here as it won't be used until grid sync below
     
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
@@ -1351,7 +1361,7 @@ DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params
         params.ne_queue[i] = tid;
       }
     }
-    __grid_sync_nv_internal(params.barrier);
+    __grid_sync_nv_internal(params.barrier); // if we use more modified, we can reduce more grid sync, but will make the program complexer
   }
   if (params.verbose > 3 && threadIdx.x == 0
       && blockIdx.x == 0) CUDA_PRINTF("PNE: %i %i %i\n", params.frame,

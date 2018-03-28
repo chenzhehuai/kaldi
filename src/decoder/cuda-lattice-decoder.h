@@ -349,7 +349,8 @@ class CudaLatticeDecoder {
     int32 prune_interval;
     int32 toks_buf_before_pr_size;
     int32 arcs_buf_before_pr_size;
-    const BaseFloat kEstimatedPruneRatio = 0.25;
+    //const BaseFloat kEstimatedPruneRatio = 0.25;
+#define kEstimatedPruneRatio 0.25
   };
    
   struct processTokens_params {
