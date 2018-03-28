@@ -735,7 +735,6 @@ void LatticePruner::CopyArcsToHost(int32 frame, cudaStream_t st) {
   //TODO: optimize out this
   cudaMemcpy(arcs_apr_used_h, arcs_apr_used_d,
              sizeof(int32), cudaMemcpyDeviceToHost);
-  //
   sz = sizeof(LatLink) * (*arcs_apr_used_h);
   //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*0.5); //assume 0.5 parts are pruned
   cudaMemcpyAsync(arcs_apr_h, arcs_apr_d,
