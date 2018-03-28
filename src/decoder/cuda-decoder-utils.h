@@ -55,8 +55,8 @@
 #define USE_NVTX
 #ifdef USE_NVTX
 #include "nvToolsExt.h"
-const uint32_t colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
-const int32 num_colors = sizeof(colors)/sizeof(uint32_t);
+const uint32 colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
+const int32 num_colors = sizeof(colors)/sizeof(uint32);
 
 #define PUSH_RANGE(name,cid) { \
     int32 color_id = cid; \
@@ -119,8 +119,8 @@ class CudaFst {
     void initialize(const fst::Fst<StdArc> &fst);
     void finalize();
 
-    uint32_t NumStates() const {  return numStates; }
-    uint32_t NumArcs() const {  return numArcs; }
+    uint32 NumStates() const {  return numStates; }
+    uint32 NumArcs() const {  return numArcs; }
     StateId Start() const { return start; }    
     HOST DEVICE BaseFloat Final(StateId state) const;
     size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }

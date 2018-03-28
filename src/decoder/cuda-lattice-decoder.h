@@ -27,14 +27,14 @@ class CudaLatticeDecoder;
 struct CudaLatticeDecoderConfig {
   BaseFloat gpu_fraction;
   BaseFloat lat_fraction;
-  uint32_t max_tokens_per_frame;
-  uint32_t max_lat_tok_per_frame;
-  uint32_t max_lat_arc_per_frame;
-  uint32_t max_tokens;
-  uint32_t max_arcs;
+  uint32 max_tokens_per_frame;
+  uint32 max_lat_tok_per_frame;
+  uint32 max_lat_arc_per_frame;
+  uint32 max_tokens;
+  uint32 max_arcs;
   BaseFloat lattice_beam;
   BaseFloat beam;
-  uint32_t prune_interval;
+  uint32 prune_interval;
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
 
   bool determinize_lattice;
@@ -102,24 +102,27 @@ class CudaLatticeDecoder {
   
   class LatticePruner;
 
-  // general cuda vector
+  // general cuda vector can be used in both host and device. 
+  // page faults need to be paid attention to
+  // e.g. call CopySizeToHost() before Size() in host
   template<typename T>
   class CudaVector {
    public:
-    inline void Allocate(uint32_t max_size, 
-       uint32_t* count_h=NULL, uint32_t* count_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
+    inline void Allocate(uint32 max_size, 
+       uint32* count_h=NULL, uint32* count_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
     inline void Free(bool create_outside=false);
 
-    inline HOST DEVICE T& operator[](uint32_t idx); 
-    inline HOST DEVICE const T& operator[](uint32_t idx) const; 
-    inline HOST DEVICE uint32_t Size() const; 
-    HOST DEVICE inline uint32_t PushBack(const T &val); 
+    inline HOST DEVICE T& operator[](uint32 idx); 
+    inline HOST DEVICE const T& operator[](uint32 idx) const; 
+    inline HOST DEVICE uint32 Size() const; 
+    HOST DEVICE inline uint32 PushBack(const T &val); 
     HOST DEVICE inline void Clear(cudaStream_t stream=0); 
-    inline bool Empty() const;
+    inline bool Empty() const { return Size() == 0; }
     HOST DEVICE inline int32 GetIdxFromAddr(T* addr); 
     inline void Swap(CudaVector<T> &v); 
-    inline size_t GetCudaMallocBytes(); 
+    inline size_t GetCudaMallocBytes() { return alloc_size; } 
     
+    // a series of data transfer functions between host and device
     inline void CopyAllToHost(cudaStream_t stream=0);
     inline void CopyAllToDevice(cudaStream_t stream=0);
     inline void CopySizeToHost(cudaStream_t stream=0);
@@ -129,13 +132,13 @@ class CudaLatticeDecoder {
     inline void CopyDataToDevice(cudaStream_t stream=0);
       
    protected:
-    uint32_t *count_d, *count_h; // current T number in buf
-    uint32_t max_size;  // buf size
+    uint32 *count_d, *count_h; // current T number in buf
+    uint32 max_size;  // buf size
     T* mem_d, *mem_h; // mem buf for T
     int32 alloc_size;
   };
 
-  // used in 2-pass atomic token recombination
+  // complexer cuda vector used in 2-pass atomic token recombination
   template<typename T>
   class CudaMergeVector : public CudaVector<T> {
     friend class LatticePruner;
@@ -146,19 +149,19 @@ class CudaLatticeDecoder {
     using CudaVector<T>::Clear;
     using CudaVector<T>::Size;
 
-    inline void Allocate(uint32_t max_size);
+    inline void Allocate(uint32 max_size);
     inline void Free();   
     inline void Swap(CudaMergeVector<T> &v);
     inline size_t GetCudaMallocBytes();
 
     // according to the unpack index, copy data from external buf to the inside
     // buf; it's used in the 2nd stage of 2-pass atomic token recombination
-    DEVICE inline void StoreDataFromPackIdx(void* temp_data_buf, 
+    DEVICE inline void StoreDataByPackIdx(void* temp_data_buf, 
                       int* temp_data_buf_update, int32 buf_size);
     // check whether data at index i is updated
     DEVICE inline int32 IsUpdated(int32 i);
     // push back data & data_pack to vectors respectively
-    DEVICE inline uint32_t PushBack(const T &val, uint64 *val_pack);  
+    DEVICE inline uint32 PushBack(const T &val, uint64 *val_pack);  
   
    private:
     using CudaVector<T>::count_d;
@@ -233,8 +236,8 @@ class CudaLatticeDecoder {
   //struct to hold pre-allocated tokens (one per WFST state) for fast lookup
   struct  TokenLookupElem{
     Token *token; // pointer to the Token
-    uint32_t active;  // the token has been passed to or not
-    uint64_t token_pack; // used in atomic operation based token recombination
+    uint32 active;  // the token has been passed to or not
+    uint64 token_pack; // used in atomic operation based token recombination
     volatile int32_t tokenstate_idx; // used to index the corresponding TokenState
   };
   //typedef CudaVector<TokenState> TokenVector;
@@ -246,7 +249,7 @@ class CudaLatticeDecoder {
   // allocate/deallocate objects quickly in GPU
   class TokenAllocator {
    public:
-    void Initialize(uint32_t size);
+    void Initialize(uint32 size);
     void Finalize();
 
     // memory prefetch to speedup the reading in target device
@@ -257,18 +260,18 @@ class CudaLatticeDecoder {
     inline size_t GetCudaMallocManagedBytes();
     
     //gets a free token offset by index
-    DEVICE inline Token* GetToken(uint32_t index); 
+    DEVICE inline Token* GetToken(uint32 index); 
     //advances the allocated token list by num
-    DEVICE inline void AdvanceFront(uint32_t num); 
+    DEVICE inline void AdvanceFront(uint32 num); 
     void Reset(); //returns all memory to the allocator
 
    private:
     int32_t device; // for MEMADVISE
-    uint32_t size; // host size
+    uint32 size; // host size
     size_t bytes_cuda_malloc_managed;
-    uint32_t prefetch_size; //amount of elements to prefetch beyond front
+    uint32 prefetch_size; //amount of elements to prefetch beyond front
     //next free token index
-    uint32_t *front_d, *front_h;    
+    uint32 *front_d, *front_h;    
     // token buffer used discontinuously; Just going static for now.
     // TODO we could have a list of these and dynamically add more.  
     Token *tokens_allocation; 
@@ -277,32 +280,35 @@ class CudaLatticeDecoder {
   //for lattice pruning
   class LatticePruner {
    public:  
-    inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);
-    
-    void CopyArcsToHost(int32 frame, cudaStream_t st);
-    void CopyToksToHost(int32 frame, cudaStream_t st);
-    void GetHostData(Token** toks_buf, int** toks_fr_sidx, 
-                              LatLink** arcs_buf, int** arcs_fr_size);
-    
-    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, 
-                                           int32 frame);
-    inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
-                                             int32 frame);
-    
     void Initialize();
     int32 Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
       int32 prune_interval, int32 max_toks, int32 max_arcs);
     void Free();
-    // the GPU memory of lattice arcs is shared with LatLinkVector
+    // The GPU memory of lattice arcs is shared with LatLinkVector
     LatLink* GetDeviceArcsBpr() { return arcs_bpr_d; } 
+
+    // Entry of lattice pruning until this frame
+    inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);    
+    // Collect after each token passing
+    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, 
+                                           int32 frame);
+    inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
+                                             int32 frame);
+
+    // Data transfer from device to host
+    void CopyArcsToHost(int32 frame, cudaStream_t st);
+    void CopyToksToHost(int32 frame, cudaStream_t st);
+    void GetHostData(Token** toks_buf, int** toks_fr_sidx, 
+                              LatLink** arcs_buf, int** arcs_fr_size);
 
    private:    
     // #define ENCODE_TOK_IDX_PAIR(frame,idx) (((uint64)(frame)<<32)+(idx))
     inline DEVICE int32 AddArc(LatLink* arc);
+    // Set start index in the buffer of the next frame
     inline DEVICE void SetNextSidx(int* sidx_buf, int32 size, int32 frame);
-    inline DEVICE Token* GetActiveToks(void* p, bool check=false, int32 frame=-1) const;
-    inline DEVICE Token* GetActiveToks(int32 frame, int32 id, bool check=false) const;
-    inline DEVICE LatLink* GetActiveArcs(int32 frame, int32 id) const;
+    inline DEVICE Token* GetActiveToken(void* p, bool check=false, int32 frame=-1) const;
+    inline DEVICE Token* GetActiveToken(int32 frame, int32 id, bool check=false) const;
+    inline DEVICE LatLink* GetActiveArc(int32 frame, int32 id) const;
     inline DEVICE int32 GetSize(int* acc_len, int32 frame) const;
     inline DEVICE void PruneLatticeForFrame(int32 frame, 
                   bool merge, BaseFloat lattice_beam, int32 verbose);
@@ -313,7 +319,7 @@ class CudaLatticeDecoder {
     Token* toks_bpr_d; 
     Token* toks_bpr_h;
     // we keep start idx per-frame to fast index a token by (frame, idx) pair
-    // see GetActiveToks() & GetActiveArcs()
+    // see GetActiveToken() & GetActiveArc()
     int* toks_bpr_fr_sidx_d; 
     int* toks_bpr_fr_sidx_h;
     // the GPU memory of lattice arcs is shared with LatLinkVector
@@ -343,6 +349,7 @@ class CudaLatticeDecoder {
     int32 prune_interval;
     int32 toks_buf_before_pr_size;
     int32 arcs_buf_before_pr_size;
+    const BaseFloat kEstimatedPruneRatio = 0.25;
   };
    
   struct processTokens_params {
@@ -360,8 +367,8 @@ class CudaLatticeDecoder {
     LatticePruner lattice_pruner;
 
     //never change
-    const __restrict__ uint32_t *e_offsets;
-    const __restrict__ uint32_t *ne_offsets;
+    const __restrict__ uint32 *e_offsets;
+    const __restrict__ uint32 *ne_offsets;
     const __restrict__ int32 *arc_ilabels;
     const __restrict__ int32 *arc_olabels; 
     const __restrict__ BaseFloat *arc_weights;
@@ -383,7 +390,7 @@ class CudaLatticeDecoder {
     BaseFloat lattice_beam;
     int32 prune_interval;
     int32 numArcs;
-    uint32_t frame;    
+    uint32 frame;    
   };
 
 
@@ -457,7 +464,7 @@ class CudaLatticeDecoder {
   LatticePruner lattice_pruner_;
 
   // GPU usage
-  uint32_t total_threads; // GPU utilization
+  uint32 total_threads; // GPU utilization
   size_t bytes_cuda_malloc, bytes_cuda_malloc_managed;
   int32 *barrier_d;  //barrier to allow grid syncs
   cudaEvent_t event_pt; // token passing
