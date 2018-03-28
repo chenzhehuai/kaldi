@@ -589,6 +589,15 @@ inline DEVICE int32 LatticePruner::GetSize(int* acc_len, int32 frame) const {
   return size;
 }
 
+// used in PruneLatticeForFrame()
+inline DEVICE void LatticePruner::UpdateModifiedFlags(
+    volatile int32 **modified0, volatile int32** modified1,
+    volatile int32 **modified2, int cnt, int32* modified_d) {
+  *modified0=modified_d+cnt%3;
+  *modified1=modified_d+(cnt+1)%3;
+  *modified2=modified_d+(cnt+2)%3;
+}
+
 // The parallel lattice pruning is based on the algorithm in
 // LatticeFasterDecoder::PruneActiveTokens 
 // with necessary modifications for GPU parallelization:
@@ -608,12 +617,6 @@ inline DEVICE int32 LatticePruner::GetSize(int* acc_len, int32 frame) const {
 // be changed. ii) the lattice is constructed in CPU by iterating
 // remaining arcs, thus nodes are implicitly pruned. iii) node D2H
 // copy is done in each frame asynchronously, which does not introduce overheads.
-inline DEVICE void UpdateModifiedBuf(volatile int32 **modified0, volatile int32** modified1,
-    volatile int32 ** modified2, int cnt, int32* modified_d) {
-  *modified0=modified_d+cnt%3;
-  *modified1=modified_d+(cnt+1)%3;
-  *modified2=modified_d+(cnt+2)%3;
-}
 inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     bool merge, BaseFloat lattice_beam, int32 verbose) {
   int32 prev_cidx;
@@ -623,7 +626,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
   volatile int32 *modified1;
   volatile int32 *modified2;
   int32 cnt = 0;
-  UpdateModifiedBuf(&modified0, &modified1, &modified2, cnt, modified_d);
+  UpdateModifiedFlags(&modified0, &modified1, &modified2, cnt, modified_d);
   if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, GetSize(toks_bpr_fr_sidx_d,
                                           frame - 1)); //size before pruning
   { // initialize
@@ -633,39 +636,42 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
       Token* tok = GetActiveToken(frame - 1, tid, true);
       tok->extra_cost = FLT_MAX;
     }
-    if (rank0) {//wait for last iteration(frame+1) finish
+    if (rank0) { 
       *modified0 = 1;
       *modified1 = 0;
       *modified2 = 0;
       prev_cidx = *arcs_apr_used_d;
     }
-    __grid_sync_nv_internal(barrier_);
+    //wait for i) last iteration(frame+1) finish ii) finish initialization
+    __grid_sync_nv_internal(barrier_); 
   }
 
-  //update arc, need a loop here until lattice stop modifying
+  // iteratively updates extra costs of nodes and arcs until they stop changing,
   while (cnt++ < 10 && *modified0 != 0) {
-    //__grid_sync_nv_internal(barrier_); //wait for every thread to enter while
-    //cuda_swap(modified0, modified1); // double buffer to eliminate a grid sync after *modified1 = 0;
-    UpdateModifiedBuf(&modified0, &modified1, &modified2, cnt, modified_d);
-    if (rank0) *modified1 = 0; // till now, threads are using modified0 & modified2, so we clear modified1 here as it won't be used until grid sync below
-    
+    // triple buffer to eliminate a grid sync after *modified1 = 0;
+    UpdateModifiedFlags(&modified0, &modified1, &modified2, cnt, modified_d);
+    // till now, threads are using modified0 & modified2, so we clear
+    // *modified1 here as it won't be used before grid sync in the very below
+    if (rank0) *modified1 = 0; 
+    //wait for every thread to enter while, which slow down by 2% here
+    //__grid_sync_nv_internal(barrier_); 
+
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
     for (; tid < size; tid += gridDim.x * blockDim.x) {
       LatLink* link = GetActiveArc(frame, tid);
       Token* next_tok = GetActiveToken(link->p1, true, frame);
       Token* tok = GetActiveToken(link->p2, true, frame);
+      // extra cost is defined as the difference between the best
+      // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
                                   ((tok->cost_ + link->acoustic_cost + link->graph_cost)
                                    - next_tok->cost_);
-      if (isnan(link_extra_cost) || link_extra_cost > lattice_beam)
-        ; //should be pruned
-      else {
-        //debug
-        if (link_extra_cost < -1) {
+      if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) { 
+        //not prune out
+        if (link_extra_cost < -1) //debug
           CUDA_PRINTF("%i %f %f %f %f %f\n", frame, next_tok->extra_cost, tok->cost_,
                       link->acoustic_cost, link->graph_cost, next_tok->cost_);
-        }
         if (link_extra_cost < tok->extra_cost) {
           atomic_min(&tok->extra_cost, link_extra_cost);
           if (*modified0 == 0) atomicAdd((int32 *)modified0, 1);
@@ -674,10 +680,9 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     }
     __grid_sync_nv_internal(barrier_);
     if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, cnt);
-    //if we do this always in 25 frames, we might dont need this
-    //some flag to show whether it is changed
   }
-  if (rank0 && verbose > 3) CUDA_PRINTF("cnt: %i\n", cnt);
+
+  // final aggregate remaining arcs
   {
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
@@ -689,19 +694,19 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
                                   ((tok->cost_ + link->acoustic_cost + link->graph_cost)
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
-        //shouldn't be pruned
+        //not pruned out
         if (merge) {
           AddArc(link);
-          //if have seen, we can delete this
           //link->acoustic_cost=CUDART_NAN_F;
+          //don't need to delete it in original lattice
         }
       }
     }
     __grid_sync_nv_internal(barrier_);
-    if (rank0 && verbose > 3) CUDA_PRINTF("%i\n", c++);
   }
 
-  /*{
+  /*
+  { // we do not prune lattice node
     //update tok
     int32 tid=threadIdx.x+blockIdx.x*blockDim.x;
     int32 size=GetSize(toks_bpr_fr_sidx_d,frame);
@@ -710,7 +715,8 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
       if (tok->extra_cost==FLT_MAX)
         tok->tot_cost=CUDART_NAN_F; //prune
     }
-  } */
+  } 
+  */
 
   //get size
   if (merge && rank0) {
@@ -722,10 +728,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     //prev_cidx=cidx
   }
   //__grid_sync_nv_internal(barrier_);
-  if (rank0 && verbose > 3) CUDA_PRINTF("%i\n", c++);
 }
-//#define GET_ARC_BUF_HOST_BY_FRAME(frame) (arcs_apr_h+arcs_apr_h_used)
-
 
 void LatticePruner::CopyArcsToHost(int32 frame, cudaStream_t st) {
   int32 sz;

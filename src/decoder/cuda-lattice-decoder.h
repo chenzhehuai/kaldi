@@ -310,6 +310,29 @@ class CudaLatticeDecoder {
     inline DEVICE Token* GetActiveToken(int32 frame, int32 id, bool check=false) const;
     inline DEVICE LatLink* GetActiveArc(int32 frame, int32 id) const;
     inline DEVICE int32 GetSize(int* acc_len, int32 frame) const;
+    // used in PruneLatticeForFrame()
+    inline DEVICE void UpdateModifiedFlags( 
+                  volatile int32 **modified0, volatile int32** modified1,
+                  volatile int32 **modified2, int cnt, int32* modified_d);
+    // The parallel lattice pruning is based on the algorithm in
+    // LatticeFasterDecoder::PruneActiveTokens 
+    // with necessary modifications for GPU parallelization:
+    // i) parallelize the iterative updating of nodes and arcs over GPU
+    // threads; ii) use a global arc vector to replace the linked lists in
+    // the old implementation, for its lack of random access features to
+    // enable parallel access; iii) implement the extra cost updating as
+    // an atomic operation to eliminate write conflicts among threads.
+    // When a lattice arc is pruned, we do not physically remove
+    // the arc, as memory allocation is expensive. Instead, we do a
+    // final merging step to aggregate all remaining arcs using thread
+    // parallelism 
+    // We do not prune lattice nodes because: i) we need a static mapping
+    // for each arc to trace the previous and the next nodes before
+    // and after D2H memory copy. We use frame index t and vector
+    // index i to trace a node, thus node positions in the vector cannot
+    // be changed. ii) the lattice is constructed in CPU by iterating
+    // remaining arcs, thus nodes are implicitly pruned. iii) node D2H copy is done
+    // in each frame asynchronously, which does not introduce overheads.
     inline DEVICE void PruneLatticeForFrame(int32 frame, 
                   bool merge, BaseFloat lattice_beam, int32 verbose);
 
