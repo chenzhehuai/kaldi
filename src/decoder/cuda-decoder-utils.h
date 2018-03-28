@@ -46,20 +46,20 @@
 //#define __DEBUG__
 #ifdef __DEBUG__
 #define VERBOSE 5
-#define GPU_PRINTF(format,...) printf(format, ##__VA_ARGS__)
+#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
 #else
 #define VERBOSE 0
-#define GPU_PRINTF(format,...)
+#define CUDA_PRINTF(format,...)
 #endif
 
 #define USE_NVTX
 #ifdef USE_NVTX
 #include "nvToolsExt.h"
 const uint32_t colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
-const int num_colors = sizeof(colors)/sizeof(uint32_t);
+const int32 num_colors = sizeof(colors)/sizeof(uint32_t);
 
 #define PUSH_RANGE(name,cid) { \
-    int color_id = cid; \
+    int32 color_id = cid; \
     color_id = color_id%num_colors;\
     nvtxEventAttributes_t eventAttrib = {0}; \
     eventAttrib.version = NVTX_VERSION; \
@@ -76,7 +76,6 @@ const int num_colors = sizeof(colors)/sizeof(uint32_t);
 #define POP_RANGE
 #endif
 
-
 //#define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
 
 //Macro for checking cuda errors following a cuda launch or api call
@@ -90,7 +89,14 @@ const int num_colors = sizeof(colors)/sizeof(uint32_t);
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 
-
+// decode & encode function of tok address, used in host & device
+// pack frame & index into uint64 as the address of a tok
+#define ENCODE_TOK_IDX_PAIR(frame,idx) (((uint64)(frame)<<32)+(idx)) 
+// get frame & index in the per-frame vector of a tok address packed in uint64   
+#define DECODE_TOK_IDX_PAIR(frame,idx,v) { \
+    frame=(((uint64)v)>>32); \
+    idx=(((uint64)v)&(((uint64)1<<32)-1)); \
+}
 
 namespace kaldi {
 
@@ -106,7 +112,7 @@ class CudaFst {
   public:
     typedef fst::StdArc StdArc;
     typedef StdArc::StateId StateId;
-    typedef float CostType;
+    typedef BaseFloat CostType;
     typedef StdArc::Weight StdWeight;
     typedef StdArc::Label Label;
     
@@ -117,15 +123,15 @@ class CudaFst {
     uint32_t NumStates() const {  return numStates; }
     uint32_t NumArcs() const {  return numArcs; }
     StateId Start() const { return start; }    
-    HOST DEVICE float Final(StateId state) const;
+    HOST DEVICE BaseFloat Final(StateId state) const;
     size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
   
-    unsigned int numStates;               //total number of states
-    unsigned int numArcs;               //total number of states
+    unsigned int32 numStates;               //total number of states
+    unsigned int32 numArcs;               //total number of states
     StateId  start;
 
-    unsigned int max_ilabel;              //the largest ilabel
-    unsigned int e_count, ne_count, arc_count;       //number of emitting and non-emitting states
+    unsigned int32 max_ilabel;              //the largest ilabel
+    unsigned int32 e_count, ne_count, arc_count;       //number of emitting and non-emitting states
   
     //This data structure is similar to a CSR matrix format 
     //where I have 2 matrices (one emitting one non-emitting).
@@ -133,8 +139,8 @@ class CudaFst {
     //Offset arrays are numStates+1 in size. 
     //Arc values for state i are stored in the range of [i,i+1)
     //size numStates+1
-    unsigned int *e_offsets_h,*e_offsets_d;               //Emitting offset arrays 
-    unsigned int *ne_offsets_h, *ne_offsets_d;            //Non-emitting offset arrays
+    unsigned int32 *e_offsets_h,*e_offsets_d;               //Emitting offset arrays 
+    unsigned int32 *ne_offsets_h, *ne_offsets_d;            //Non-emitting offset arrays
  
     //These are the values for each arc. Arcs belonging to state i are found in the range of [offsets[i], offsets[i+1]) 
     //non-zeros (Size arc_count+1)
@@ -144,7 +150,7 @@ class CudaFst {
     int32 *arc_olabels_h;
 
     //final costs
-    float *final_h, *final_d;
+    BaseFloat *final_h, *final_d;
     //allocation size
     size_t bytes_cudaMalloc;
 };

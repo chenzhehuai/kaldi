@@ -176,9 +176,9 @@ class LatticeFasterDecoderCuda {
 
   typedef HashList<StateId, Token*>::Elem Elem;
   void FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf, 
-  int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int proc_frame);
+  int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int32 proc_frame);
   inline Token* ActiveToksMap(void*) const;
-  inline Token* ActiveToksMap(int frame, int i) const;
+  inline Token* ActiveToksMap(int frame, int32 i) const;
   void FinalizeDecoding();
 
 
@@ -195,7 +195,7 @@ class LatticeFasterDecoderCuda {
                          bool *links_pruned,
                          BaseFloat delta);
   bool CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok, bool last);
-  int AddLatticeArcs(int proc_frame);
+  int32 AddLatticeArcs(int proc_frame);
 
 
   // This function computes the final-costs for tokens active on the final
@@ -270,7 +270,7 @@ class LatticeFasterDecoderCuda {
   const CudaLatticeDecoderConfig &config_;
   int32 num_toks_; // current total #toks allocated...
   CudaLatticeDecoder decoder_;
-  int num_frames_decoded_;
+  int32 num_frames_decoded_;
   cuTokenVector* pprev_toks_;
   int* pprev_toks_size_;
   ForwardLink* pprev_arcs_;  
@@ -279,7 +279,7 @@ class LatticeFasterDecoderCuda {
   std::vector<ForwardLink*> active_arc_frames_;
   std::vector<int> active_arc_size_frames_;
   Token* toks_buf_; //as GPU is so fast, we have to need this
-  int toks_buf_used_;
+  int32 toks_buf_used_;
 
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.
