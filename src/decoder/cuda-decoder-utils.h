@@ -107,7 +107,6 @@ namespace kaldi {
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 DEVICE void __grid_sync_nv_internal(int32 *barrier);
 
-
 class CudaFst {
   public:
     typedef fst::StdArc StdArc;

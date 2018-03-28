@@ -36,8 +36,8 @@ typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
 typedef CudaLatticeDecoder::TokenMergeVector TokenMergeVector;
 typedef CudaLatticeDecoder::processTokens_params processTokens_params;
 typedef CudaLatticeDecoder::LatticePruner LatticePruner;
-typedef CudaLatticeDecoder::CudaVector CudaVector;
-typedef CudaLatticeDecoder::CudaMergeVector CudaMergeVector;
+#define CudaVector CudaLatticeDecoder::CudaVector
+#define CudaMergeVector CudaLatticeDecoder::CudaMergeVector
 
 // instantiation of templates
 template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32_t idx); 
@@ -45,8 +45,10 @@ template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32_t idx
 template HOST DEVICE uint32_t  CudaVector<TokenState>::Size() const; 
 template HOST DEVICE uint32_t  CudaVector<LatLink>::Size() const; 
 
-// inline static functions
+// inline functions
 // for speedup purpose, make them inline (5% 0.165->0.158)
+// we define them here but not in a shared header file, because they 
+// are device code and can't be defined in a header file
 inline DEVICE uint64_t PackCostIdxIntoPair(BaseFloat cost, int32 ptr) {
   //assert (!isnan(cost));
   //assert (ptr >= 0 && ptr < 1L<<32);
@@ -111,7 +113,7 @@ inline DEVICE void atomicMin(BaseFloat *address, BaseFloat val) {
 
   while (val < minval) {  //if my value is less than minimum
     minval = val;         //update the minimum to my value locally
-    val = __uint_as_BaseFloat(atomicExch(address_ui, __BaseFloat_as_uint(val))); //write minimum and read back value
+    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val))); //write minimum and read back value
   } //if the new value is < the minimum I wrote I need to try again.
 }
 
