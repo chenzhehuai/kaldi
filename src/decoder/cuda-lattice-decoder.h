@@ -181,6 +181,7 @@ class CudaLatticeDecoder {
     CostType cost_; // accumulated total cost up to this place.
     int32_t frame; // used in lattice generation & Token address pair
     BaseFloat extra_cost; // used in lattice pruning
+    // this variable is unused just to pad Token to 16bits
     StateId state_id; // WFST state 
 
     HOST DEVICE inline Token(BaseFloat cost, int32 frame, Token* prev) : 

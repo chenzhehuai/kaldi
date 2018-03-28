@@ -723,58 +723,67 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     int& size_arc_of_frame = arcs_apr_fr_size_d[frame];
     size_arc_of_frame = *arcs_apr_used_d - prev_cidx;
     if (verbose > 3) CUDA_PRINTF("PR %i %i %i\n", frame,
-                                   GetSize(arcs_bpr_fr_sidx_d, frame), size_arc_of_frame);
+            GetSize(arcs_bpr_fr_sidx_d, frame), size_arc_of_frame);
     //size_tok_of_frame[f-1]=cidx-prev_cidx
     //prev_cidx=cidx
   }
   //__grid_sync_nv_internal(barrier_);
 }
 
+// copy accumulated arcs after lattice pruning till the given frame
+// after obtaining the copy size, copy the buffer asynchronously
 void LatticePruner::CopyArcsToHost(int32 frame, cudaStream_t st) {
   int32 sz;
-  //TODO: optimize out this
   cudaMemcpy(arcs_apr_used_h, arcs_apr_used_d,
              sizeof(int32), cudaMemcpyDeviceToHost);
-  sz = sizeof(LatLink) * (*arcs_apr_used_h);
-  //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*0.5); //assume 0.5 parts are pruned
+  // TODO: optimize out above overhead
+  // one possibility is we can copy static length
+  // by assuming kEstimatedPruneRatio parts are remained
+  //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*kEstimatedPruneRatio); 
+
+  sz = sizeof(LatLink) * (*arcs_apr_used_h); // use exact count
   cudaMemcpyAsync(arcs_apr_h, arcs_apr_d,
                   sz, cudaMemcpyDeviceToHost, st);
-  //we can call it because currently *arcs_buf_after_pr_size_arr_used_d is static len,
-  //which is only used to save size but not any token
   sz = sizeof(int32) * (frame + 1) * (1);
   cudaMemcpyAsync(arcs_apr_fr_size_h, arcs_apr_fr_size_d,
                   sz, cudaMemcpyDeviceToHost, st);
-  // clear arcs_apr_used_d in GPU
+  // clear arcs_apr_used_d in GPU during next call of pruning 
 }
+
+// copy accumulated toks till the given frame
+// after obtaining the copy size, copy the buffer asynchronously
 void LatticePruner::CopyToksToHost(int32 frame, cudaStream_t st) {
   int32 sz;
-  sz = sizeof(int32) * (frame + 1 + 1) * (1); //include frame 0 & finalsum
+  //include frame 0 count and the total count in the last element
+  sz = sizeof(int32) * (frame + 1 + 1) * (1); 
   cudaMemcpy(toks_bpr_fr_sidx_h, toks_bpr_fr_sidx_d,
              sz, cudaMemcpyDeviceToHost);
   sz = sizeof(Token) * (toks_bpr_fr_sidx_h[frame + 1]);
-  assert(sz);
+  assert(sz); // assume we have obtain the total count 
   cudaMemcpyAsync(toks_bpr_h, toks_bpr_d,
                   sz, cudaMemcpyDeviceToHost, st);
 }
 
-void LatticePruner::GetHostData (Token** toks_buf,
-                                 int** toks_fr_sidx, LatLink** arcs_buf, int** arcs_fr_size) {
+// get back the host data address which can be used in CPU lattice processing
+void LatticePruner::GetHostData(Token** toks_buf, int** toks_fr_sidx,
+                                LatLink** arcs_buf, int** arcs_fr_size) {
   *toks_fr_sidx = toks_bpr_fr_sidx_h;
   *toks_buf = toks_bpr_h;
-  *arcs_fr_size = arcs_apr_fr_size_h; //next prune_interval len
-  *arcs_buf = arcs_apr_h; //start of next prune_interval len arcs
+  *arcs_fr_size = arcs_apr_fr_size_h; // prune_interval len
+  *arcs_buf = arcs_apr_h; //start of prune_interval len arcs
 }
 
-DEVICE inline void allocateAllTokens_function(TokenLookupElem
-    *current_tokens_lookup, int32 numStates,
-    CudaLatticeDecoder::TokenAllocator allocator) {
+// device functions called during token passing
+
+DEVICE inline void allocate_all_tokens(TokenLookupElem *current_tokens_lookup, 
+              int32 numStates, CudaLatticeDecoder::TokenAllocator allocator) {
   for (int32 i = blockIdx.x * blockDim.x + threadIdx.x; i < numStates;
        i += blockDim.x * gridDim.x) {
     Token *token = allocator.GetToken(i);
     token->cost_ = INFINITY;
     token->extra_cost = 0;
     token->frame = -1;
-    //token->state_id= -1;
+    // token->state_id= -1; // this variable is unused just to pad Token to 16bits
     TokenLookupElem elem;
     elem.token = token;
     elem.active = false;
@@ -783,9 +792,11 @@ DEVICE inline void allocateAllTokens_function(TokenLookupElem
     memcpy(&current_tokens_lookup[i], &elem, sizeof(TokenLookupElem));
   }
 }
-__global__ void allocateAllTokens(TokenLookupElem *current_tokens_lookup,
-                                  int32 numStates,  CudaLatticeDecoder::TokenAllocator allocator, int32 *barrier) {
-  allocateAllTokens_function(current_tokens_lookup, numStates, allocator);
+
+__global__ 
+void allocateAllTokens(TokenLookupElem *current_tokens_lookup, int32 numStates, 
+                  CudaLatticeDecoder::TokenAllocator allocator, int32 *barrier) {
+  allocate_all_tokens(current_tokens_lookup, numStates, allocator);
   __grid_sync_nv_internal(barrier);
   if (blockIdx.x == 0 && threadIdx.x == 0) {
     allocator.AdvanceFront(numStates);
@@ -802,7 +813,7 @@ DEVICE inline void allocateNewTokens_function(TokenLookupElem
     token->cost_ = INFINITY;
     token->extra_cost = 0;
     token->frame = -1;
-    //token->state_id= -1;
+    // token->state_id= -1; // this variable is unused just to pad Token to 16bits
     //a CPU copy of cur_toks can still be used, cur_toks will be clear in PreProcessTokens
     StateId state = cur_toks[i].state;
     //cur_toks[i].token->arc_index_=-1; // clear here will result in page fault in prefetch
