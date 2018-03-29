@@ -252,6 +252,7 @@ class CudaLatticeDecoder {
    public:
     void Initialize(uint32 size);
     void Finalize();
+    void Reset(); //returns all memory to the allocator
 
     // memory prefetch to speedup the reading in target device
     inline void PrefetchNextToDevice(cudaStream_t stream, int32 count);
@@ -264,7 +265,6 @@ class CudaLatticeDecoder {
     DEVICE inline Token* GetToken(uint32 index); 
     //advances the allocated token list by num
     DEVICE inline void AdvanceFront(uint32 num); 
-    void Reset(); //returns all memory to the allocator
 
    private:
     int32_t device; // for MEMADVISE
@@ -369,14 +369,16 @@ class CudaLatticeDecoder {
     int* count_vec_acc_d;
     int* modified_d;
 
-    //configurations
+    // configurations
     int32 prune_interval;
     int32 toks_buf_before_pr_size;
     int32 arcs_buf_before_pr_size;
-    //const BaseFloat kEstimatedPruneRatio = 0.25;
+    //const BaseFloat kEstimatedPruneRatio = 0.25; // TODO
 #define kEstimatedPruneRatio 0.25
   };
-   
+  
+  // structs to hold kernel parameters.  Large numbers of parameters can slow down 
+  // launch latency which matters when we are launching very short kernels 
   struct processTokens_params {
     // data
     TokenMergeVector prev_toks;
@@ -428,7 +430,7 @@ class CudaLatticeDecoder {
 
   //decoding functions
   void InitParams(processTokens_params& params);  // parameters for calling GPU
-  // You can call InitDecoding if you have already decoded an
+  // call InitDecoding if you have already decoded an
   // utterance and want to start with a new utterance. 
   void InitDecoding(); 
   void UpdateTokPointersByFrame(uint32 frame);
@@ -443,8 +445,8 @@ class CudaLatticeDecoder {
 
   //lattice processing functions
   void FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx, 
-    LatLink** arcs_buf, int** arcs_fr_size,
-    TokenMergeVector** toks_vec_last_fr);
+                                 LatLink** arcs_buf, int** arcs_fr_size,
+                                 TokenMergeVector** toks_vec_last_fr);
   void PruneActiveTokens(cudaStream_t wait_st, cudaStream_t run_st, 
       BaseFloat gpu_ratio); // prune lattice in GPU
 
