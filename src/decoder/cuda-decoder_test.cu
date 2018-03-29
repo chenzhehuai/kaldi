@@ -25,7 +25,7 @@ DEVICE void acquire_semaphore(volatile int *lock){
   }
 
 DEVICE void release_semaphore(volatile int *lock){
-  //*lock = 0;
+  // *lock = 0;
   atomicExch((unsigned int*)lock,0u);
   __threadfence();
   }
@@ -53,14 +53,14 @@ DEVICE void release_semaphore(volatile int *lock){
   }
 
   __global__ void callmyadd(int *ret, int *mutex) {
-  //myadd2<32,2>(ret, mutex);
+  // myadd2<32,2>(ret, mutex);
   myadd0<32,2>(ret, mutex);
-  //myadd<32,2>(ret, mutex);
+  // myadd<32,2>(ret, mutex);
   }
 int main() {
-  //int blocks=200;
+  // int blocks=200;
   int blocks=3;
-  //int blocks=7;
+  // int blocks=7;
   int *mutex=0;
   int *ret=0, ret_h=0;
   int n =32;

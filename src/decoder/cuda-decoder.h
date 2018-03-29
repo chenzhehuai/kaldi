@@ -3,13 +3,13 @@
 // Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
-//
+// 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-//
-//  http://www.apache.org/licenses/LICENSE-2.0
-//
+// 
+// http:// www.apache.org/licenses/LICENSE-2.0
+// 
 // THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
 // WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
@@ -114,7 +114,7 @@ public:
   inline size_t getCudaMallocBytes(); 
   inline void swap(CudaMergeVector<T> &v);
 
-  //for arr merge to single; assume create using cudaMallocManaged
+  // for arr merge to single; assume create using cudaMallocManaged
   int *mem_update_d;
   uint64** mem_pack_buf_d;
   T* mem_buf_d;
@@ -136,10 +136,10 @@ public:
   inline size_t getCudaMallocBytes() const { return bytes_cudaMalloc; } 
   inline size_t getCudaMallocManagedBytes() const { return bytes_cudaMallocManaged;  }
 
-  /// Decode this utterance.
-  /// Returns true if any tokens reached the end of the file (regardless of
-  /// whether they are in a final state); query ReachedFinal() after Decode()
-  /// to see whether we reached a final state.
+  // / Decode this utterance.
+  // / Returns true if any tokens reached the end of the file (regardless of
+  // / whether they are in a final state); query ReachedFinal() after Decode()
+  // / to see whether we reached a final state.
   bool Decode(DecodableInterface *decodable);
 
   bool ReachedFinal() const;
@@ -154,27 +154,27 @@ public:
   // using the return value is deprecated.
   bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
   
-  /// *** The next functions are from the "new interface". ***
+  // / *** The next functions are from the "new interface". ***
   
-  /// FinalRelativeCost() serves the same function as ReachedFinal(), but gives
-  /// more information.  It returns the difference between the best (final-cost plus
-  /// cost) of any token on the final frame, and the best cost of any token
-  /// on the final frame.  If it is infinity it means no final-states were present
-  /// on the final frame.  It will usually be nonnegative.
+  // / FinalRelativeCost() serves the same function as ReachedFinal(), but gives
+  // / more information.  It returns the difference between the best (final-cost plus
+  // / cost) of any token on the final frame, and the best cost of any token
+  // / on the final frame.  If it is infinity it means no final-states were present
+  // / on the final frame.  It will usually be nonnegative.
   BaseFloat FinalRelativeCost() const;
 
-  /// InitDecoding initializes the decoding, and should only be used if you
-  /// intend to call AdvanceDecoding().  If you call Decode(), you don't need
-  /// to call this.  You can call InitDecoding if you have already decoded an
-  /// utterance and want to start with a new utterance. 
+  // / InitDecoding initializes the decoding, and should only be used if you
+  // / intend to call AdvanceDecoding().  If you call Decode(), you don't need
+  // / to call this.  You can call InitDecoding if you have already decoded an
+  // / utterance and want to start with a new utterance. 
   void InitDecoding();  
 
-  /// This will decode until there are no more frames ready in the decodable
-  /// object, but if max_num_frames is >= 0 it will decode no more than
-  /// that many frames.  If it returns false, then no tokens are alive,
-  /// which is a kind of error state.
+  // / This will decode until there are no more frames ready in the decodable
+  // / object, but if max_num_frames is >= 0 it will decode no more than
+  // / that many frames.  If it returns false, then no tokens are alive,
+  // / which is a kind of error state.
   
-  /// Returns the number of frames already decoded.  
+  // / Returns the number of frames already decoded.  
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
 
 
@@ -184,10 +184,10 @@ public:
     Token *prev_;
     CostType cost_; // accumulated total cost up to this point.
     uint32_t arc_index_;
-//    BaseFloat acoustic_cost;   //currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
+// BaseFloat acoustic_cost;   // currently not recording acoustic_cost.  It is trivial to add back in but didn't seem necessary for this use case
 
     HOST DEVICE inline Token(BaseFloat cost, Token *prev, uint32_t arc_index) : prev_(prev), cost_(cost), arc_index_(arc_index) {
-      //assert(prev!=this);
+      // assert(prev!=this);
       if(prev) {
         cost_ += prev->cost_;
       }
@@ -201,8 +201,8 @@ public:
     }
   };
   
-  //Preallocates tokens and allocates them in a circular buffer.
-  //This allows threads to concurrently allocate/deallocate objects quickly in CUDA
+  // Preallocates tokens and allocates them in a circular buffer.
+  // This allows threads to concurrently allocate/deallocate objects quickly in CUDA
   class TokenAllocator {
     public:
       void initialize(uint32_t size);
@@ -214,32 +214,32 @@ public:
 
       inline size_t getCudaMallocManagedBytes();
 
-      //circular buffer,  need to ensure front never gets close to back....  If this happens there can be race conditions 
+      // circular buffer,  need to ensure front never gets close to back....  If this happens there can be race conditions 
 
-      DEVICE inline Token* getToken(uint32_t index);   //gets a free token offset by index
-      DEVICE inline void advanceFront(uint32_t num);         //advances the allocated token list by num
+      DEVICE inline Token* getToken(uint32_t index);   // gets a free token offset by index
+      DEVICE inline void advanceFront(uint32_t num);         // advances the allocated token list by num
 
-      void reset();   //returns all memory to the allocator (essentially a garbage collection of oustanding memory.  
+      void reset();   // returns all memory to the allocator (essentially a garbage collection of oustanding memory.  
     private:
 
       uint32_t size;
       int32_t device;
-      uint32_t *front_d, *front_h;    //next free token index
+      uint32_t *front_d, *front_h;    // next free token index
 
-      Token *tokens_allocation;  //TODO we could have a list of these and dynamically add more.  Just going static for now.
+      Token *tokens_allocation;  // TODO we could have a list of these and dynamically add more.  Just going static for now.
       size_t bytes_cudaMallocManaged;
-      uint32_t prefetch_size;         //amount of elements to prefetch beyond front
+      uint32_t prefetch_size;         // amount of elements to prefetch beyond front
   };
 
   TokenAllocator allocator;
 
-  //pre-computes log likelihoods for the current frame
+  // pre-computes log likelihoods for the current frame
   void ComputeLogLikelihoods(DecodableInterface *decodable);
  
   // ProcessEmitting decodes the frame num_frames_decoded_ of the
   // decodable object, then increments num_frames_decoded_.
-  //void ProcessEmitting(DecodableInterface *decodable);
-  //
+  // void ProcessEmitting(DecodableInterface *decodable);
+  // 
 
   struct TokenState;
   struct  TokenLookupElem;
@@ -252,7 +252,7 @@ public:
     CudaDecoder::TokenAllocator allocator;
     CudaDecoder::CostType *cutoff;
 
-    //never change
+    // never change
     const __restrict__ uint32_t *e_offsets;
     const __restrict__ uint32_t *ne_offsets;
     const __restrict__ int32 *arc_ilabels;
@@ -273,7 +273,7 @@ public:
     int *cidx;
     int *barrier;
 
-    //debug
+    // debug
     int verbose;
     int frame;
 
@@ -293,15 +293,15 @@ public:
   void PreProcessTokens();
   void initParams(processTokens_params& params);
  
-  //struct to hold pre-allocated tokens (one per state)
+  // struct to hold pre-allocated tokens (one per state)
   struct  TokenLookupElem{
-    Token *token;     //pointer for that token
-    uint32_t active;  //tells if token has activiated or not
-    uint64_t token_pack;     //aligning to 16 bytes
+    Token *token;     // pointer for that token
+    uint32_t active;  // tells if token has activiated or not
+    uint64_t token_pack;     // aligning to 16 bytes
   };
   
-  //token lookup table.  Provides constant time lookup for active tokens.
-  //One entry per state.  If entry is NULL token is not active.
+  // token lookup table.  Provides constant time lookup for active tokens.
+  // One entry per state.  If entry is NULL token is not active.
   TokenLookupElem *current_tokens_lookup_d;
 
   struct __align__(16) TokenState {
@@ -313,7 +313,7 @@ public:
   };
  
 
-  //Lists of active tokens to be iterated through
+  // Lists of active tokens to be iterated through
   TokenMergeVector cur_toks_;
   TokenMergeVector prev_toks_;
   Token* token_per_arc_d;
@@ -332,7 +332,7 @@ public:
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
 
-  //data store for log likelihoods needed in the current frame.  Double buffering to avoid synchronization.
+  // data store for log likelihoods needed in the current frame.  Double buffering to avoid synchronization.
   BaseFloat *loglikelihoods_h, *loglikelihoods_old_h, *loglikelihoods_d, *loglikelihoods_old_d;  
 
   CostType *cutoff_d;
@@ -347,11 +347,11 @@ public:
   uint32_t total_threads;
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
 
-  //warp assignment indexes
+  // warp assignment indexes
   int *pe_idx_d, *ne_idx_d, *fb_idx_d, *l_ne_idx_d, *ne_queue_d;
-  int *barrier_d;  //barrier to allow grid syncs
+  int *barrier_d;  // barrier to allow grid syncs
  
-  int *cidx_d,*cidx2_d; //for less NE proc
+  int *cidx_d,*cidx2_d; // for less NE proc
   int verbose;
   
   int max_arcs_per_frame_search_;
