@@ -436,7 +436,7 @@ class CudaLatticeDecoder {
   // utterance and want to start with a new utterance. 
   void InitDecoding(); 
   void UpdateTokPointersByFrame(uint32 frame);
-  // / Returns the number of frames already decoded.  
+  // Returns the number of frames already decoded.  
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
   void ClearToks(TokenMergeVector &toks); 
   void PreProcessTokens();  // called before ProcessTokens()

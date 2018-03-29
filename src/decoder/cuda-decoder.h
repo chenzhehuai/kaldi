@@ -136,10 +136,10 @@ public:
   inline size_t getCudaMallocBytes() const { return bytes_cudaMalloc; } 
   inline size_t getCudaMallocManagedBytes() const { return bytes_cudaMallocManaged;  }
 
-  // / Decode this utterance.
-  // / Returns true if any tokens reached the end of the file (regardless of
-  // / whether they are in a final state); query ReachedFinal() after Decode()
-  // / to see whether we reached a final state.
+  // Decode this utterance.
+  // Returns true if any tokens reached the end of the file (regardless of
+  // whether they are in a final state); query ReachedFinal() after Decode()
+  // to see whether we reached a final state.
   bool Decode(DecodableInterface *decodable);
 
   bool ReachedFinal() const;
@@ -154,27 +154,27 @@ public:
   // using the return value is deprecated.
   bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
   
-  // / *** The next functions are from the "new interface". ***
+  // *** The next functions are from the "new interface". ***
   
-  // / FinalRelativeCost() serves the same function as ReachedFinal(), but gives
-  // / more information.  It returns the difference between the best (final-cost plus
-  // / cost) of any token on the final frame, and the best cost of any token
-  // / on the final frame.  If it is infinity it means no final-states were present
-  // / on the final frame.  It will usually be nonnegative.
+  // FinalRelativeCost() serves the same function as ReachedFinal(), but gives
+  // more information.  It returns the difference between the best (final-cost plus
+  // cost) of any token on the final frame, and the best cost of any token
+  // on the final frame.  If it is infinity it means no final-states were present
+  // on the final frame.  It will usually be nonnegative.
   BaseFloat FinalRelativeCost() const;
 
-  // / InitDecoding initializes the decoding, and should only be used if you
-  // / intend to call AdvanceDecoding().  If you call Decode(), you don't need
-  // / to call this.  You can call InitDecoding if you have already decoded an
-  // / utterance and want to start with a new utterance. 
+  // InitDecoding initializes the decoding, and should only be used if you
+  // intend to call AdvanceDecoding().  If you call Decode(), you don't need
+  // to call this.  You can call InitDecoding if you have already decoded an
+  // utterance and want to start with a new utterance. 
   void InitDecoding();  
 
-  // / This will decode until there are no more frames ready in the decodable
-  // / object, but if max_num_frames is >= 0 it will decode no more than
-  // / that many frames.  If it returns false, then no tokens are alive,
-  // / which is a kind of error state.
+  // This will decode until there are no more frames ready in the decodable
+  // object, but if max_num_frames is >= 0 it will decode no more than
+  // that many frames.  If it returns false, then no tokens are alive,
+  // which is a kind of error state.
   
-  // / Returns the number of frames already decoded.  
+  // Returns the number of frames already decoded.  
   int32 NumFramesDecoded() const { return num_frames_decoded_; }
 
 

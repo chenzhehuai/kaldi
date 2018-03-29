@@ -646,8 +646,8 @@ void LatticeFasterDecoderCuda::ComputeFinalCosts(
 
 void LatticeFasterDecoderCuda::ClearActiveTokens() { // a cleanup routine, at utt end/begin
   // for (size_t i = 0; i < active_toks_.size(); i++) {
-  // // Delete all tokens alive on this frame, and any forward
-  // // links they may have.
+  // Delete all tokens alive on this frame, and any forward
+  // links they may have.
   // for (Token *tok = active_toks_[i].toks; tok != NULL; ) {
   // tok->DeleteForwardLinks();
   // Token *next_tok = tok->next;

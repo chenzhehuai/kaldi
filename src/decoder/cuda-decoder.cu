@@ -640,14 +640,14 @@ DEVICE inline void CudaMergeVector<T>::merge(void* undefined, int* token_per_arc
     num_frames_decoded_++;
       // cudaStreamSynchronize(stream_comp);
       // assert(cur_toks_.size());
-      // // if (verbose>4) {
-      // // int * tmp;
-      // // cudaMallocHost((void**)&tmp,10*sizeof(int)); 
-      // // cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
-      // // cudaCheckError();
-      // // KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
-      // // cudaFree(tmp);
-      // // }
+      // if (verbose>4) {
+      // int * tmp;
+      // cudaMallocHost((void**)&tmp,10*sizeof(int)); 
+      // cudaMemcpy(tmp,tok2scansum_numarc_d,sizeof(int)*10,cudaMemcpyDeviceToHost);
+      // cudaCheckError();
+      // KALDI_LOG<<tmp[0]<<" "<<tmp[1]<< " "<<tmp[2];
+      // cudaFree(tmp);
+      // }
       // cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, 
       // tok2scansum_numarc_d, tok2scansum_numarc_d, cur_toks_.size()+1, stream_comp);
       // cudaCheckError();
