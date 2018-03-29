@@ -45,6 +45,8 @@ template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32 idx);
 template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32 idx);
 template HOST DEVICE uint32  CudaVector<TokenState>::Size() const;
 template HOST DEVICE uint32  CudaVector<LatLink>::Size() const;
+template<> DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
+  void* temp_data_buf, int* temp_data_buf_update, int32 buf_size);
 
 // inline functions
 
@@ -56,7 +58,7 @@ template HOST DEVICE uint32  CudaVector<LatLink>::Size() const;
 // cost and the arc index into an uint64 to represent the token
 // before recombination, with the former one in the higher bits
 // for comparison purpose.
-inline DEVICE uint64 (BaseFloat cost, int32 idx) {
+inline DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
   //assert (!isnan(cost));
   //assert (idx >= 0 && idx < 1L<<32);
   uint32 i_cost = *(uint32 *) & cost;
@@ -1508,7 +1510,7 @@ void CudaLatticeDecoder::InitDecoding() {
   _add_one_token <<< 1, 1, 0, stream_comp>>>(params, start_state);
   cudaCheckError();
 
-  initialize_cutoff <<< 1, 1, 0, stream_comp>>>(cutoff_d);
+  _initialize_cutoff <<< 1, 1, 0, stream_comp>>>(cutoff_d);
   ProcessNonemitting();
   if (config_.verbose > 1 ) KALDI_LOG << "end of CUDA LatticeDecoder InitDecoding\n";
 }
