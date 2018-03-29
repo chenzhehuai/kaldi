@@ -17,7 +17,6 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <nvToolsExt.h>
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
@@ -42,10 +41,11 @@ int main(int argc, char *argv[]) {
     using fst::StdArc;
 
     const char *usage =
-        "Generate lattices, reading log-likelihoods as matrices\n"
-        " (model is needed only for the integer mappings in its transition-model)\n"
-        "Usage: latgen-faster-mapped [options] trans-model-in (fst-in|fsts-rspecifier) loglikes-rspecifier"
-        " lattice-wspecifier [ words-wspecifier [alignments-wspecifier] ]\n";
+      "Generate lattices, reading log-likelihoods as matrices\n"
+      " (model is needed only for the integer mappings in its transition-model)\n"
+      "Usage: latgen-faster-mapped-cuda [options] trans-model-in
+      (fst-in|fsts-rspecifier) loglikes-rspecifier"
+      " lattice-wspecifier [ words-wspecifier [alignments-wspecifier] ]\n";
     ParseOptions po(usage);
     Timer timer;
     bool allow_partial = false;
@@ -54,10 +54,12 @@ int main(int argc, char *argv[]) {
 
     std::string word_syms_filename;
     config.Register(&po);
-    po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
-
-    po.Register("word-symbol-table", &word_syms_filename, "Symbol table for words [for debug output]");
-    po.Register("allow-partial", &allow_partial, "If true, produce output even if end state was not reached.");
+    po.Register("acoustic-scale", &acoustic_scale,
+                "Scaling factor for acoustic likelihoods");
+    po.Register("word-symbol-table", &word_syms_filename,
+                "Symbol table for words [for debug output]");
+    po.Register("allow-partial", &allow_partial,
+                "If true, produce output even if end state was not reached.");
 
     po.Read(argc, argv);
 
@@ -67,11 +69,11 @@ int main(int argc, char *argv[]) {
     }
 
     std::string model_in_filename = po.GetArg(1),
-        fst_in_str = po.GetArg(2),
-        feature_rspecifier = po.GetArg(3),
-        lattice_wspecifier = po.GetArg(4),
-        words_wspecifier = po.GetOptArg(5),
-        alignment_wspecifier = po.GetOptArg(6);
+                fst_in_str = po.GetArg(2),
+                feature_rspecifier = po.GetArg(3),
+                lattice_wspecifier = po.GetArg(4),
+                words_wspecifier = po.GetOptArg(5),
+                alignment_wspecifier = po.GetOptArg(6);
 
     TransitionModel trans_model;
     ReadKaldiObject(model_in_filename, &trans_model);
@@ -82,7 +84,7 @@ int main(int argc, char *argv[]) {
     if (! (determinize ? compact_lattice_writer.Open(lattice_wspecifier)
            : lattice_writer.Open(lattice_wspecifier)))
       KALDI_ERR << "Could not open table for writing lattices: "
-                 << lattice_wspecifier;
+                << lattice_wspecifier;
 
     Int32VectorWriter words_writer(words_wspecifier);
 
@@ -92,7 +94,7 @@ int main(int argc, char *argv[]) {
     if (word_syms_filename != "")
       if (!(word_syms = fst::SymbolTable::ReadText(word_syms_filename)))
         KALDI_ERR << "Could not read symbol table from file "
-                   << word_syms_filename;
+                  << word_syms_filename;
 
     double tot_like = 0.0;
     kaldi::int64 frame_count = 0;
@@ -103,31 +105,29 @@ int main(int argc, char *argv[]) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
       Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
-#if 0
-      //cuInit(0);
+#if 1
+      cuInit(0);
       cudaDeviceReset();
-      cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
-      //cudaSetDeviceFlags(cudaDeviceScheduleYield);
-      //cudaSetDeviceFlags(cudaDeviceScheduleSpin);
+      cudaSetDeviceFlags(cudaDeviceScheduleYield);
       uint flags;
       cudaGetDeviceFlags(&flags);
-      KALDI_VLOG(3)<<flags;
-      //assert(flags&cudaDeviceScheduleBlockingSync);
+      KALDI_VLOG(3) << flags;
+      assert(flags & cudaDeviceScheduleYield);
 #else
       CuDevice::Instantiate().SelectGpuId("yes");
       CuDevice::Instantiate().AllowMultithreading();
 #endif
+      // GPU version of WFST
       CudaFst decode_fst_cuda;
       decode_fst_cuda.initialize(*decode_fst);
 
-        LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
+      LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
       {
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
-
-        timer.Reset();
-  nvtxRangePushA("whole decoding");
-  nvtxRangePushA("before_decoding");
+          timer.Reset();
+          PUSH_RANGE("whole decoding", 0)
+          PUSH_RANGE("before_decoding", 1)
           std::string utt = loglike_reader.Key();
           Matrix<BaseFloat> loglikes (loglike_reader.Value());
           loglike_reader.FreeCurrent();
@@ -136,48 +136,48 @@ int main(int argc, char *argv[]) {
             num_fail++;
             continue;
           }
-
           DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
-
-  nvtxRangePop();
+          POP_RANGE
 
           double like;
           Lattice lat;
           if (DecodeUtteranceLatticeFasterCuda(
-                  decoder, decodable, trans_model, word_syms, utt,
-                  acoustic_scale, determinize, allow_partial, &alignment_writer,
-                  &words_writer, &compact_lattice_writer, &lattice_writer,
-                  &like, &lat)) {
+                decoder, decodable, trans_model, word_syms, utt,
+                acoustic_scale, determinize, allow_partial, &alignment_writer,
+                &words_writer, &compact_lattice_writer, &lattice_writer,
+                &like, &lat)) {
             tot_like += like;
             frame_count += loglikes.NumRows();
             num_success++;
           } else num_fail++;
-      elapsed += timer.Elapsed();
+
+          elapsed += timer.Elapsed();
           DecodeUtteranceLatticeFasterCudaOutput(
-                  decoder, decodable, trans_model, word_syms, utt,
-                  acoustic_scale, determinize, allow_partial, &alignment_writer,
-                  &words_writer, &compact_lattice_writer, &lattice_writer,
-                  &like, lat);
-  nvtxRangePop();
+            decoder, decodable, trans_model, word_syms, utt,
+            acoustic_scale, determinize, allow_partial, &alignment_writer,
+            &words_writer, &compact_lattice_writer, &lattice_writer,
+            &like, lat);
+          POP_RANGE
         }
       }
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
-      KALDI_ERR<< "unfinished";
+      KALDI_ERR << "Unimplemented yet. ";
     }
 
-    KALDI_LOG << "Time taken "<< elapsed
+    KALDI_LOG << "Time taken " << elapsed
               << "s: real-time factor assuming 100 frames/sec is "
-              << (elapsed*100.0/frame_count);
+              << (elapsed * 100.0 / frame_count);
     KALDI_LOG << "Done " << num_success << " utterances, failed for "
               << num_fail;
-    KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like/frame_count) << " over "
-              << frame_count<<" frames.";
+    KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like / frame_count) <<
+              " over "
+              << frame_count << " frames.";
 
     delete word_syms;
     if (num_success != 0) return 0;
     else return 1;
-  } catch(const std::exception &e) {
+  } catch (const std::exception &e) {
     std::cerr << e.what();
     return -1;
   }

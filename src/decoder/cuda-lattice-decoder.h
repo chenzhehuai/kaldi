@@ -22,6 +22,8 @@
 
 namespace kaldi {
 
+#define LAT_BUF_SIZE 2
+#define ESTIMATED_PRUNE_RATIO 0.25
 class CudaLatticeDecoder;
 
 struct CudaLatticeDecoderConfig {
@@ -373,8 +375,6 @@ class CudaLatticeDecoder {
     int32 prune_interval;
     int32 toks_buf_before_pr_size;
     int32 arcs_buf_before_pr_size;
-    //const BaseFloat kEstimatedPruneRatio = 0.25; // TODO
-#define kEstimatedPruneRatio 0.25
   };
   
   // structs to hold kernel parameters.  Large numbers of parameters can slow down 
@@ -459,7 +459,6 @@ class CudaLatticeDecoder {
  private:
   // configurations
   CudaLatticeDecoderConfig config_;
-  #define LAT_BUF_SIZE 2
   const CudaFst fst_;
 
   //dynamic load balancing

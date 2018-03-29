@@ -1,3 +1,5 @@
+// decoder/cuda-lattice-decoder.cu
+
 // Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
@@ -928,7 +930,7 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   sz = sizeof(int32) * (prune_interval + 1);
   cudaMalloc((void**)&arcs_apr_fr_size_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&arcs_apr_fr_size_h, sz);
-  sz = kEstimatedPruneRatio * sizeof(LatLink) * max_arcs;
+  sz = ESTIMATED_PRUNE_RATIO * sizeof(LatLink) * max_arcs;
   cudaMalloc((void**)&arcs_apr_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&arcs_apr_h, sz);
   sz = sizeof(int32);
@@ -981,8 +983,8 @@ inline DEVICE void LatticePruner::PruneActiveTokens(int32 frame,
   for (int32 f = frame; f > 0; f--) { //prune each frame in serial
     PruneLatticeForFrame(f, 1, lattice_beam, verbose);
   }
-  // by kEstimatedPruneRatio to reduce memory allocation and D2H data transfer
-  assert(*arcs_apr_used_d < arcs_buf_before_pr_size * kEstimatedPruneRatio);
+  // by ESTIMATED_PRUNE_RATIO to reduce memory allocation and D2H data transfer
+  assert(*arcs_apr_used_d < arcs_buf_before_pr_size * ESTIMATED_PRUNE_RATIO);
   if (verbose > 2 && rank0) 
     CUDA_PRINTF("PRt: %i %i\n", arcs_bpr_fr_sidx_d[frame + 1],
                 *arcs_apr_used_d);
@@ -1240,8 +1242,8 @@ void LatticePruner::CopyArcsToHost(int32 frame, cudaStream_t st) {
              sizeof(int32), cudaMemcpyDeviceToHost);
   // TODO: optimize out above overhead
   // one possibility is we can copy static length
-  // by assuming kEstimatedPruneRatio parts are remained
-  //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*kEstimatedPruneRatio); 
+  // by assuming ESTIMATED_PRUNE_RATIO parts are remained
+  //sz=sizeof(LatLink)*(arcs_buf_before_pr_size*ESTIMATED_PRUNE_RATIO); 
 
   sz = sizeof(LatLink) * (*arcs_apr_used_h); // use exact count
   cudaMemcpyAsync(arcs_apr_h, arcs_apr_d,

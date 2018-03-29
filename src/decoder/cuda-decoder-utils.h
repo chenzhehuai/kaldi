@@ -1,4 +1,4 @@
-// decoder/cuda-decoder-utils.cuh
+// decoder/cuda-decoder-utils.h
 
 // Copyright      2018  Zhehuai Chen
 
@@ -34,29 +34,23 @@
 #include "math_constants.h"
 #include "omp.h"
 
+// cuda macro
+
 #ifdef __CUDACC__
-  #define HOST __host__
-  #define DEVICE __device__
+#define HOST __host__
+#define DEVICE __device__
 
 #else
-  #define HOST
-  #define DEVICE
-#endif
-
-//#define __DEBUG__
-#ifdef __DEBUG__
-#define VERBOSE 5
-#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
-#else
-#define VERBOSE 0
-#define CUDA_PRINTF(format,...)
+#define HOST
+#define DEVICE
 #endif
 
 #define USE_NVTX
 #ifdef USE_NVTX
 #include "nvToolsExt.h"
-const uint32 colors[] = { 0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 0x0000ffff, 0x00ff0000, 0x00ffffff };
-const int32 num_colors = sizeof(colors)/sizeof(uint32);
+const uint32 colors[] = {0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 
+                         0x0000ffff, 0x00ff0000, 0x00ffffff};
+const int32 num_colors = sizeof(colors) / sizeof(uint32);
 
 #define PUSH_RANGE(name,cid) { \
     int32 color_id = cid; \
@@ -76,9 +70,7 @@ const int32 num_colors = sizeof(colors)/sizeof(uint32);
 #define POP_RANGE
 #endif
 
-//#define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
-
-//Macro for checking cuda errors following a cuda launch or api call
+// Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError() {                                          \
         cudaError_t e=cudaGetLastError();                                 \
         if(e!=cudaSuccess) {                                              \
@@ -87,12 +79,26 @@ const int32 num_colors = sizeof(colors)/sizeof(uint32);
         }                                                                 \
     }
 
+// decoder macro
+
+// #define __DEBUG__
+#ifdef __DEBUG__
+#define VERBOSE 5
+#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
+#else
+#define VERBOSE 0
+#define CUDA_PRINTF(format,...)
+#endif
+
+// #define MEMADVISE // used after Pascal, details: 
+// http:// mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf
+
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 
 // decode & encode function of tok address, used in host & device
 // pack frame & index into uint64 as the address of a tok
-#define ENCODE_TOK_IDX_PAIR(frame,idx) (((uint64)(frame)<<32)+(idx)) 
-// get frame & index in the per-frame vector of a tok address packed in uint64   
+#define ENCODE_TOK_IDX_PAIR(frame,idx) (((uint64)(frame)<<32)+(idx))
+// get frame & index in the per-frame vector of a tok address packed in uint64
 #define DECODE_TOK_IDX_PAIR(frame,idx,v) { \
     frame=(((uint64)v)>>32); \
     idx=(((uint64)v)&(((uint64)1<<32)-1)); \
@@ -103,10 +109,9 @@ namespace kaldi {
 
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 // No stream priorities
-
-// Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 DEVICE void __grid_sync_nv_internal(int32 *barrier);
 
+// WFST struct designed for GPU memory
 class CudaFst {
   public:
     typedef fst::StdArc StdArc;
@@ -114,46 +119,45 @@ class CudaFst {
     typedef BaseFloat CostType;
     typedef StdArc::Weight StdWeight;
     typedef StdArc::Label Label;
-    
+
     CudaFst() {};
-    void initialize(const fst::Fst<StdArc> &fst);
-    void finalize();
+    void Initialize(const fst::Fst<StdArc> &fst);
+    void Finalize();
 
     uint32 NumStates() const {  return numStates; }
     uint32 NumArcs() const {  return numArcs; }
-    StateId Start() const { return start; }    
+    StateId Start() const { return start; }
     HOST DEVICE BaseFloat Final(StateId state) const;
     size_t GetCudaMallocBytes() const { return bytes_cudaMalloc; }
-  
-    uint32 numStates;               //total number of states
-    uint32 numArcs;               //total number of states
+
+    uint32 numStates;               // total number of states
+    uint32 numArcs;               // total number of states
     StateId  start;
 
-    uint32 max_ilabel;              //the largest ilabel
-    uint32 e_count, ne_count, arc_count;       //number of emitting and non-emitting states
-  
-    //This data structure is similar to a CSR matrix format 
-    //where I have 2 matrices (one emitting one non-emitting).
- 
-    //Offset arrays are numStates+1 in size. 
-    //Arc values for state i are stored in the range of [i,i+1)
-    //size numStates+1
-    uint32 *e_offsets_h,*e_offsets_d;               //Emitting offset arrays 
-    uint32 *ne_offsets_h, *ne_offsets_d;            //Non-emitting offset arrays
- 
-    //These are the values for each arc. Arcs belonging to state i are found in the range of [offsets[i], offsets[i+1]) 
-    //non-zeros (Size arc_count+1)
+    uint32 max_ilabel;              // the largest ilabel
+    uint32 e_count, ne_count,
+           arc_count;       // number of emitting and non-emitting states
+
+    // This data structure have 2 matrices (one emitting one non-emitting).
+    // Offset arrays are numStates+1 in size.
+    // Arc values for state i are stored in the range of [i,i+1)
+    // size numStates+1
+    uint32 *e_offsets_h, *e_offsets_d;              // Emitting offset arrays
+    uint32 *ne_offsets_h, *ne_offsets_d;            // Non-emitting offset arrays
+
+    // These are the values for each arc. Arcs belonging to state i are found 
+    // in the range of [offsets[i], offsets[i+1]) (Size arc_count+1)
     BaseFloat *arc_weights_h, *arc_weights_d;
     StateId *arc_nextstates_h, *arc_nextstates_d;
     int32 *arc_ilabels_h, *arc_ilabels_d, *arc_olabels_d;
     int32 *arc_olabels_h;
 
-    //final costs
+    // final costs
     BaseFloat *final_h, *final_d;
-    //allocation size
+    // allocation size
     size_t bytes_cudaMalloc;
 };
 
-} // end namespace kaldi.
+} //  end namespace kaldi.
 
 #endif

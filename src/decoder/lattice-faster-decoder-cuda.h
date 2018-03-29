@@ -43,33 +43,37 @@ class LatticeFasterDecoderCuda {
   typedef CudaLatticeDecoder::TokenMergeVector cuTokenVector;
   typedef CudaLatticeDecoder::TokenState TokenState;
   typedef CudaLatticeDecoder::LatLink LatLink;
+
   // instantiate this class once for each thing you have to decode.
   LatticeFasterDecoderCuda(const CudaFst &fst,
-                       const CudaLatticeDecoderConfig &config);
-
+                           const CudaLatticeDecoderConfig &config);
   // This version of the initializer "takes ownership" of the fst,
   // and will delete it when this object is destroyed.
 
   ~LatticeFasterDecoderCuda();
-  const CudaLatticeDecoderConfig&GetOptions() const {
+
+  void InitDecoding(); // CPU decoding init
+
+  const CudaLatticeDecoderConfig& GetOptions() const {
     return config_;
   }
-
+  const CudaLatticeDecoder &Decoder() const { return decoder_; }
 
   /// Decodes until there are no more frames left in the "decodable" object..
   /// note, this may block waiting for input if the "decodable" object blocks.
   /// Returns true if any kind of traceback is available (not necessarily from a
   /// final state).
-  const CudaLatticeDecoder &Decoder() const { return decoder_; }
+  // the main procedure is done in GPU
   bool Decode(DecodableInterface *decodable);
-  void PrintTime();
-  void InitDecoding();
+
+  // the same to the version in lattice-faster-decoder.h
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
   bool ReachedFinal() const {
     return FinalRelativeCost() != std::numeric_limits<BaseFloat>::infinity();
   }
 
+  // the same to the version in lattice-faster-decoder.h
   /// Outputs an FST corresponding to the single best path through the lattice.
   /// Returns true if result is nonempty (using the return status is deprecated,
   /// it will become void).  If "use_final_probs" is true AND we reached the
@@ -79,6 +83,7 @@ class LatticeFasterDecoderCuda {
   bool GetBestPath(Lattice *ofst,
                    bool use_final_probs = true) const;
 
+  // the same to the version in lattice-faster-decoder.h
   /// Outputs an FST corresponding to the raw, state-level
   /// tracebacks.  Returns true if result is nonempty.
   /// If "use_final_probs" is true AND we reached the final-state
@@ -88,7 +93,7 @@ class LatticeFasterDecoderCuda {
   bool GetRawLattice(Lattice *ofst,
                      bool use_final_probs = true) const;
 
-
+  // the same to the version in lattice-faster-decoder.h
   /// [Deprecated, users should now use GetRawLattice and determinize it
   /// themselves, e.g. using DeterminizeLatticePhonePrunedWrapper].
   /// Outputs an FST corresponding to the lattice-determinized
@@ -99,7 +104,7 @@ class LatticeFasterDecoderCuda {
   bool GetLattice(CompactLattice *ofst,
                   bool use_final_probs = true) const;
 
-
+  // the same to the version in lattice-faster-decoder.h
   /// FinalRelativeCost() serves the same purpose as ReachedFinal(), but gives
   /// more information.  It returns the difference between the best (final-cost
   /// plus cost) of any token on the final frame, and the best cost of any token
@@ -110,16 +115,18 @@ class LatticeFasterDecoderCuda {
   /// reasonable likelihood.
   BaseFloat FinalRelativeCost() const;
 
-
+  // the same to the version in lattice-faster-decoder.h
   // Returns the number of frames decoded so far.  The value returned changes
   // whenever we call ProcessEmitting().
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
 
  private:
+
+  // Token and ForwardLink are the same to CPU decoder in lattice-faster-decoder.h
+
   // ForwardLinks are the links from a token to a token on the next frame.
   // or sometimes on the current frame (for input-epsilon links).
   struct Token;
-  typedef std::unordered_map<cuToken* , Token *> TokenMap;
   struct ForwardLink {
     Token *next_tok; // the next token [or NULL if represents final-state]
     Label ilabel; // ilabel on link.
@@ -127,13 +134,13 @@ class LatticeFasterDecoderCuda {
     BaseFloat graph_cost; // graph cost of traversing link (contains LM, etc.)
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     ForwardLink *next; // next in singly-linked list of forward links from a
-                       // token.
+    // token.
     inline ForwardLink(Token *next_tok, Label ilabel, Label olabel,
                        BaseFloat graph_cost, BaseFloat acoustic_cost,
                        ForwardLink *next):
-        next_tok(next_tok), ilabel(ilabel), olabel(olabel),
-        graph_cost(graph_cost), acoustic_cost(acoustic_cost),
-        next(next) { }
+      next_tok(next_tok), ilabel(ilabel), olabel(olabel),
+      graph_cost(graph_cost), acoustic_cost(acoustic_cost),
+      next(next) { }
   };
 
   // Token is what's resident in a particular state at a particular time.
@@ -152,7 +159,7 @@ class LatticeFasterDecoderCuda {
 
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
                  Token *next):
-        tot_cost(tot_cost), extra_cost(extra_cost), links(links), next(next) { }
+      tot_cost(tot_cost), extra_cost(extra_cost), links(links), next(next) { }
     inline void DeleteForwardLinks() {
       ForwardLink *l = links, *m;
       while (l != NULL) {
@@ -171,17 +178,39 @@ class LatticeFasterDecoderCuda {
     bool must_prune_forward_links;
     bool must_prune_tokens;
     TokenList(): toks(NULL), must_prune_forward_links(true),
-                 must_prune_tokens(true) { }
+      must_prune_tokens(true) { }
   };
-
   typedef HashList<StateId, Token*>::Elem Elem;
-  void FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf, 
-  int* toks_sidx, LatLink* arcs_buf, int* arcs_size, int32 proc_frame);
+
+
+  // a map from packed uint64 to the corresponding CPU Token address
   inline Token* ActiveToksMap(void*) const;
+
+  // a map from (frame, idx) pair to the corresponding CPU Token address
+  // in both CPU & GPU, We use frame index t and vector index i to trace a node
   inline Token* ActiveToksMap(int32 frame, int32 i) const;
+
+  // create a CPU token based on a GPU token, link it into the linked list
+  inline bool CreateAndLinkTok(BaseFloat cost, Token *&toks, Token* newtok,
+                               bool last);
+
+  // iteration on lattice arcs transfered from GPU, link the prev lattice node
+  // and next lattice node recorded in the arc; after that, unlinked nodes
+  // are implicitly pruned
+  int32 AddLatticeArcs(int32 proc_frame);
+
+  // final process lattice in CPU
+  void FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf,
+                           int* toks_sidx, LatLink* arcs_buf, int* arcs_size, 
+                           int32 proc_frame);
+
+  // the same to the version in lattice-faster-decoder.h
+  // FinalizeDecoding() is a version of PruneActiveTokens that we call
+  // (optionally) on the final frame.  Takes into account the final-prob of
+  // tokens.  This function used to be called PruneActiveTokensFinal().
   void FinalizeDecoding();
 
-
+  // the same to the version in lattice-faster-decoder.h
   // prunes outgoing links for all tokens in active_toks_[frame]
   // it's called by PruneActiveTokens
   // all links, that have link_extra_cost > lattice_beam are pruned
@@ -194,42 +223,29 @@ class LatticeFasterDecoderCuda {
   void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
                          bool *links_pruned,
                          BaseFloat delta);
-  bool CreateTokAndRegister(BaseFloat cost, Token *&toks, Token* newtok, bool last);
-  int32 AddLatticeArcs(int32 proc_frame);
 
-
-  // This function computes the final-costs for tokens active on the final
-  // frame.  It outputs to final-costs, if non-NULL, a map from the Token*
-  // pointer to the final-prob of the corresponding state, for all Tokens
-  // that correspond to states that have final-probs.  This map will be
-  // empty if there were no final-probs.  It outputs to
-  // final_relative_cost, if non-NULL, the difference between the best
-  // forward-cost including the final-prob cost, and the best forward-cost
-  // without including the final-prob cost (this will usually be positive), or
-  // infinity if there were no final-probs.  [c.f. FinalRelativeCost(), which
-  // outputs this quanitity].  It outputs to final_best_cost, if
-  // non-NULL, the lowest for any token t active on the final frame, of
-  // forward-cost[t] + final-cost[t], where final-cost[t] is the final-cost in
-  // the graph of the state corresponding to token t, or the best of
-  // forward-cost[t] if there were no final-probs active on the final frame.
-  // You cannot call this after FinalizeDecoding() has been called; in that
-  // case you should get the answer from class-member variables.
+  // slightly different from the version in lattice-faster-decoder.h:
+  // the iteration of last frame tokens is applied on GPU version TokenState
+  // and it is transfered to CPU
+  // details of the algorithm can be referred to lattice-faster-decoder.h:
   void ComputeFinalCosts(unordered_map<Token*, BaseFloat> *final_costs,
                          BaseFloat *final_relative_cost,
                          BaseFloat *final_best_cost) const;
 
+  // the same to the version in lattice-faster-decoder.h
   // PruneForwardLinksFinal is a version of PruneForwardLinks that we call
   // on the final frame.  If there are final tokens active, it uses
   // the final-probs for pruning, otherwise it treats all tokens as final.
   void PruneForwardLinksFinal();
 
+  // the same to the version in lattice-faster-decoder.h
   // Prune away any tokens on this frame that have no forward links.
   // [we don't do this in PruneForwardLinks because it would give us
   // a problem with dangling pointers].
   // It's called by PruneActiveTokens if any forward links have been pruned
   void PruneTokensForFrame(int32 frame_plus_one);
 
-
+  // the same to the version in lattice-faster-decoder.h
   // Go backwards through still-alive tokens, pruning them if the
   // forward+backward cost is more than lat_beam away from the best path.  It's
   // possible to prove that this is "correct" in the sense that we won't lose
@@ -239,48 +255,7 @@ class LatticeFasterDecoderCuda {
   // less far.
   void PruneActiveTokens(BaseFloat delta);
 
-  std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
-  // frame (members of TokenList are toks, must_prune_forward_links,
-  // must_prune_tokens).
-  std::vector<StateId> queue_;  // temp variable used in ProcessNonemitting,
-
-  // make it class member to avoid internal new/delete.
-  const CudaFst& fst_;
-  bool delete_fst_;
-  std::vector<BaseFloat> cost_offsets_; // This contains, for each
-  // frame, an offset that was added to the acoustic log-likelihoods on that
-  // frame in order to keep everything in a nice dynamic range i.e.  close to
-  // zero, to reduce roundoff errors.
-  bool warned_;
-
-  /// decoding_finalized_ is true if someone called FinalizeDecoding().  [note,
-  /// calling this is optional].  If true, it's forbidden to decode more.  Also,
-  /// if this is set, then the output of ComputeFinalCosts() is in the next
-  /// three variables.  The reason we need to do this is that after
-  /// FinalizeDecoding() calls PruneTokensForFrame() for the final frame, some
-  /// of the tokens on the last frame are freed, so we free the list from toks_
-  /// to avoid having dangling pointers hanging around.
-  bool decoding_finalized_;
-  /// For the meaning of the next 3 variables, see the comment for
-  /// decoding_finalized_ above., and ComputeFinalCosts().
-  unordered_map<Token*, BaseFloat> final_costs_;
-  BaseFloat final_relative_cost_;
-  BaseFloat final_best_cost_;
-
-  const CudaLatticeDecoderConfig &config_;
-  int32 num_toks_; // current total #toks allocated...
-  CudaLatticeDecoder decoder_;
-  int32 num_frames_decoded_;
-  cuTokenVector* pprev_toks_;
-  int* pprev_toks_size_;
-  ForwardLink* pprev_arcs_;  
-  std::vector<Token*> active_tok_frames_;
-  std::vector<int> active_tok_size_frames_;
-  std::vector<ForwardLink*> active_arc_frames_;
-  std::vector<int> active_arc_size_frames_;
-  Token* toks_buf_; //as GPU is so fast, we have to need this
-  int32 toks_buf_used_;
-
+  // the same to the version in lattice-faster-decoder.h
   // There are various cleanup tasks... the the toks_ structure contains
   // singly linked lists of Token pointers, where Elem is the list type.
   // It also indexes them in a hash, indexed by state (this hash is only
@@ -294,6 +269,7 @@ class LatticeFasterDecoderCuda {
   // using the "next" pointer.  We delete them manually.
   void DeleteElems(Elem *list);
 
+  // the same to the version in lattice-faster-decoder.h
   // This function takes a singly linked list of tokens for a single frame, and
   // outputs a list of them in topological order (it will crash if no such order
   // can be found, which will typically be due to decoding graphs with epsilon
@@ -303,7 +279,59 @@ class LatticeFasterDecoderCuda {
   static void TopSortTokens(Token *tok_list,
                             std::vector<Token*> *topsorted_list);
 
+  // different from the version in lattice-faster-decoder.h:
+  // as we pre-allocate all the token memory, we do not really clear them
   void ClearActiveTokens();
+
+ private:
+  const CudaFst& fst_;
+  bool delete_fst_;
+
+  CudaLatticeDecoder decoder_; // GPU decoder
+  const CudaLatticeDecoderConfig &config_;
+  int32 num_toks_; // current total number of toks allocated
+  int32 num_frames_decoded_;
+
+  // the TokenState of the last frame, used in ComputeFinalCosts()
+  cuTokenVector* last_toks_;
+  // used to index tokens by (frame, index), see ActiveToksMap() for details
+  std::vector<Token*> active_toks_perframe_;
+  std::vector<int> active_toks_size_perframe_; // size of toks in each frame
+  // used to index arcs by (frame, index), see AddLatticeArcs() for details
+  std::vector<ForwardLink*> active_arcs_perframe_;
+  std::vector<int> active_arcs_size_perframe_; // size of arcs in each frame
+  Token* toks_buf_; //as GPU is so fast, we need to pre-allocate toks
+  int32 toks_buf_used_;
+
+  // below definitions are the same to lattice-faster-decoder.h
+
+  bool warned_;
+  std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
+  // frame (members of TokenList are toks, must_prune_forward_links,
+  // must_prune_tokens).
+  std::vector<StateId> queue_;  // temp variable used in ProcessNonemitting,
+
+  // make it class member to avoid internal new/delete.
+
+  std::vector<BaseFloat> cost_offsets_; // This contains, for each
+  // frame, an offset that was added to the acoustic log-likelihoods on that
+  // frame in order to keep everything in a nice dynamic range i.e.  close to
+  // zero, to reduce roundoff errors.
+
+  /// decoding_finalized_ is true if someone called FinalizeDecoding().  [note,
+  /// calling this is optional].  If true, it's forbidden to decode more.  Also,
+  /// if this is set, then the output of ComputeFinalCosts() is in the next
+  /// three variables.  The reason we need to do this is that after
+  /// FinalizeDecoding() calls PruneTokensForFrame() for the final frame, some
+  /// of the tokens on the last frame are freed, so we free the list from toks_
+  /// to avoid having dangling pointers hanging around.
+  bool decoding_finalized_;
+
+  /// For the meaning of the next 3 variables, see the comment for
+  /// decoding_finalized_ above., and ComputeFinalCosts().
+  unordered_map<Token*, BaseFloat> final_costs_;
+  BaseFloat final_relative_cost_;
+  BaseFloat final_best_cost_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeFasterDecoderCuda);
 };
