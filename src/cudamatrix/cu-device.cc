@@ -95,6 +95,7 @@ static bool GetCudaContext(int32 num_gpus, std::string *debug_str) {
  *
  */
 void CuDevice::SelectGpuId(std::string use_gpu) {
+#if 0
 //quick and dirty hack to get one context per device.  This should not be commited to tree.
    CUdevice device;
    cuDeviceGet(&device,0);
@@ -102,7 +103,7 @@ void CuDevice::SelectGpuId(std::string use_gpu) {
    cuCtxCreate(&ctx, 0, device);
    cuCtxSetCurrent(ctx);
    FinalizeActiveGpu();
-#if 0
+#else
   // Possible modes
   if (use_gpu != "yes" && use_gpu != "no" && use_gpu != "optional" && use_gpu != "wait") {
     KALDI_ERR << "Please choose : --use-gpu=yes|no|optional|wait, passed '" << use_gpu << "'";
