@@ -56,7 +56,7 @@ template HOST DEVICE uint32  CudaVector<LatLink>::Size() const;
 // cost and the arc index into an uint64 to represent the token
 // before recombination, with the former one in the higher bits
 // for comparison purpose.
-inline DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
+inline DEVICE uint64 (BaseFloat cost, int32 idx) {
   //assert (!isnan(cost));
   //assert (idx >= 0 && idx < 1L<<32);
   uint32 i_cost = *(uint32 *) & cost;
@@ -215,6 +215,7 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params& params,
 
 template<int32 blockDimx, int32 blockDimy>
 inline DEVICE void find_best_cutoff(processTokens_params params) {
+  // blockDim threads per token to process out-arcs in parallel
   auto group = cooperative_groups::tiled_partition<blockDimx>
                (cooperative_groups::this_thread_block());
   CostType local_cutoff = INFINITY;
@@ -222,42 +223,35 @@ inline DEVICE void find_best_cutoff(processTokens_params params) {
 
   // uses dynamically load balanced loop trips.  Tokens are assigned 
   // dynamically instead of statically. details are described in 
-  // processEmittingTokens_function()
+  // process_emitting_tokens()
   while (true) {
     int32 i;
-    if (group.thread_rank() == 0) { //thread 0 nominated to get new token
-      i = atomicAdd(params.fb_idx, 1);   //get token index
+    if (group.thread_rank() == 0) { // thread 0 nominated to get new token
+      i = atomicAdd(params.fb_idx, 1); //  allocate new token index
     }
-    i = group.shfl(i, 0);        //broadcast token index
-    //i=__shfl_sync(0xffffffff,i,0);
-    if (i >= size) break; //Work complete
+    i = group.shfl(i, 0); // rank 0 broadcasts i to whole group
+    if (i >= size) break; //  all tokens processed
 
     TokenState ts = params.prev_toks[i];
     Token * tok = ts.token;
     StateId state = ts.state;
-
     uint32 start = params.e_offsets[state], finish = params.e_offsets[state + 1];
-
     int32 ilabel, ilabel_next;
-
     int32 j = start + group.thread_rank();
-
     if (j < finish) {
       ilabel_next = params.arc_ilabels[j];
     }
     int32 nextj;
 
-    for (j; j < finish; j = nextj) {
+    for (j; j < finish; j = nextj) {  // thread parallelism
       nextj = j + blockDimx;
       ilabel = ilabel_next;
       if (nextj < finish) {
         ilabel_next = params.arc_ilabels[nextj];
       }
 
-      BaseFloat acoustic_cost =
-        -params.loglikelihoods[ilabel]; //TODO can I prefetch this?
+      BaseFloat acoustic_cost = -params.loglikelihoods[ilabel]; 
       CostType weight = params.arc_weights[j];
-
       CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
 
       if (total_cost < local_cutoff)
@@ -265,76 +259,70 @@ inline DEVICE void find_best_cutoff(processTokens_params params) {
     }
   }
 
-  //TODO reduce inside block first?
+  // TODO: reduce inside block first
   if (local_cutoff != INFINITY) {
     atomic_min(params.cutoff, local_cutoff);
   }
 }
 
-
-//blockDim.x threads per token
 template<int32 blockDimx, int32 blockDimy>
-inline DEVICE void processEmittingTokens_function(processTokens_params& params) {
+inline DEVICE void process_emitting_tokens(processTokens_params& params) {
+  // blockDim threads per token to process out-arcs in parallel
   auto group = cooperative_groups::tiled_partition<blockDimx>
                (cooperative_groups::this_thread_block());
-
   CostType cutoff = *params.cutoff;
   int32 size = params.prev_toks.Size();
-  // We use a dispatcher in charge of
-  // global scheduling, and make N threads as a group (N = 32)
-  // to process all arcs from a single token. When the token is
-  // processed, the group requests from the dispatcher a new token.
-  // We implement task dispatching as an atomic operation. 
+  
   while (true) {
     int32 i;
+    // We use a dispatcher in charge of
+    // global scheduling, and make N threads as a group (N = 32)
+    // to process all arcs from a single token. When the token is
+    // processed, the group requests from the dispatcher a new token.
+    // We implement task dispatching as an atomic operation. 
     if (group.thread_rank() == 0) { //thread 0 nominated to get new token
-      i = atomicAdd(params.pe_idx, 1);   //get token index
+      i = atomicAdd(params.pe_idx, 1); //  allocate new token index
     }
-    i = group.shfl(i, 0);        //broadcast token index
-    //i=__shfl_sync(0xffffffff,i,0);
-    if (i >= size) break;
+    i = group.shfl(i, 0); // rank 0 broadcasts i to whole group
+    if (i >= size) break; // finish processing all tokens
 
     TokenState& ts = params.prev_toks[i];
     Token * tok = ts.token;
     StateId state = ts.state;
-
     uint32 start = params.e_offsets[state], finish = params.e_offsets[state + 1];
-    int32 ilabel, ilabel_next;  //prefetch ilabel since it leads to a dependent load
-
+    int32 ilabel, ilabel_next;  // prefetch ilabel since it leads to a dependent load
     int32 j = start + group.thread_rank();
-
     if (j < finish) {
       ilabel_next = params.arc_ilabels[j];
     }
     int32 nextj;
 
-    for (j; j < finish; j = nextj) {
+    for (j; j < finish; j = nextj) { // thread parallelism
       nextj = j + blockDimx;
-
       ilabel = ilabel_next;
 
       if (nextj < finish) {
-        ilabel_next =
-          params.arc_ilabels[nextj];//prefetch ilabel since it leads to a dependent load
+        // prefetch ilabel since it leads to a dependent load
+        ilabel_next = params.arc_ilabels[nextj];
       }
-      BaseFloat acoustic_cost =
-        -params.loglikelihoods[ilabel];  //TODO can I prefetch this?
+      BaseFloat acoustic_cost = -params.loglikelihoods[ilabel]; 
       BaseFloat weight = params.arc_weights[j];
       StateId nextstate = params.arc_nextstates[j];
-
       CostType total_cost = tok->cost_ + weight + acoustic_cost;
 
-      if (total_cost <= cutoff) {
+      if (total_cost <= cutoff) { // not prune out
         uint64* token_pack;
         TokenState *next_ts = NULL;
-        //get cur_tok&token_pack addr
+        // get cur_tok&token_pack addr
         Token *cur_tok = find_or_add_token_arc(params, nextstate, total_cost,
-                                           acoustic_cost, &ts, j, true,
-                                           &next_ts, &token_pack, params.token_per_arc_update + j);
-        //get cur_te&new_token_pack
+                          acoustic_cost, &ts, j, true, &next_ts, &token_pack,
+                          params.token_per_arc_update + j);
+        // 1st stage of 2-pass atomic token recombination
+        // get cur_te&new_token_pack here
+        // details in the definition of pack_cost_idx_into_uint64()
         uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, j);
         uint64 ret = atomicMax((unsigned long long *)token_pack,
-                                 (unsigned long long)new_token_pack);
+                               (unsigned long long)new_token_pack);
         if (ret < new_token_pack) {
           Token* cur_te = params.token_per_arc + j;
           cuda_store16(cur_te, &(Token(acoustic_cost + weight, params.frame, tok)));
@@ -343,49 +331,61 @@ inline DEVICE void processEmittingTokens_function(processTokens_params& params) 
       } //end total_cost<=cutoff
     } //end arc loop
   } //end token loop
-  __grid_sync_nv_internal(params.barrier);
-  params.cur_toks.StoreDataByPackIdx(params.token_per_arc,
-                                       params.token_per_arc_update, params.numArcs);
+  __grid_sync_nv_internal(params.barrier); // after finishing all tokens 
+  // 2nd stage of 2-pass atomic token recombination
+  params.cur_toks.StoreDataByPackIdx(params.token_per_arc, 
+                                     params.token_per_arc_update, params.numArcs);
 }
 
 template<int32 blockDimx, int32 blockDimy>
-DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params
+DEVICE __inline__ void process_nonemitting_tokens(processTokens_params
     &params, CostType cutoff, uint32 size,  volatile int32 *modified,
     bool aggregate = false) {
   assert(size);
+  // blockDim threads per token to process out-arcs in parallel
   auto group = cooperative_groups::tiled_partition<blockDimx>
                (cooperative_groups::this_thread_block());
+
+  // as we can't use linked list in GPU, a naive implementation is processing 
+  // all tokens in each iteration. We propose a better method by firstly doing 
+  // an aggregation of the Tokens updated in last iteration. After that,
+  // processing non-emitting tokens is only conducted on these aggregated
+  // tokens. For the first time to run into this iteration, all tokens are
+  // updated by process_emitting_tokens(), so we don't need to do aggregation
+  // TODO: reduce number of iterations in processing non-emitting tokens
   int* agg_tok_idx = params.agg_idx; // need to make it 0 before enter this func
   int* cur_tok_idx = params.ne_idx; // need to make it 0 before enter this func
   int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
-  if (aggregate) {
+  if (aggregate) {  // aggregation stage
     for (tid; tid < size; tid += blockDim.x * gridDim.x) {
       if (params.cur_toks.IsUpdated(tid)) {
-        int32 i = atomicAdd(agg_tok_idx,
-                            1);   //get changed token index for faster NE proc
+        int32 i = atomicAdd(agg_tok_idx, 1);   
+        //get updated token index for faster processing non-emitting tokens
         if (i >= size) break;
         params.ne_queue[i] = tid;
       }
     }
-    __grid_sync_nv_internal(params.barrier); // if we use more modified, we can reduce more grid sync, but will make the program complexer
+    __grid_sync_nv_internal(params.barrier); 
   }
   if (params.verbose > 3 && threadIdx.x == 0
       && blockIdx.x == 0) CUDA_PRINTF("PNE: %i %i %i\n", params.frame,
                                         params.cur_toks.Size(), *agg_tok_idx);
-  //uses dynamically load balanced loop trips.  Tokens are assigned dynamically instead of statically
+  
   while (true) {
     int32 i, j;
+    // uses dynamically load balanced loop trips. 
+    // details are described in process_emitting_tokens()
     if (group.thread_rank() == 0) { //thread 0 nominated to get new token
       if (aggregate) {
-        j = atomicAdd(cur_tok_idx, 1);   //get token index
-        if (j >= *agg_tok_idx) i = size; // to exit
+        j = atomicAdd(cur_tok_idx, 1); // allocate new token index
+        if (j >= *agg_tok_idx) i = size; // to finish
         else i = params.ne_queue[j];
       } else {
-        i = atomicAdd(cur_tok_idx, 1);   //get token index
+        i = atomicAdd(cur_tok_idx, 1); 
       }
     }
-    i = group.shfl(i, 0);        //broadcast token index
-    if (i >= size) break; //TODO: optimize this to reduce iteration
+    i = group.shfl(i, 0); // rank 0 broadcasts i to whole group
+    if (i >= size) break; 
 
     TokenState& ts = params.cur_toks[i];
     Token * tok = ts.token;
@@ -395,20 +395,17 @@ DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params
     for (int32 j = start + group.thread_rank(); j < finish; j += blockDimx) {
       BaseFloat weight = params.arc_weights[j];
       StateId nextstate = params.arc_nextstates[j];
-
       Token next_tok = Token(weight, params.frame, tok);
-
       CostType total_cost = tok->cost_ + weight;
 
-      if (params.verbose > 4) CUDA_PRINTF("D: %i %i %i %i %i \n", threadIdx.x,
-                                            threadIdx.y, j, blockIdx.x, i);
+      // 2-pass atomic based token recombination
+      // details described in process_emitting_tokens()
       if (next_tok.cost_ <= cutoff) {
         TokenState *next_ts = NULL;
         uint64* token_pack;
         Token *cur_tok = find_or_add_token_arc(params, nextstate, total_cost,
-                                           0, &ts, j, true, &next_ts,
-                                           &token_pack, params.token_per_arc_update + j);
-
+                                        0, &ts, j, true, &next_ts, &token_pack, 
+                                        params.token_per_arc_update + j);
         uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, j);
         uint64 ret = atomicMax((unsigned long long *)token_pack,
                                  (unsigned long long)new_token_pack);
@@ -416,110 +413,14 @@ DEVICE __inline__ void processNonEmittingTokens_function(processTokens_params
           Token* cur_te = params.token_per_arc + j;
           cuda_store16(cur_te, &(Token(weight, params.frame, tok)));
           params.token_per_arc_update[j] = 1;
-          (*modified) = true;
+          (*modified) = true; // show that we need another iteration 
         }
       }
     }
-
   }
   __grid_sync_nv_internal(params.barrier);
   params.cur_toks.StoreDataByPackIdx(params.token_per_arc,
-                                       params.token_per_arc_update, params.numArcs);
-}
-
-__launch_bounds__(64, 64)
-__global__ void processTokens_cg(processTokens_params params,
-                                 bool is_init = false) {
-  bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
-
-  if (!is_init) {
-    find_best_cutoff<32, 2>(params);
-    __grid_sync_nv_internal(params.barrier);
-  }
-
-  volatile int32 *modified0 =
-    params.modified;    //modified flag for current iteration
-  volatile int32 *modified1 = params.modified +
-                              1; //modified flag for next/last iteration
-  *modified1 = false;
-  CostType cutoff = *params.cutoff;
-
-  if (!is_init) {
-    processEmittingTokens_function<32, 2>(params);
-    __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
-  }
-
-  int32 tok_E;
-  int32 itv = params.verbose > 2 ? 1 : 10;
-  if (rank0 && params.verbose > 1 && params.frame % itv == 0)
-    tok_E = params.cur_toks.Size();
-
-  int32 cnt = 0;
-  uint32 size = 0;
-  do {
-    size = params.cur_toks.Size();
-    if (rank0) {
-      *params.ne_idx =
-        0;  // need to make it 0 before enter processNonEmittingTokens_function
-      *params.agg_idx =
-        0;  // need to make it 0 before enter processNonEmittingTokens_function
-    }
-    __grid_sync_nv_internal(
-      params.barrier); //wait for everyone to read size and modified0
-
-    //swap buffers
-    cuda_swap(modified0,
-             modified1); //double buffered to avoid extra sync when resetting modified to false, 3% speedup
-    *modified1 = false;
-    cnt++;
-    bool aggregate = (!is_init) && cnt > 1 ? 1 : 0;
-
-    processNonEmittingTokens_function<32, 2>(params, cutoff, size, modified0,
-        aggregate);
-
-    // we have sync in the end of processNonEmittingTokens_function
-    // __grid_sync_nv_internal(params.barrier);  //wait for everyone to finish process tokens and writes modified0
-  } while ((*modified0) == true);
-
-  if (rank0 && params.verbose > 1 && params.frame % itv == 0)
-    CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.Size(),
-                cutoff);
-
-
-  //proc lattice before allocate new toks to TokenState
-  params.lattice_pruner.CollectToksPerFrame(params.cur_toks, params.frame);
-  params.lattice_pruner.CollectArcsPerFrame(params.lat_arcs_sub_vec,
-      params.frame);
-
-
-  __grid_sync_nv_internal(params.barrier);
-
-  allocate_new_tokens(params.current_tokens_lookup, params.cur_toks,
-                             params.token_allocator);
-
-  if (rank0) {
-    //prepare for next iteration
-    //params.prev_toks.Clear(); //change to be done in PreProcessTokens
-    *params.cutoff = INFINITY;
-    *params.fb_idx = 0;
-    *params.pe_idx = 0;
-  }
-  __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
-
-  if (rank0) {
-    params.token_allocator.AdvanceFront(params.cur_toks.Size());
-  }
-}
-
-
-
-__launch_bounds__(64, 64)
-__global__ void cuda_decoder_lat_prune_active_tokens(processTokens_params
-    params) {
-//    auto grid = cooperative_groups::this_grid();
-  params.lattice_pruner.PruneActiveTokens(params.frame, params.lattice_beam,
-                                          params.verbose
-                                         );
+                                     params.token_per_arc_update, params.numArcs);
 }
 
 // end of inline functions
@@ -556,6 +457,97 @@ static void _add_one_token(processTokens_params params, StateId state) {
 //putting this into a kernel to avoid extra latency of a memory copy
 __global__ 
 void _initialize_cutoff(CostType *cutoff) { *cutoff = INFINITY; }
+
+
+__launch_bounds__(64, 64)  
+__global__
+static void _process_tokens(processTokens_params params, bool is_init = false) {
+  bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
+  if (!is_init) { // only do process_nonemitting_tokens() at frame 0
+    find_best_cutoff<32, 2>(params);
+    __grid_sync_nv_internal(params.barrier);
+  }
+
+  //modified flag for current iteration used in process_nonemitting_tokens()
+  volatile int32 *modified0 = params.modified;    
+  //modified flag for next/last iteration
+  volatile int32 *modified1 = params.modified + 1; 
+  *modified1 = false;
+  CostType cutoff = *params.cutoff;
+
+  if (!is_init) { // only do process_nonemitting_tokens() at frame 0
+    process_emitting_tokens<32, 2>(params);
+    __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
+  }
+
+  // debug
+  int32 tok_E;
+  int32 itv = params.verbose > 2 ? 1 : 10;
+  if (rank0 && params.verbose > 1 && params.frame % itv == 0)
+    tok_E = params.cur_toks.Size();
+
+  int32 cnt = 0;
+  uint32 size = 0;
+  do {
+    size = params.cur_toks.Size();
+    if (rank0) {
+      // need to make it 0 before enter process_nonemitting_tokens
+      *params.ne_idx = 0;  
+      // need to make it 0 before enter process_nonemitting_tokens
+      *params.agg_idx = 0;  
+    }
+    //wait for everyone to read size and modified0
+    __grid_sync_nv_internal(params.barrier); 
+
+    // swap buffers: double buffered to avoid extra sync when resetting 
+    // modified to false, 3% speedup
+    // if we use more modified, we can reduce more grid sync, 
+    // but will make the program complexer
+    cuda_swap(modified0, modified1); 
+    *modified1 = false;
+    cnt++;
+    // details of aggregation described in process_nonemitting_tokens()
+    bool aggregate = (!is_init) && cnt > 1 ? 1 : 0;
+    process_nonemitting_tokens<32, 2>(params, cutoff, size, modified0, aggregate);
+    
+    // we have sync in the end of process_nonemitting_tokens
+    // __grid_sync_nv_internal(params.barrier);  
+    // wait for everyone to finish process tokens and writes modified0
+  } while ((*modified0) == true);
+  if (rank0 && params.verbose > 1 && params.frame % itv == 0)
+    CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.Size(),
+                cutoff);
+
+  // process lattice before allocate new toks to TokenState
+  params.lattice_pruner.CollectToksPerFrame(params.cur_toks, params.frame);
+  // accumulatively store lattice arcs
+  params.lattice_pruner.CollectArcsPerFrame(params.lat_arcs_sub_vec,
+      params.frame);
+  __grid_sync_nv_internal(params.barrier); // after process lattice
+
+  allocate_new_tokens(params.current_tokens_lookup, params.cur_toks,
+                             params.token_allocator);
+  if (rank0) {
+    // prepare for next iteration
+    *params.cutoff = INFINITY;
+    *params.fb_idx = 0;
+    *params.pe_idx = 0;
+  }
+  __grid_sync_nv_internal(params.barrier);  //wait for allocation to finish
+
+  if (rank0) {
+    params.token_allocator.AdvanceFront(params.cur_toks.Size());
+  }
+}
+
+__launch_bounds__(64, 64)
+__global__ 
+static void _prune_active_tokens(processTokens_params params) {
+  params.lattice_pruner.PruneActiveTokens(params.frame, params.lattice_beam,
+                                          params.verbose);
+}
+
+// end of cuda __global__ functions
 
 // CudaVector Implementation
 template<typename T>
@@ -1562,7 +1554,7 @@ void CudaLatticeDecoder::ProcessTokens() {
   cudaStreamWaitEvent(stream_comp, event_ll, 0); 
   processTokens_params params;
   InitParams(params);
-  processTokens_cg <<< blocks, threads, 0, stream_comp>>>(params); //doesn't work
+  _process_tokens <<< blocks, threads, 0, stream_comp>>>(params); //doesn't work
   cudaCheckError();
 
   cudaEventSynchronize(event_pt); // wait for last frame to finish
@@ -1582,7 +1574,7 @@ void CudaLatticeDecoder::ProcessNonemitting() {
 
   processTokens_params params;
   InitParams(params);
-  processTokens_cg <<< blocks, threads, 0, stream_comp>>>(params, true);
+  _process_tokens <<< blocks, threads, 0, stream_comp>>>(params, true);
   cudaCheckError();
 
   POP_RANGE
@@ -1626,7 +1618,7 @@ void CudaLatticeDecoder::PruneActiveTokens(cudaStream_t wait_st,
                                       blocks.x << std::endl;
   processTokens_params params;
   InitParams(params);
-  cuda_decoder_lat_prune_active_tokens <<< blocks, threads, 0, run_st>>>(params);
+  _prune_active_tokens <<< blocks, threads, 0, run_st>>>(params);
 }
 
 // Outputs an FST corresponding to the single best path
