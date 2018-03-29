@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     const char *usage =
       "Generate lattices, reading log-likelihoods as matrices\n"
       " (model is needed only for the integer mappings in its transition-model)\n"
-      "Usage: latgen-faster-mapped-cuda [options] trans-model-in
+      "Usage: latgen-faster-mapped-cuda [options] trans-model-in \
       (fst-in|fsts-rspecifier) loglikes-rspecifier"
       " lattice-wspecifier [ words-wspecifier [alignments-wspecifier] ]\n";
     ParseOptions po(usage);
@@ -119,7 +119,7 @@ int main(int argc, char *argv[]) {
 #endif
       // GPU version of WFST
       CudaFst decode_fst_cuda;
-      decode_fst_cuda.initialize(*decode_fst);
+      decode_fst_cuda.Initialize(*decode_fst);
 
       LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
       {
@@ -160,6 +160,7 @@ int main(int argc, char *argv[]) {
           POP_RANGE
         }
       }
+      decode_fst_cuda.Finalize();
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
       KALDI_ERR << "Unimplemented yet. ";

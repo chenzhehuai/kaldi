@@ -137,7 +137,7 @@ int main(int argc, char *argv[]) {
         // Input FST is just one FST, not a table of FSTs.
 
         if (omp_get_thread_num() == 0) {
-          decode_fst_cuda.initialize(*decode_fst);
+          decode_fst_cuda.Initialize(*decode_fst);
         }
         #pragma omp barrier
 
@@ -152,8 +152,8 @@ int main(int argc, char *argv[]) {
                      decoder.Decoder().GetCudaMallocManagedBytes() / 1024.0 / 1024 / 1024 *
                      omp_get_num_threads());
             }
-            nvtxRangePushA("whole decoding");
-            nvtxRangePushA("before_decoding");
+            PUSH_RANGE("whole decoding", 0);
+            PUSH_RANGE("before_decoding", 1);
             if (omp_get_thread_num() == 0) timer.Reset();
             #pragma omp barrier
 
@@ -168,7 +168,7 @@ int main(int argc, char *argv[]) {
 
             DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
 
-            nvtxRangePop();
+            POP_RANGE
 
             double like;
             Lattice lat;
@@ -184,7 +184,7 @@ int main(int argc, char *argv[]) {
             } else num_fail++;
             #pragma omp barrier
             if (omp_get_thread_num() == 0) elapsed += timer.Elapsed();
-            nvtxRangePop();
+            POP_RANGE
             #pragma omp critical
             {
               DecodeUtteranceLatticeFasterCudaOutput(
@@ -199,7 +199,7 @@ int main(int argc, char *argv[]) {
         #pragma omp barrier
       }//omp parallel
       delete decode_fst; // delete this only after decoder goes out of scope.
-      decode_fst_cuda.finalize();
+      decode_fst_cuda.Finalize();
       cudaDeviceSynchronize();
     } else { // We have different FSTs for different utterances.
       KALDI_ERR << "unfinished";
