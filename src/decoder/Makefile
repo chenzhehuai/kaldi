@@ -28,17 +28,17 @@ ADDLIBS = ../lat/kaldi-lat.a ../hmm/kaldi-hmm.a \
           ../matrix/kaldi-matrix.a ../base/kaldi-base.a
 
 cuda-decoder_test.o: cuda-decoder_test.cu
-  $(CUDATKDIR)/bin/nvcc  -G -g -O0 -v -c $(CUDA_ARCH) cuda-decoder_test.cu 
+	$(CUDATKDIR)/bin/nvcc  -G -g -O0 -v -c $(CUDA_ARCH) cuda-decoder_test.cu 
 
 cuda-decoder_test:cuda-decoder_test.o
-  g++ -g -O0 -o cuda-decoder_test $(CUDA_LDFLAGS)  $(CUDA_LDLIBS)  -lcuda cuda-decoder_test.o
+	g++ -g -O0 -o cuda-decoder_test $(CUDA_LDFLAGS)  $(CUDA_LDLIBS)  -lcuda cuda-decoder_test.o
 
 cuda-lattice-decoder_prelink.o: cuda-lattice-decoder.cu cuda-lattice-decoder.h cuda-decoder-utils.h
-  $(CUDATKDIR)/bin/nvcc $< -o $@ $(CUDA_INCLUDE) $(CUDA_FLAGS) $(CUDA_DC_OPTS) 
+	$(CUDATKDIR)/bin/nvcc $< -o $@ $(CUDA_INCLUDE) $(CUDA_FLAGS) $(CUDA_DC_OPTS) 
 cuda-decoder-utils_prelink.o: cuda-decoder-utils.cu cuda-decoder-utils.h
-  $(CUDATKDIR)/bin/nvcc $< -o $@ $(CUDA_INCLUDE) $(CUDA_FLAGS) $(CUDA_DC_OPTS) 
+	$(CUDATKDIR)/bin/nvcc $< -o $@ $(CUDA_INCLUDE) $(CUDA_FLAGS) $(CUDA_DC_OPTS) 
 
 cuda-decoder.o:  cuda-decoder-utils_prelink.o  cuda-lattice-decoder_prelink.o
-  $(CUDATKDIR)/bin/nvcc $^ -o $@ -rdc=true -dlink -Xcompiler "-pthread -fPIC" -v $(CUDAOPTS) 
+	$(CUDATKDIR)/bin/nvcc $^ -o $@ -rdc=true -dlink -Xcompiler "-pthread -fPIC" -v $(CUDAOPTS) 
 
 include ../makefiles/default_rules.mk

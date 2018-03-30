@@ -178,11 +178,11 @@ DEVICE inline void allocate_new_tokens(TokenLookupElem *current_tokens_lookup,
 // or if necessary add a token by activating it in TokenLookupElem
 // for the current frame.  The function also adds a lattice arc into the vector
 // it's a GPU version of FindOrAddToken() and ForwardLink()
-DEVICE inline Token* find_or_add_token_arc(processTokens_params& params,
+DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
           StateId nextstate, CostType total_cost, CostType acoustic_cost,
           TokenState* ts, uint32 j, bool add_arc, TokenState** next_ts,
           uint64 **token_pack, int* update) {
-  TokenLookupElem& lookup_elem = params.current_tokens_lookup[nextstate];
+  TokenLookupElem& lookup_elem = params->current_tokens_lookup[nextstate];
   Token *cur_tok = lookup_elem.token;
   // check if token is active or not.  if not, activate it
   if (lookup_elem.active == 0
@@ -191,24 +191,24 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params& params,
     // if haven't seen this token, add into hash by activating it
     *update = 1;  // if it is newly added, the Token data should be updated
     // push back the TokenState, and also record its index in lookup table
-    lookup_elem.tokenstate_idx = params.cur_toks.PushBack(TokenState(cur_tok,
+    lookup_elem.tokenstate_idx = params->cur_toks.PushBack(TokenState(cur_tok,
                                  nextstate, total_cost),
                                  &lookup_elem.token_pack);
   }
   // need both 2 steps below, to ensure tokenstate_idx recorded correctly
   while (lookup_elem.tokenstate_idx == -1); // hasn't pushed
   __threadfence();
-  *next_ts = &params.cur_toks[lookup_elem.tokenstate_idx]; // get it using index
+  *next_ts = &params->cur_toks[lookup_elem.tokenstate_idx]; // get it using index
   if (add_arc) { // we add lattice arc except in _add_one_token()
     Token *prev_tok = ts->token;
-    int32 ts_id = prev_tok->frame == params.frame ?
-                  params.cur_toks.GetIdxFromAddr(ts) : // process non-emit tokens
-                  params.prev_toks.GetIdxFromAddr(ts); // process emit tokens
+    int32 ts_id = prev_tok->frame == params->frame ?
+                  params->cur_toks.GetIdxFromAddr(ts) : // process non-emit tokens
+                  params->prev_toks.GetIdxFromAddr(ts); // process emit tokens
     LatLink arc = LatLink(ts_id, prev_tok->frame,
-                          lookup_elem.tokenstate_idx, params.frame,
-                          params.arc_ilabels[j], params.arc_olabels[j],
-                          params.arc_weights[j], acoustic_cost); 
-    int32_t lat_arc_idx = params.lat_arcs_sub_vec.PushBack(arc);
+                          lookup_elem.tokenstate_idx, params->frame,
+                          params->arc_ilabels[j], params->arc_olabels[j],
+                          params->arc_weights[j], acoustic_cost); 
+    int32_t lat_arc_idx = params->lat_arcs_sub_vec.PushBack(arc);
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &lookup_elem.token_pack;
@@ -216,12 +216,12 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params& params,
 }
 
 template<int32 blockDimx, int32 blockDimy>
-inline DEVICE void find_best_cutoff(processTokens_params params) {
+inline DEVICE void find_best_cutoff(processTokens_params* params) {
   // blockDim threads per token to process out-arcs in parallel
   auto group = cooperative_groups::tiled_partition<blockDimx>
                (cooperative_groups::this_thread_block());
   CostType local_cutoff = INFINITY;
-  int32 size = params.prev_toks.Size();
+  int32 size = params->prev_toks.Size();
 
   // uses dynamically load balanced loop trips.  Tokens are assigned 
   // dynamically instead of statically. details are described in 
@@ -229,19 +229,19 @@ inline DEVICE void find_best_cutoff(processTokens_params params) {
   while (true) {
     int32 i;
     if (group.thread_rank() == 0) { // thread 0 nominated to get new token
-      i = atomicAdd(params.fb_idx, 1); // allocate new token index
+      i = atomicAdd(params->fb_idx, 1); // allocate new token index
     }
     i = group.shfl(i, 0); // rank 0 broadcasts i to whole group
     if (i >= size) break; // all tokens processed
 
-    TokenState ts = params.prev_toks[i];
+    TokenState ts = params->prev_toks[i];
     Token * tok = ts.token;
     StateId state = ts.state;
-    uint32 start = params.e_offsets[state], finish = params.e_offsets[state + 1];
+    uint32 start = params->e_offsets[state], finish = params->e_offsets[state + 1];
     int32 ilabel, ilabel_next;
     int32 j = start + group.thread_rank();
     if (j < finish) {
-      ilabel_next = params.arc_ilabels[j];
+      ilabel_next = params->arc_ilabels[j];
     }
     int32 nextj;
 
@@ -249,12 +249,12 @@ inline DEVICE void find_best_cutoff(processTokens_params params) {
       nextj = j + blockDimx;
       ilabel = ilabel_next;
       if (nextj < finish) {
-        ilabel_next = params.arc_ilabels[nextj];
+        ilabel_next = params->arc_ilabels[nextj];
       }
 
-      BaseFloat acoustic_cost = -params.loglikelihoods[ilabel]; 
-      CostType weight = params.arc_weights[j];
-      CostType total_cost = tok->cost_ + weight + acoustic_cost + params.beam;
+      BaseFloat acoustic_cost = -params->loglikelihoods[ilabel]; 
+      CostType weight = params->arc_weights[j];
+      CostType total_cost = tok->cost_ + weight + acoustic_cost + params->beam;
 
       if (total_cost < local_cutoff)
         local_cutoff = total_cost;
@@ -263,7 +263,7 @@ inline DEVICE void find_best_cutoff(processTokens_params params) {
 
   // TODO: reduce inside block first
   if (local_cutoff != INFINITY) {
-    atomic_min(params.cutoff, local_cutoff);
+    atomic_min(params->cutoff, local_cutoff);
   }
 }
 
@@ -444,7 +444,7 @@ static void _add_one_token(processTokens_params params, StateId state) {
   uint64* token_pack;
   int32 j = 0;
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
-  Token* cur_tok = find_or_add_token_arc(params, state, 0, // add first token
+  Token* cur_tok = find_or_add_token_arc(&params, state, 0, // add first token
                                      0, NULL, j, false,  &next_ts,
                                      &token_pack, params.token_per_arc_update + j);
   uint64 new_token_pack = pack_cost_idx_into_uint64(0, j);
@@ -467,7 +467,7 @@ __global__
 static void _process_tokens(processTokens_params params, bool is_init = false) {
   bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
   if (!is_init) { // only do process_nonemitting_tokens() at frame 0
-    find_best_cutoff<32, 2>(params);
+    find_best_cutoff<32, 2>(&params);
     __grid_sync_nv_internal(params.barrier);
   }
 
