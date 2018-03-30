@@ -431,7 +431,7 @@ class CudaLatticeDecoder {
   void ComputeLogLikelihoods(DecodableInterface *decodable);
 
   // decoding functions
-  void InitParams(processTokens_params& params);  // parameters for calling GPU
+  void InitParams(processTokens_params* params);  // parameters for calling GPU
   // call InitDecoding if you have already decoded an
   // utterance and want to start with a new utterance. 
   void InitDecoding(); 
