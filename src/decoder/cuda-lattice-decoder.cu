@@ -204,10 +204,9 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
     int32 ts_id = prev_tok->frame == params->frame ?
                   params->cur_toks.GetIdxFromAddr(ts) : // process non-emit tokens
                   params->prev_toks.GetIdxFromAddr(ts); // process emit tokens
-    LatLink arc = LatLink(ts_id, prev_tok->frame,
+    LatLink arc = LatLinkCompact(ts_id, prev_tok->frame,
                           lookup_elem.tokenstate_idx, params->frame,
-                          params->arc_ilabels[j], params->arc_olabels[j],
-                          params->arc_weights[j], acoustic_cost); 
+                          acoustic_cost, j); 
     int32_t lat_arc_idx = params->lat_arcs_sub_vec.PushBack(arc);
   }
   // get token_pack variable address for atomic based token recombination
@@ -914,7 +913,8 @@ void LatticePruner::Initialize() {
 
 int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
                               int32 max_lat_arc_per_frame, int32 prune_interval, 
-                              int32 max_toks, int32 max_arcs) {
+                              int32 max_toks, int32 max_arcs, 
+                              CudaFst& fst) {
   int32 sz;
   int32 bytes_cuda_malloc = 0;
 
@@ -923,9 +923,9 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   cudaMalloc((void**)&toks_bpr_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&toks_bpr_h, sz);
   toks_buf_before_pr_size = sz / sizeof(Token);
-  sz = sizeof(LatLink) * max_arcs;
+  sz = sizeof(LatLinkCompact) * max_arcs;
   cudaMalloc((void**)&arcs_bpr_d, sz); bytes_cuda_malloc += sz;
-  arcs_buf_before_pr_size = sz / sizeof(LatLink);
+  arcs_buf_before_pr_size = max_arcs;
   sz = sizeof(int32) * (prune_interval + 1);
   cudaMalloc((void**)&toks_bpr_fr_sidx_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&toks_bpr_fr_sidx_h, sz);
@@ -953,6 +953,9 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   cudaMalloc((void**)&count_vec_acc_d, sz); bytes_cuda_malloc += sz;
   this->prune_interval = prune_interval;
 
+  arc_ilabels = fst.arc_ilabels_d;
+  arc_olabels = fst.arc_olabels_d; 
+  arc_weights = fst.arc_weights_d;
   return bytes_cuda_malloc;
 }
 void LatticePruner::Free() {
@@ -1052,6 +1055,15 @@ DEVICE int32 LatticePruner::AddArc(LatLink* arc) {
   int32 i = atomicAdd(arcs_apr_used_d, 1);
   cuda_store32(arcs_apr_d + i, arc);
 }
+DEVICE int32 LatticePruner::AddArc(LatLinkCompact* arc, int32 frame) {
+  int32 i = atomicAdd(arcs_apr_used_d, 1);
+  int32 frame_tok = arc->IsEmitArc() ? frame - 1: frame;
+  int32 j = arc->arc_id;
+  LatLink apr_arc(arc->prev_tok_id, frame_tok, arc->next_tok_id, frame,
+            arc_ilabels[j], arc_olabels[j], arc_weights[j], arc->acoustic_cost); 
+  cuda_store32(arcs_apr_d + i, &apr_arc);
+}
+
 
 // Set start index in the buffer of the next frame
 inline DEVICE void LatticePruner::SetNextSidx(int* sidx_buf, int32 size,
@@ -1171,9 +1183,10 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
     for (; tid < size; tid += gridDim.x * blockDim.x) {
-      LatLink* link = GetActiveArc(frame, tid);
-      Token* next_tok = GetActiveToken(link->p1, true, frame);
-      Token* tok = GetActiveToken(link->p2, true, frame);
+      LatLinkCompact* link = GetActiveArc(frame, tid);
+      int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
+      Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
+      Token* tok = GetActiveToken(frame_tok, link->prev_tok_id, true);
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
@@ -1199,16 +1212,17 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
     for (; tid < size; tid += gridDim.x * blockDim.x) {
-      LatLink* link = GetActiveArc(frame, tid);
-      Token* next_tok = GetActiveToken(link->p1, true, frame);
-      Token* tok = GetActiveToken(link->p2, true, frame);
+      LatLinkCompact* link = GetActiveArc(frame, tid);
+      int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
+      Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
+      Token* tok = GetActiveToken(frame_tok, link->prev_tok_id, true);
       BaseFloat link_extra_cost = next_tok->extra_cost +
                                   ((tok->cost_ + link->acoustic_cost + link->graph_cost)
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
         // not pruned out
         if (merge) {
-          AddArc(link);
+          AddArc(link, frame);
           // link->acoustic_cost=CUDART_NAN_F;
           // don't need to delete it in original lattice
         }
@@ -1351,7 +1365,7 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   // for pruning
   bytes_cuda_malloc += lattice_pruner_.Allocate(config.max_tokens_per_frame,
                        config.max_lat_arc_per_frame, config.prune_interval,
-                       config.max_tokens, config.max_arcs);
+                       config.max_tokens, config.max_arcs, fst_);
 
   lat_arcs_buf_.Allocate(config.max_arcs, NULL, NULL, NULL,
                          lattice_pruner_.GetDeviceArcsBpr());
