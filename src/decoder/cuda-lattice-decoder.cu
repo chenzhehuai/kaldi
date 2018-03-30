@@ -1382,6 +1382,7 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   // sgemm requires shared memory and we don't want cache config changing.  
   // So set a device wide cache config.
   cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
+  get_free_memory_stat("After initlization:");
 }
 
 CudaLatticeDecoder::~CudaLatticeDecoder() {
@@ -1520,6 +1521,7 @@ void CudaLatticeDecoder::InitDecoding() {
 
   _initialize_cutoff <<< 1, 1, 0, stream_comp>>>(cutoff_d);
   ProcessNonemitting();
+
   if (config_.verbose > 1 ) KALDI_LOG << "end of CUDA LatticeDecoder InitDecoding\n";
 }
 

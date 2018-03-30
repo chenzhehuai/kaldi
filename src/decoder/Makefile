@@ -14,6 +14,7 @@ OBJFILES +=	cuda-decoder.o cuda-decoder-utils_prelink.o cuda-lattice-decoder_pre
             lattice-faster-decoder-cuda.o
 LDLIBS += -lnvToolsExt -lcudart
 LDFLAGS += $(CUDA_LDFLAGS)
+LDFLAGS += ../cudamatrix/libkaldi-cudamatrix.so
 LDLIBS += $(CUDA_LDLIBS)
 endif
 

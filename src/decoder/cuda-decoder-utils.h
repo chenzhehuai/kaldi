@@ -35,6 +35,7 @@
 
 #include "util/stl-utils.h"
 #include "cudamatrix/cu-common.h"
+#include "cudamatrix/cu-device.h"
 
 // cuda macro
 
@@ -99,6 +100,8 @@ const int32 num_colors = sizeof(colors) / sizeof(uint32);
 
 namespace kaldi {
 
+
+void get_free_memory_stat(char *prefix);
 
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
 // No stream priorities

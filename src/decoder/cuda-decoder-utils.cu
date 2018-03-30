@@ -22,6 +22,23 @@
 
 namespace kaldi {
 
+void get_free_memory_stat(char *prefix) {
+  int32 act_gpu_id;
+  cudaError_t e = cudaGetDevice(&act_gpu_id);
+  char name[128];
+  CuDevice::Instantiate().DeviceGetName(name,128,act_gpu_id);
+  // get GPU memory stats
+  int64 free, total; 
+  std::string mem_stats;
+  mem_stats = CuDevice::Instantiate().GetFreeMemory(&free, &total);
+  float mem_ratio = total > 0 ? free/(float)total : 0;
+  // log
+  KALDI_LOG << prefix << "\tcudaSetDevice(" << act_gpu_id << "): "
+            << name << "\t" << mem_ratio << " % "
+            << "\t" << mem_stats;
+}
+
+
 DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch) {
   __syncthreads();
   if (threadIdx.x == 0) {
