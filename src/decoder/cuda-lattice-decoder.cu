@@ -34,6 +34,7 @@ typedef CudaLatticeDecoder::TokenState TokenState;
 typedef CudaLatticeDecoder::CostType CostType;
 typedef CudaLatticeDecoder::TokenLookupElem TokenLookupElem;
 typedef CudaLatticeDecoder::LatLink LatLink;
+typedef CudaLatticeDecoder::LatLinkCompact LatLinkCompact;
 typedef CudaLatticeDecoder::LatLinkVector LatLinkVector;
 typedef CudaLatticeDecoder::TokenMergeVector TokenMergeVector;
 typedef CudaLatticeDecoder::processTokens_params processTokens_params;
@@ -204,9 +205,9 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
     int32 ts_id = prev_tok->frame == params->frame ?
                   params->cur_toks.GetIdxFromAddr(ts) : // process non-emit tokens
                   params->prev_toks.GetIdxFromAddr(ts); // process emit tokens
-    LatLink arc = LatLinkCompact(ts_id, prev_tok->frame,
-                          lookup_elem.tokenstate_idx, params->frame,
-                          acoustic_cost, j); 
+    LatLinkCompact arc(ts_id, prev_tok->frame,
+                       lookup_elem.tokenstate_idx, params->frame,
+                       acoustic_cost, j); 
     int32_t lat_arc_idx = params->lat_arcs_sub_vec.PushBack(arc);
   }
   // get token_pack variable address for atomic based token recombination
@@ -914,7 +915,7 @@ void LatticePruner::Initialize() {
 int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
                               int32 max_lat_arc_per_frame, int32 prune_interval, 
                               int32 max_toks, int32 max_arcs, 
-                              CudaFst& fst) {
+                              const CudaFst& fst) {
   int32 sz;
   int32 bytes_cuda_malloc = 0;
 
@@ -1085,10 +1086,11 @@ inline DEVICE Token* LatticePruner::GetActiveToken(void* p, bool check,
 
 // Get the active token indexed by a uint64 pair (frame, idx)
 // the details of the pair can be referred to LatLink::LatLink()
-inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id,
+inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id_pack,
     bool check) const {
 
   int32 cur_sidx = toks_bpr_fr_sidx_d[frame];
+  int32 id = id_pack & ((1<<31) - 1);
   assert(cur_sidx + id < toks_buf_before_pr_size);
   Token* tok = toks_bpr_d + cur_sidx + id;
   if (check) {
@@ -1099,10 +1101,10 @@ inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id,
 
 // Get the active arc indexed by a uint64 pair (frame, idx)
 // the vector memory and the start index of each frame are kept in LatticePruner
-inline DEVICE LatLink* LatticePruner::GetActiveArc(int32 frame, int32 id) const {
+inline DEVICE LatLinkCompact* LatticePruner::GetActiveArc(int32 frame, int32 id) const {
   int32 cur_sidx = arcs_bpr_fr_sidx_d[(frame)];
   assert(cur_sidx + id < arcs_buf_before_pr_size);
-  LatLink* arc = arcs_bpr_d + cur_sidx + id;
+  LatLinkCompact* arc = arcs_bpr_d + cur_sidx + id;
   return arc;
 }
 
@@ -1190,7 +1192,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
-                                  ((tok->cost_ + link->acoustic_cost + link->graph_cost)
+                                  ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) { 
         // not prune out
@@ -1217,7 +1219,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
       Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
       Token* tok = GetActiveToken(frame_tok, link->prev_tok_id, true);
       BaseFloat link_extra_cost = next_tok->extra_cost +
-                                  ((tok->cost_ + link->acoustic_cost + link->graph_cost)
+                                  ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
         // not pruned out

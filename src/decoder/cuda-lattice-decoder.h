@@ -228,22 +228,22 @@ class CudaLatticeDecoder {
   };
   class __align__(16) LatLinkCompact {  
    public:
-    int32 next_tok_id;
+    uint32 prev_tok_id;  // a hack to contain both id & whether it is emit arc
+    uint32 next_tok_id;
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
-    int32 prev_tok_id;  // a hack to contain both id & whether it is emit arc
     int32 arc_id;
 
-    HOST DEVICE inline LatLinkCompact(int32 prev_tok_id, int32 prev_tok_fr,     
-                                      int32 next_tok_id, int32 next_tok_fr, 
+    HOST DEVICE inline LatLinkCompact(uint32 prev_tok_id, int32 prev_tok_fr,     
+                                      uint32 next_tok_id, int32 next_tok_fr, 
                                       BaseFloat acoustic_cost, int32 arc_id): 
-        next_tok_id(next_tok_id), prev_tok_id(prev_tok_id), 
+        prev_tok_id(prev_tok_id), next_tok_id(next_tok_id), 
         acoustic_cost(acoustic_cost), arc_id(arc_id) {
-      assert(prev_tok_id < (1<<31));  // we can't cope with that large number
-      int32 is_emit_arc = prev_tok_fr != next_tok_fr;
+      assert(prev_tok_id < ((uint32)1<<31));  // we can't cope with that large number
+      uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
       prev_tok_id |= is_emit_arc<<31; // a hack to save is_emit_arc in prev_tok_id
     }
     HOST DEVICE inline bool IsEmitArc() {
-      return prev_tok_id >= (1<<31);
+      return prev_tok_id >= ((uint32)1<<31);
     }
   };
 
@@ -307,10 +307,10 @@ class CudaLatticeDecoder {
    public:  
     void Initialize();
     int32 Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
-      int32 prune_interval, int32 max_toks, int32 max_arcs, CudaFst& fst);
+      int32 prune_interval, int32 max_toks, int32 max_arcs, const CudaFst& fst);
     void Free();
     // The GPU memory of lattice arcs is shared with LatLinkVector
-    LatLink* GetDeviceArcsBpr() { return arcs_bpr_d; } 
+    LatLinkCompact* GetDeviceArcsBpr() { return arcs_bpr_d; } 
 
     // Entry of lattice pruning until this frame
     inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);    
@@ -329,12 +329,12 @@ class CudaLatticeDecoder {
    private:    
     // #define ENCODE_TOK_IDX_PAIR(frame,idx) (((uint64)(frame)<<32)+(idx))
     inline DEVICE int32 AddArc(LatLink* arc);
-    inline DEVICE int32 AddArc(LatLinkCompact* arc);
+    inline DEVICE int32 AddArc(LatLinkCompact* arc, int32 frame);
     // Set start index in the buffer of the next frame
     inline DEVICE void SetNextSidx(int* sidx_buf, int32 size, int32 frame);
     inline DEVICE Token* GetActiveToken(void* p, bool check=false, int32 frame=-1) const;
     inline DEVICE Token* GetActiveToken(int32 frame, int32 id, bool check=false) const;
-    inline DEVICE LatLink* GetActiveArc(int32 frame, int32 id) const;
+    inline DEVICE LatLinkCompact* GetActiveArc(int32 frame, int32 id) const;
     inline DEVICE int32 GetSize(int* acc_len, int32 frame) const;
     // used in PruneLatticeForFrame()
     inline DEVICE void UpdateModifiedFlags( 
@@ -401,9 +401,9 @@ class CudaLatticeDecoder {
 
     // for AddArc() from LatLinkCompact to LatLink
     // we record all information in LatLink to eliminate CPU memory lookup
-    int32 *arc_ilabels;
-    int32 *arc_olabels; 
-    BaseFloat *arc_weights;
+    const int32 *arc_ilabels;
+    const int32 *arc_olabels; 
+    const BaseFloat *arc_weights;
   };
   
   // structs to hold kernel parameters.  Large numbers of parameters can slow down 
