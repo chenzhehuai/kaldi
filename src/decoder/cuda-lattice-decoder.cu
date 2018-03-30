@@ -479,6 +479,10 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   *modified1 = false;
   CostType cutoff = *params.cutoff;
 
+  if (rank0) {
+    *modified0 = false;
+    *modified1 = false;
+  }
   if (!is_init) { // only do process_nonemitting_tokens() at frame 0
     process_emitting_tokens<32, 2>(params);
     __grid_sync_nv_internal(params.barrier);  // ensure cur_toks size is final
@@ -508,7 +512,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // if we use more modified, we can reduce more grid sync, 
     // but will make the program complexer
     cuda_swap(modified0, modified1); 
-    *modified1 = false;
+    if (rank0) *modified1 = false;
     cnt++;
     // details of aggregation described in process_nonemitting_tokens()
     bool aggregate = (!is_init) && cnt > 1 ? 1 : 0;
@@ -518,7 +522,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // __grid_sync_nv_internal(params.barrier);  
     // wait for everyone to finish process tokens and writes modified0
   } while ((*modified0) == true);
-  if (rank0 && params.verbose > 1 && params.frame % itv == 0)
+  if (rank0 && params.verbose > 0 && params.frame % itv == 0)
     CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.Size(),
                 cutoff);
 

@@ -95,7 +95,7 @@ static bool GetCudaContext(int32 num_gpus, std::string *debug_str) {
  *
  */
 void CuDevice::SelectGpuId(std::string use_gpu) {
-#if 0
+#if 1
 //quick and dirty hack to get one context per device.  This should not be commited to tree.
    CUdevice device;
    cuDeviceGet(&device,0);
