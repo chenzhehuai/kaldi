@@ -16,9 +16,12 @@ TESTFILES =
 
 OBJFILES = training-graph-compiler.o lattice-simple-decoder.o lattice-faster-decoder.o \
            lattice-faster-online-decoder.o simple-decoder.o faster-decoder.o \
-           decoder-wrappers.o \
-           cuda-decoder.o cuda-decoder-utils_prelink.o cuda-lattice-decoder_prelink.o \
-           lattice-faster-decoder-cuda.o
+           decoder-wrappers.o 
+
+ifeq ($(CUDA), true)
+OBJFILES +=	cuda-decoder.o cuda-decoder-utils_prelink.o cuda-lattice-decoder_prelink.o \
+            lattice-faster-decoder-cuda.o
+endif
 
 LIBNAME = kaldi-decoder
 
