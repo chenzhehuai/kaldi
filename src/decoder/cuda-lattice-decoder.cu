@@ -863,6 +863,7 @@ void TokenAllocator::PrefetchNextToDevice(cudaStream_t stream, int32 count) {
     count = size - front;
 
 #ifdef MEMADVISE
+  // it does not work currently, even slower if without MEMADVISE
   cudaMemPrefetchAsync(tokens_allocation + front, sizeof(Token)*count, device,
                        stream);
 #endif
