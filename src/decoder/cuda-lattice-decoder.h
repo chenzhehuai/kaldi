@@ -51,7 +51,7 @@ struct CudaLatticeDecoderConfig {
                        max_lat_tok_per_frame(200000),
                        max_lat_arc_per_frame(600000),
                        max_tokens(10000000),
-                       max_arcs(15000000),
+                       max_arcs(12000000), // 17000000*10 can fill all mem
                        lattice_beam(10.0),
                        beam(16.0),
                        prune_interval(3000),
