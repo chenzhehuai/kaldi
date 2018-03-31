@@ -105,6 +105,7 @@ class CudaLatticeDecoder {
   typedef BaseFloat CostType;
   
   class LatticePruner;
+  class TokenAllocator;
 
   // general cuda vector can be used in both host and device. 
   // page faults need to be paid attention to
@@ -259,9 +260,8 @@ class CudaLatticeDecoder {
     uint64 token_pack; // the real mem is here
     // if learned from TokenLookupElem that this TS is de-active, we need to firstly giving value or reset all the mem of this; thus don't need to call allocate_new_tokens
     
-    HOST DEVICE inline TokenState (StateId state)
-      : tok_idx_allocated(-1), state(state), 
-      token_pack(pack_cost_idx_into_uint64(-FLT_MAX, 0)) { }
+    HOST DEVICE inline TokenState (StateId state);
+
   };
 
   // struct to hold pre-allocated tokens (one per WFST state) for fast lookup
@@ -491,7 +491,6 @@ class CudaLatticeDecoder {
 
   // other functions
   bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
-  bool ReachedFinal() const;
   inline size_t GetCudaMallocBytes() const { return bytes_cuda_malloc; } 
   inline size_t GetCudaMallocManagedBytes() const { return bytes_cuda_malloc_managed;  }
 

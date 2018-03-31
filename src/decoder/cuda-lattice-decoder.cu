@@ -49,7 +49,8 @@ template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32 idx);
 template HOST DEVICE uint32  CudaVector<TokenState>::Size() const;
 template HOST DEVICE uint32  CudaVector<LatLink>::Size() const;
 template<> DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
-  void* temp_data_buf, int* temp_data_buf_update, int32 buf_size);
+  void* temp_data_buf, int* temp_data_buf_update, int32 buf_size,
+  TokenAllocator * token_allocator);
 
 // inline functions
 
@@ -61,7 +62,7 @@ template<> DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
 // cost and the arc index into an uint64 to represent the token
 // before recombination, with the former one in the higher bits
 // for comparison purpose.
-inline DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
+inline HOST DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
   uint32 i_cost = *(uint32 *) & cost;
   if (i_cost & 0x80000000)
     i_cost = i_cost ^ 0xFFFFFFFF;
@@ -94,14 +95,14 @@ inline  DEVICE void cuda_load16(void *a, const void *b) {
 }
 
 // fast store 16 bits using CUDA ASM
-inline  DEVICE void cuda_store8(void *a, const void *b) {
-  asm("st.global.u64 [%0], {%1};" :: "l"(a), "l"(b));
+inline  DEVICE void cuda_store16(void *a, const void *b) {
+  const ulong2 src = *reinterpret_cast<const ulong2*>(b);
+  asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
 }
 
 // fast store 8 bits using CUDA ASM
 inline  DEVICE void cuda_store8(void *a, const void *b) {
-  const ulong2 src = *reinterpret_cast<const ulong2*>(b);
-  asm("st.global.v2.u64 [%0], {%1,%2};" :: "l"(a), "l"(src.x), "l"(src.y));
+  asm("st.global.u64 [%0], {%1};" :: "l"(a), "l"(b));
 }
 
 // TODO: we need a fast 32 bits storing function
@@ -175,8 +176,9 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
   TokenLookupElem& lookup_elem = params->current_tokens_lookup[nextstate];
   // check if token is active or not.  if not, activate it
   if (lookup_elem.tokenstate_idx == LOOKUP_DEACTIVE
-      && atomicCAS(&lookup_elem.tokenstate_idx, LOOKUP_DEACTIVE, LOOKUP_READY_PUSH) == 
-      LOOKUP_DEACTIVE) {
+      && atomicCAS((int32 *)&lookup_elem.tokenstate_idx,
+        (int32)LOOKUP_DEACTIVE, (int32)LOOKUP_READY_PUSH) == 
+      (int32)LOOKUP_DEACTIVE) {
     // grab sentinal to see who gets to add to cur_toks list
     // if haven't seen this token, add into hash by activating it
     // push back the TokenState, and also record its index in lookup table
@@ -247,7 +249,7 @@ inline DEVICE void find_best_cutoff(processTokens_params* params) {
     if (i >= size) break; // all tokens processed
 
     TokenState ts = params->prev_toks[i];
-    Token * tok = ts.token;
+    Token * tok = params->token_allocator.GetTokenByExactIdx(ts.tok_idx_allocated);
     StateId state = ts.state;
     uint32 start = params->e_offsets[state], finish = params->e_offsets[state + 1];
     int32 ilabel, ilabel_next;
@@ -301,7 +303,7 @@ inline DEVICE void process_emitting_tokens(processTokens_params* params) {
     if (i >= size) break; // finish processing all tokens
 
     TokenState& ts = params->prev_toks[i];
-    Token * tok = ts.token;
+    Token * tok = params->token_allocator.GetTokenByExactIdx(ts.tok_idx_allocated);
     StateId state = ts.state;
     uint32 start = params->e_offsets[state], finish = params->e_offsets[state + 1];
     int32 ilabel, ilabel_next;  // prefetch ilabel since it leads to a dependent load
@@ -404,14 +406,14 @@ DEVICE __inline__ void process_nonemitting_tokens(processTokens_params
     if (i >= size) break; 
 
     TokenState& ts = params->cur_toks[i];
-    Token * tok = ts.token;
+    Token * tok = params->token_allocator.GetTokenByExactIdx(ts.tok_idx_allocated);
     StateId state = ts.state;
     assert(params->ne_offsets);
     uint32 start = params->ne_offsets[state], finish = params->ne_offsets[state + 1];
     for (int32 j = start + group.thread_rank(); j < finish; j += blockDimx) {
       BaseFloat weight = params->arc_weights[j];
       StateId nextstate = params->arc_nextstates[j];
-      Token next_tok = Token(weight, params->frame, tok);
+      Token next_tok = Token(weight, tok);
       CostType total_cost = tok->cost_ + weight;
 
       // 2-pass atomic based token recombination
@@ -757,7 +759,6 @@ template<typename T>
 inline void CudaMergeVector<T>::Allocate(uint32 max_size) {
   CudaVector<T>::Allocate(max_size);
 
-  cudaMalloc(&mem_pack_buf_d, sizeof(uint64*) * max_size);
   cudaMalloc(&mem_update_d, sizeof(int32) * max_size);
   cudaMalloc(&barrier_, sizeof(int32) * 1);
 
@@ -768,7 +769,6 @@ template<typename T>
 inline void CudaMergeVector<T>::Free() {
   CudaVector<T>::Free();
 
-  cudaFree(mem_pack_buf_d);
   cudaFree(mem_update_d);
   cudaFree(barrier_);
 }
@@ -789,7 +789,8 @@ inline size_t CudaMergeVector<T>::GetCudaMallocBytes() {
 
 template<typename T>
 DEVICE inline void CudaMergeVector<T>::StoreDataByPackIdx(
-  void* temp_data_buf, int* temp_data_buf_update, int32 buf_size) {
+  void* temp_data_buf, int* temp_data_buf_update, int32 buf_size,
+  TokenAllocator* token_allocator) {
   assert(0);  // haven't implemented
 }
 
@@ -811,7 +812,7 @@ DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
   int32 size = *count_d; // count_d is cleared in Clear() called by InitDecoding()
 
   for (; tid < size; tid += batch) { // thread parallelism
-    uint64* pack_v = mem_pack_buf_d[tid];
+    uint64* pack_v = &mem_d[tid].token_pack;
     int32 idx = unpack_idx_from_uint64(*pack_v);
     assert(idx < buf_size);
     mem_update_d[(tid + 0)] = temp_data_buf_update[idx];
@@ -837,15 +838,20 @@ DEVICE inline int32 CudaMergeVector<T>::IsUpdated(int32 i) {
 template<typename T>
 DEVICE inline uint32 CudaMergeVector<T>::PushBack(const T &val,
     uint64 *val_pack) {
+  assert(0); //this func is deprecated
   uint32 idx = atomicAdd(count_d, 1);
   assert(*count_d < max_size);
   assert(sizeof(val) == 16); // use faster storing
   cuda_store16(&mem_d[idx], &val);
   // store the pack_data pointer in 1st stage
-  mem_pack_buf_d[idx] = val_pack; // used in StoreDataByPackIdx() in 2nd stage
+  // mem_pack_buf_d[idx] = val_pack; // used in StoreDataByPackIdx() in 2nd stage, it's always stored in mem_d now
   return idx;
 }
 
+// TokenState Implementation
+HOST DEVICE inline TokenState::TokenState (StateId state) 
+      : tok_idx_allocated(-1), state(state), 
+      token_pack(pack_cost_idx_into_uint64(-FLT_MAX, 0)) { }
 
 // TokenAllocator Implementation
 
@@ -1711,21 +1717,6 @@ bool CudaLatticeDecoder::GetBestPath(Lattice *fst_out,
   KALDI_ERR << "We don't have this implementation in lattice decoder";
   return false;
 }
-
-bool CudaLatticeDecoder::ReachedFinal() const {
-  for (int32 i = 0; i < cur_toks_->Size(); i++) {
-    TokenState ts = (*cur_toks_)[i];
-    if (ts.token->cost_ != std::numeric_limits<BaseFloat>::infinity() &&
-        fst_.Final(ts.state) != StdWeight::Zero())
-      return true;
-  }
-  return false;
-}
-
-
-
-
-
 
 
 } // end namespace kaldi.
