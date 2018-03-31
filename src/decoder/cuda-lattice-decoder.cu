@@ -182,7 +182,7 @@ DEVICE inline void allocate_new_tokens(TokenLookupElem *current_tokens_lookup,
 DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
           StateId nextstate, CostType total_cost, CostType acoustic_cost,
           TokenState* ts, uint32 j, bool add_arc, TokenState** next_ts,
-          uint64 **token_pack, int* update_idx) {
+          uint64 **token_pack, int32* update_idx) {
   TokenLookupElem& lookup_elem = params->current_tokens_lookup[nextstate];
   Token *cur_tok = lookup_elem.token;
   // check if token is active or not.  if not, activate it
@@ -208,7 +208,8 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
                        lookup_elem.tokenstate_idx, params->frame,
                        acoustic_cost, j); 
     // use pushBack idx as update item index because it is unique in each frame
-    *update_idx = params->lat_arcs_sub_vec.PushBack(arc); 
+    *update_idx = params->lat_arcs_sub_vec.PushBack(arc) - 
+                  *params->num_arcs_till_last; 
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &lookup_elem.token_pack;
@@ -445,7 +446,7 @@ static void _add_one_token(processTokens_params params, StateId state) {
   TokenState *next_ts = NULL;
   uint64* token_pack;
   int32 j = 0;
-  int32 update_idx;
+  int32 update_idx = 0;
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
   Token* cur_tok = find_or_add_token_arc(&params, state, 0, // add first token
                                      0, NULL, j, false,  &next_ts,
@@ -472,6 +473,8 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   if (!is_init) { // only do process_nonemitting_tokens() at frame 0
     find_best_cutoff<32, 2>(&params);
     __grid_sync_nv_internal(params.barrier);
+  } else if (rank0) {
+    *params.num_arcs_till_last = 0;
   }
 
   // modified flag for current iteration used in process_nonemitting_tokens()
@@ -533,7 +536,12 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   // accumulatively store lattice arcs
   params.lattice_pruner.CollectArcsPerFrame(params.lat_arcs_sub_vec,
       params.frame);
+  if (rank0) {
+    *params.num_arcs_till_last = params.lat_arcs_sub_vec.Size();
+  }
+
   __grid_sync_nv_internal(params.barrier); // after process lattice
+
 
   allocate_new_tokens(params.current_tokens_lookup, params.cur_toks,
                              params.token_allocator);
@@ -1350,6 +1358,7 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   CU_SAFE_CALL(cudaGetLastError());
 
   cudaMalloc(&cutoff_d, sizeof(CostType)); bytes_cuda_malloc += sizeof(CostType);
+  cudaMalloc((void**)&num_arcs_till_last_d, sizeof(int32)); bytes_cuda_malloc += sizeof(int32);
   cudaMalloc(&modified_d, sizeof(int32) * 2);
   bytes_cuda_malloc += sizeof(int32) * 2;
 
@@ -1426,6 +1435,7 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
   cudaFree(barrier_d);
 
   cudaFree(cutoff_d);
+  cudaFree(num_arcs_till_last_d);
   cudaFree(modified_d);
 
   cudaFree(token_per_arc_d);
@@ -1500,6 +1510,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->prune_interval = config_.prune_interval;
   params->numArcs = fst_.NumArcs();
   params->frame = num_frames_decoded_;
+  params->num_arcs_till_last = num_arcs_till_last_d;
 }
 
 // call InitDecoding if you have already decoded an

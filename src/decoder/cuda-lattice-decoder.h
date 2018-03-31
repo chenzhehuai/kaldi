@@ -442,6 +442,7 @@ class CudaLatticeDecoder {
     int32 *fb_idx;
     int32 *agg_idx;
     int32 *barrier;
+    int32 *num_arcs_till_last;
 
     // configurations
     BaseFloat beam;
@@ -500,6 +501,7 @@ class CudaLatticeDecoder {
   TokenMergeVector* cur_toks_;
   TokenMergeVector* prev_toks_;  
   CostType *cutoff_d;
+  int32 *num_arcs_till_last_d;
   int32 *modified_d; // used in processTokens_cg()
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
