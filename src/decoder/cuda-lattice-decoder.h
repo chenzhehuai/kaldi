@@ -284,6 +284,7 @@ class CudaLatticeDecoder {
     void Initialize(uint32 size);
     void Finalize();
     void Reset(); // returns all memory to the allocator
+    DEVICE inline int32 Size() { return *front_d; }
 
     // memory prefetch to speedup the reading in target device
     inline void PrefetchNextToDevice(cudaStream_t stream, int32 count);

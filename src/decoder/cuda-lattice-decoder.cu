@@ -146,7 +146,7 @@ DEVICE inline void allocate_all_tokens(TokenLookupElem *current_tokens_lookup,
               int32 numStates, TokenAllocator allocator) {
   for (int32 i = blockIdx.x * blockDim.x + threadIdx.x; i < numStates;
        i += blockDim.x * gridDim.x) {
-    current_tokens_lookup[i].tokenstate_idx = -1;
+    current_tokens_lookup[i].tokenstate_idx = LOOKUP_DEACTIVE;
     // do not need to clear Token* cur_tok, as data will be re-stored in it
     // in StoreDataByPackIdx()
   }
@@ -159,7 +159,7 @@ DEVICE inline void allocate_new_tokens(TokenLookupElem *current_tokens_lookup,
   for (int32 i = blockIdx.x * blockDim.x + threadIdx.x; i < size;
        i += blockDim.x * gridDim.x) {
     StateId state = cur_toks[i].state; // cur_toks will be clear in PreProcessTokens
-    current_tokens_lookup[state].tokenstate_idx = -1;
+    current_tokens_lookup[state].tokenstate_idx = LOOKUP_DEACTIVE;
     // do not need to clear Token* cur_tok, as data will be re-stored in it
     // in StoreDataByPackIdx()
   }
@@ -545,8 +545,8 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // wait for everyone to finish process tokens and writes modified0
   } while ((*modified0) == true);
   if (rank0 && params.verbose > 0 && params.frame % itv == 0)
-    CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E, params.cur_toks.Size(),
-                cutoff);
+    CUDA_PRINTF("TK: %i %i %i %i %f\n", params.frame, tok_E, params.cur_toks.Size(),
+                params.token_allocator.Size(), cutoff);
 
   // process lattice before allocate new toks to TokenState
   params.lattice_pruner.CollectToksPerFrame(params.cur_toks, params.frame,
@@ -934,11 +934,13 @@ DEVICE inline Token* TokenAllocator::GetToken(uint32 offset) {
 
 DEVICE inline Token* TokenAllocator::GetTokenByExactIdx(uint32 offset) {
   int32 idx = offset;
+  assert(idx >= 0 && idx < size);
   return &tokens_allocation[idx];
 }
 
 DEVICE inline int32 TokenAllocator::GetTokenAllocIdx(uint32 offset) {
   int32 idx = *front_d + offset;
+  assert(idx >= 0 && idx < size);
   return idx;
 }
 
