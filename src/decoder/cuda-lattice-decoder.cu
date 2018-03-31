@@ -1351,6 +1351,8 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
 CudaLatticeDecoder::~CudaLatticeDecoder() {
   KALDI_VLOG(1) << "CUDA LatticeDecoder DESTRUCTOR\n";
 
+  get_free_memory_stat("End of decoding:");
+
   for (int32 j = 0; j < LAT_BUF_SIZE; j++) lat_toks_bufs_[j].Free();
   lat_arcs_buf_.Free(true);
   lattice_pruner_.Free();
