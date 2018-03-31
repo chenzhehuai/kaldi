@@ -246,7 +246,7 @@ class CudaLatticeDecoder {
       return prev_tok_id >= ((uint32)1<<31);
     }
     HOST DEVICE inline uint32 GetPrevTokId() {
-      return prev_tok_id & ((1<<31) - 1);
+      return prev_tok_id & (((uint32)1<<31) - 1);
     }
   };
 
