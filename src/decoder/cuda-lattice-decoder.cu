@@ -182,7 +182,7 @@ DEVICE inline void allocate_new_tokens(TokenLookupElem *current_tokens_lookup,
 DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
           StateId nextstate, CostType total_cost, CostType acoustic_cost,
           TokenState* ts, uint32 j, bool add_arc, TokenState** next_ts,
-          uint64 **token_pack, int* update) {
+          uint64 **token_pack, int* update_idx) {
   TokenLookupElem& lookup_elem = params->current_tokens_lookup[nextstate];
   Token *cur_tok = lookup_elem.token;
   // check if token is active or not.  if not, activate it
@@ -190,7 +190,6 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
       && atomicCAS(&lookup_elem.active, 0, 1) == 0) {
     // grab sentinal to see who gets to add to cur_toks list
     // if haven't seen this token, add into hash by activating it
-    *update = 1;  // if it is newly added, the Token data should be updated
     // push back the TokenState, and also record its index in lookup table
     lookup_elem.tokenstate_idx = params->cur_toks.PushBack(TokenState(cur_tok,
                                  nextstate, total_cost),
@@ -208,7 +207,8 @@ DEVICE inline Token* find_or_add_token_arc(processTokens_params* params,
     LatLinkCompact arc(ts_id, prev_tok->frame,
                        lookup_elem.tokenstate_idx, params->frame,
                        acoustic_cost, j); 
-    int32_t lat_arc_idx = params->lat_arcs_sub_vec.PushBack(arc);
+    // use pushBack idx as update item index because it is unique in each frame
+    *update_idx = params->lat_arcs_sub_vec.PushBack(arc); 
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &lookup_elem.token_pack;
@@ -315,20 +315,21 @@ inline DEVICE void process_emitting_tokens(processTokens_params* params) {
       if (total_cost <= cutoff) { // not prune out
         uint64* token_pack;
         TokenState *next_ts = NULL;
+        int32 update_idx;
         // get cur_tok&token_pack addr
         Token *cur_tok = find_or_add_token_arc(params, nextstate, total_cost,
                           acoustic_cost, &ts, j, true, &next_ts, &token_pack,
-                          params->token_per_arc_update + j);
+                          &update_idx);
         // 1st stage of 2-pass atomic token recombination
         // get cur_te&new_token_pack here
         // details in the definition of pack_cost_idx_into_uint64()
-        uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, j);
+        uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, update_idx);
         uint64 ret = atomicMax((unsigned long long *)token_pack,
                                (unsigned long long)new_token_pack);
         if (ret < new_token_pack) {
-          Token* cur_te = params->token_per_arc + j;
+          Token* cur_te = params->token_per_arc + update_idx;
           cuda_store16(cur_te, &(Token(acoustic_cost + weight, params->frame, tok)));
-          params->token_per_arc_update[j] = 1;
+          params->token_per_arc_update[update_idx] = 1;
         }
       } // end total_cost<=cutoff
     } // end arc loop
@@ -405,16 +406,17 @@ DEVICE __inline__ void process_nonemitting_tokens(processTokens_params
       if (next_tok.cost_ <= cutoff) {
         TokenState *next_ts = NULL;
         uint64* token_pack;
+        int32 update_idx;
         Token *cur_tok = find_or_add_token_arc(params, nextstate, total_cost,
                                         0, &ts, j, true, &next_ts, &token_pack, 
-                                        params->token_per_arc_update + j);
-        uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, j);
+                                        &update_idx);
+        uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, update_idx);
         uint64 ret = atomicMax((unsigned long long *)token_pack,
                                  (unsigned long long)new_token_pack);
         if (ret < new_token_pack) {
-          Token* cur_te = params->token_per_arc + j;
+          Token* cur_te = params->token_per_arc + update_idx;
           cuda_store16(cur_te, &(Token(weight, params->frame, tok)));
-          params->token_per_arc_update[j] = 1;
+          params->token_per_arc_update[update_idx] = 1;
           (*modified) = true; // show that we need another iteration 
         }
       }
@@ -443,13 +445,14 @@ static void _add_one_token(processTokens_params params, StateId state) {
   TokenState *next_ts = NULL;
   uint64* token_pack;
   int32 j = 0;
+  int32 update_idx;
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
   Token* cur_tok = find_or_add_token_arc(&params, state, 0, // add first token
                                      0, NULL, j, false,  &next_ts,
-                                     &token_pack, params.token_per_arc_update + j);
-  uint64 new_token_pack = pack_cost_idx_into_uint64(0, j);
-  Token* cur_te = params.token_per_arc + j;
-  params.token_per_arc_update[j] = 1;
+                                     &token_pack, &update_idx);
+  uint64 new_token_pack = pack_cost_idx_into_uint64(0, update_idx);
+  Token* cur_te = params.token_per_arc + update_idx;
+  params.token_per_arc_update[update_idx] = 1;
   cuda_store16(cur_te, &(Token(0, params.frame, NULL)));
   atomicMax((unsigned long long *)token_pack, (unsigned long long)new_token_pack);
   params.cur_toks.StoreDataByPackIdx(params.token_per_arc,
@@ -1382,12 +1385,12 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   // information in an array whose size is the number of arcs. This
   // ensures there are no write conflicts between threads since each
   // arc can be accessed at most once in each frame. It's a temp solution
-  cudaMalloc((void**)&token_per_arc_d, sizeof(Token)*fst.NumArcs()); 
+  cudaMalloc((void**)&token_per_arc_d, sizeof(Token)*config.max_lat_arc_per_frame); 
   cudaMalloc((void**)&token_per_arc_update_d,
-             sizeof(int32)*fst.NumArcs()); // temp solution
+             sizeof(int32)*config.max_lat_arc_per_frame); // temp solution
   cudaMemset(token_per_arc_update_d, 0,
-             sizeof(int32)*fst.NumArcs()); // temp solution
-  bytes_cuda_malloc += (sizeof(Token) + sizeof(int32)) * (fst.NumArcs());
+             sizeof(int32)*config.max_lat_arc_per_frame); // temp solution
+  bytes_cuda_malloc += (sizeof(Token) + sizeof(int32)) * (config.max_lat_arc_per_frame);
 
   num_frames_decoded_ = 0;
   UpdateTokPointersByFrame(num_frames_decoded_);
