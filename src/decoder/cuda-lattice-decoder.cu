@@ -102,7 +102,8 @@ inline  DEVICE void cuda_store16(void *a, const void *b) {
 
 // fast store 8 bits using CUDA ASM
 inline  DEVICE void cuda_store8(void *a, const void *b) {
-  asm("st.global.u64 [%0], {%1};" :: "l"(a), "l"(b));
+  //asm("st.global.u64 [%0], {%1};" :: "l"(a), "l"(b));
+  memcpy(a, b, 8);
 }
 
 // TODO: we need a fast 32 bits storing function
