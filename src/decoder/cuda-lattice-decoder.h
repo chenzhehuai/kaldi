@@ -240,10 +240,13 @@ class CudaLatticeDecoder {
         acoustic_cost(acoustic_cost), arc_id(arc_id) {
       assert(prev_tok_id < ((uint32)1<<31));  // we can't cope with that large number
       uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
-      prev_tok_id |= is_emit_arc<<31; // a hack to save is_emit_arc in prev_tok_id
+      this->prev_tok_id |= (is_emit_arc<<31); // a hack to save is_emit_arc in prev_tok_id
     }
     HOST DEVICE inline bool IsEmitArc() {
       return prev_tok_id >= ((uint32)1<<31);
+    }
+    HOST DEVICE inline uint32 GetPrevTokId() {
+      return prev_tok_id & ((1<<31) - 1);
     }
   };
 

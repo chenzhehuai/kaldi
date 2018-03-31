@@ -1060,7 +1060,7 @@ DEVICE int32 LatticePruner::AddArc(LatLinkCompact* arc, int32 frame) {
   int32 i = atomicAdd(arcs_apr_used_d, 1);
   int32 frame_tok = arc->IsEmitArc() ? frame - 1: frame;
   int32 j = arc->arc_id;
-  LatLink apr_arc(arc->prev_tok_id, frame_tok, arc->next_tok_id, frame,
+  LatLink apr_arc(arc->GetPrevTokId(), frame_tok, arc->next_tok_id, frame,
             arc_ilabels[j], arc_olabels[j], arc_weights[j], arc->acoustic_cost); 
   cuda_store32(arcs_apr_d + i, &apr_arc);
 }
@@ -1188,7 +1188,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
       LatLinkCompact* link = GetActiveArc(frame, tid);
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
       Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
-      Token* tok = GetActiveToken(frame_tok, link->prev_tok_id, true);
+      Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
@@ -1217,7 +1217,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
       LatLinkCompact* link = GetActiveArc(frame, tid);
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
       Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
-      Token* tok = GetActiveToken(frame_tok, link->prev_tok_id, true);
+      Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
       BaseFloat link_extra_cost = next_tok->extra_cost +
                                   ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
