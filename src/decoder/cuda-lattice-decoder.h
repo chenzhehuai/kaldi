@@ -105,7 +105,7 @@ class CudaLatticeDecoder {
   typedef BaseFloat CostType;
   
   class LatticePruner;
-  class TokenAllocator;
+  struct  TokenLookupElem;
 
   // general cuda vector can be used in both host and device. 
   // page faults need to be paid attention to
@@ -163,7 +163,8 @@ class CudaLatticeDecoder {
     // buf; it's used in the 2nd stage of 2-pass atomic token recombination
     DEVICE inline void StoreDataByPackIdx(void* temp_data_buf, 
                       int* temp_data_buf_update, int32 buf_size,
-                      TokenAllocator * token_allocator);
+                      LatticePruner* lattice_pruner, int frame, 
+  TokenLookupElem *lookup_elem);
     // check whether data at index i is updated
     DEVICE inline int32 IsUpdated(int32 i);
     // push back data & data_pack to vectors respectively
@@ -256,7 +257,6 @@ class CudaLatticeDecoder {
     int32_t tok_idx_allocated; // this can ALSO be obtained from 
     //TokenLookupElem[state].tok_idx_allocated in each frame
     StateId state;  // record WFST state
-    //CostType cost_; // for CPU to copy lattice without prefetch token_allocator_; totally deprecated
     uint64 token_pack; // the real mem is here
     // if learned from TokenLookupElem that this TS is de-active, we need to firstly giving value or reset all the mem of this; thus don't need to call allocate_new_tokens
     
@@ -277,41 +277,6 @@ class CudaLatticeDecoder {
   typedef CudaVector<LatLinkCompact> LatLinkVector;
 
 
-  // Preallocates tokens, allows threads to concurrently
-  // allocate/deallocate objects quickly in GPU
-  class TokenAllocator {
-   public:
-    void Initialize(uint32 size);
-    void Finalize();
-    void Reset(); // returns all memory to the allocator
-    DEVICE inline int32 Size() { return *front_d; }
-
-    // memory prefetch to speedup the reading in target device
-    inline void PrefetchNextToDevice(cudaStream_t stream, int32 count);
-    inline void PrefetchNextToDevice(cudaStream_t stream);
-    inline void PrefetchAllocatedToHost(cudaStream_t stream);
-    inline void PrefetchAllocatedToHostForce(cudaStream_t stream);
-    inline size_t GetCudaMallocManagedBytes();
-    
-    // gets a free token offset by index
-    DEVICE inline Token* GetToken(uint32 index); 
-    DEVICE inline Token* GetTokenByExactIdx(uint32 index); 
-    DEVICE inline int32 GetTokenAllocIdx(uint32 offset);
-    // advances the allocated token list by num
-    DEVICE inline void AdvanceFront(uint32 num); 
-
-   private:
-    int32_t device; // for MEMADVISE
-    uint32 size; // host size
-    size_t bytes_cuda_malloc_managed;
-    uint32 prefetch_size; // amount of elements to prefetch beyond front
-    // next free token index
-    uint32 *front_d, *front_h;
-    // token buffer used discontinuously; Just going static for now.
-    // TODO we could have a list of these and dynamically add more.  
-    Token *tokens_allocation; 
-  };
-
   // for lattice pruning
   class LatticePruner {
    public:  
@@ -325,10 +290,11 @@ class CudaLatticeDecoder {
     // Entry of lattice pruning until this frame
     inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);    
     // Collect after each token passing
-    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, int32 frame, 
-                                           TokenAllocator* token_allocator);
+    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, int32 frame);
     inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
                                              int32 frame);
+    DEVICE inline Token* GetTokenByExactIdx(uint32 index); 
+    DEVICE inline int32 GetTokenAllocIdx(uint32 offset, uint32 frame);
 
     // Data transfer from device to host
     void CopyArcsToHost(int32 frame, cudaStream_t st);
@@ -429,7 +395,6 @@ class CudaLatticeDecoder {
     int* token_per_arc_update;
 
     // tools
-    TokenAllocator token_allocator;
     LatticePruner lattice_pruner;
 
     // never change
@@ -517,7 +482,6 @@ class CudaLatticeDecoder {
   // token lookup table.  Provides constant time lookup for active tokens.
   // One entry per state. TokenLookupElem::active to denote whether it is active.
   TokenLookupElem *current_tokens_lookup_d;
-  TokenAllocator token_allocator_; // allocate new tokens to current_tokens_lookup_d
 
   // data store for log likelihoods needed in the current frame.  
   // Double buffering to avoid synchronization.
