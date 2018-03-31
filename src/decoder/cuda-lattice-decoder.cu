@@ -1067,7 +1067,6 @@ inline DEVICE void LatticePruner::CollectToksPerFrame(
   }
   for (; tid < size; tid += gridDim.x * blockDim.x) {
     Token* to_tok = GetActiveToken(frame, tid, false);
-    // TODO
     Token* token_tmp = token_allocator->GetTokenByExactIdx(
                             cur_toks[tid].tok_idx_allocated);
     cuda_store8(to_tok, token_tmp);
