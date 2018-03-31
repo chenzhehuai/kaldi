@@ -161,7 +161,8 @@ class CudaLatticeDecoder {
     // according to the unpack index, copy data from external buf to the inside
     // buf; it's used in the 2nd stage of 2-pass atomic token recombination
     DEVICE inline void StoreDataByPackIdx(void* temp_data_buf, 
-                      int* temp_data_buf_update, int32 buf_size);
+                      int* temp_data_buf_update, int32 buf_size,
+                      TokenAllocator * token_allocator);
     // check whether data at index i is updated
     DEVICE inline int32 IsUpdated(int32 i);
     // push back data & data_pack to vectors respectively
@@ -175,22 +176,19 @@ class CudaLatticeDecoder {
     // for arr merge to single; assume create using cudaMallocManaged
     int32 *mem_update_d;
     // record recombination uint64 address corresponding to each elem in T* mem_d
-    uint64** mem_pack_buf_d; 
+    // uint64** mem_pack_buf_d;  // as it's always in mem_d, we do not need this any more
     int* barrier_;
   };
 
   // align to 16 bits so as to fast memcpy, see store16()
-  class __align__(16) Token {
+  class __align__(8) Token {
    public:
     CostType cost_; // accumulated total cost up to this place.
-    int32_t frame; // used in lattice generation & Token address pair
     BaseFloat extra_cost; // used in lattice pruning
-    // this variable is unused just to pad Token to 16bits
-    StateId state_id; // WFST state 
-
-    HOST DEVICE inline Token(BaseFloat cost, int32 frame, Token* prev) : 
-                            cost_(cost), frame(frame), extra_cost(0) {
-      assert(sizeof(Token)==16); 
+    
+    HOST DEVICE inline Token(BaseFloat cost, Token* prev) : 
+                            cost_(cost), extra_cost(0) {
+      assert(sizeof(Token)==8); 
       if(prev) {
         cost_ += prev->cost_;
       }
@@ -253,20 +251,26 @@ class CudaLatticeDecoder {
   // align to 16 bits so as to fast memcpy, see store16()
   struct __align__(16) TokenState {
    public:
-    Token* token; // record the corresponding Token data address
+
+    int32_t tok_idx_allocated; // this can ALSO be obtained from 
+    //TokenLookupElem[state].tok_idx_allocated in each frame
     StateId state;  // record WFST state
-    CostType cost_; // for CPU to copy lattice without prefetch token_allocator_
+    //CostType cost_; // for CPU to copy lattice without prefetch token_allocator_; totally deprecated
+    uint64 token_pack; // the real mem is here
+    // if learned from TokenLookupElem that this TS is de-active, we need to firstly giving value or reset all the mem of this; thus don't need to call allocate_new_tokens
     
-    HOST DEVICE inline TokenState (Token *token, StateId state, CostType cost)
-      : token(token), state(state), cost_(cost) { }
+    HOST DEVICE inline TokenState (StateId state)
+      : tok_idx_allocated(-1), state(state), 
+      token_pack(pack_cost_idx_into_uint64(-FLT_MAX, 0)) { }
   };
 
   // struct to hold pre-allocated tokens (one per WFST state) for fast lookup
   struct  TokenLookupElem{
-    Token *token; // pointer to the Token
-    uint32 active;  // the token has been passed to or not
-    uint64 token_pack; // used in atomic operation based token recombination
-    volatile int32_t tokenstate_idx; // used to index the corresponding TokenState
+    #define LOOKUP_STORE_TYPE uint32
+    #define LOOKUP_DEACTIVE ((LOOKUP_STORE_TYPE)-1)
+    #define LOOKUP_READY_PUSH ((LOOKUP_STORE_TYPE)-2)
+    // TODO: considering change int32_t to int16
+    volatile LOOKUP_STORE_TYPE tokenstate_idx; // used to index the corresponding TokenState
   };
   // typedef CudaVector<TokenState> TokenVector;
   typedef CudaMergeVector<TokenState> TokenMergeVector;
@@ -290,6 +294,8 @@ class CudaLatticeDecoder {
     
     // gets a free token offset by index
     DEVICE inline Token* GetToken(uint32 index); 
+    DEVICE inline Token* GetTokenByExactIdx(uint32 index); 
+    DEVICE inline int32 GetTokenAllocIdx(uint32 offset);
     // advances the allocated token list by num
     DEVICE inline void AdvanceFront(uint32 num); 
 
@@ -299,7 +305,7 @@ class CudaLatticeDecoder {
     size_t bytes_cuda_malloc_managed;
     uint32 prefetch_size; // amount of elements to prefetch beyond front
     // next free token index
-    uint32 *front_d, *front_h;    
+    uint32 *front_d, *front_h;
     // token buffer used discontinuously; Just going static for now.
     // TODO we could have a list of these and dynamically add more.  
     Token *tokens_allocation; 
@@ -318,8 +324,8 @@ class CudaLatticeDecoder {
     // Entry of lattice pruning until this frame
     inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);    
     // Collect after each token passing
-    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, 
-                                           int32 frame);
+    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, int32 frame, 
+                                           TokenAllocator* token_allocator);
     inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
                                              int32 frame);
 
