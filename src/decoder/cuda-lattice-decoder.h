@@ -300,6 +300,7 @@ class CudaLatticeDecoder {
     // advances the allocated token list by num
     DEVICE inline void AdvanceFront(uint32 num); 
 
+    Token *tokens_allocation; // TODO:
    private:
     int32_t device; // for MEMADVISE
     uint32 size; // host size
@@ -309,7 +310,6 @@ class CudaLatticeDecoder {
     uint32 *front_d, *front_h;
     // token buffer used discontinuously; Just going static for now.
     // TODO we could have a list of these and dynamically add more.  
-    Token *tokens_allocation; 
   };
 
   // for lattice pruning
@@ -317,7 +317,7 @@ class CudaLatticeDecoder {
    public:  
     void Initialize();
     int32 Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
-      int32 prune_interval, int32 max_toks, int32 max_arcs, const CudaFst& fst);
+      int32 prune_interval, int32 max_toks, int32 max_arcs, const CudaFst& fst, Token* tokens_allocation);
     void Free();
     // The GPU memory of lattice arcs is shared with LatLinkVector
     LatLinkCompact* GetDeviceArcsBpr() { return arcs_bpr_d; } 

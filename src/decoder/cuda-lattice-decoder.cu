@@ -968,13 +968,14 @@ void LatticePruner::Initialize() {
 int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
                               int32 max_lat_arc_per_frame, int32 prune_interval, 
                               int32 max_toks, int32 max_arcs, 
-                              const CudaFst& fst) {
+                              const CudaFst& fst,
+                              Token* tokens_allocation) {
   int32 sz;
   int32 bytes_cuda_malloc = 0;
 
   // before pruning
   sz = sizeof(Token) * max_toks;
-  cudaMalloc((void**)&toks_bpr_d, sz); bytes_cuda_malloc += sz;
+  toks_bpr_d = tokens_allocation;
   cudaMallocHost((void**)&toks_bpr_h, sz);
   toks_buf_before_pr_size = sz / sizeof(Token);
   sz = sizeof(LatLinkCompact) * max_arcs;
@@ -1016,7 +1017,7 @@ void LatticePruner::Free() {
   // before pruning
   cudaFree(arcs_bpr_used_d);
   cudaFreeHost(arcs_apr_used_h);
-  cudaFree(toks_bpr_d);
+  //cudaFree(toks_bpr_d);
   cudaFreeHost(toks_bpr_h);
   cudaFree(arcs_bpr_d);
   cudaFree(toks_bpr_fr_sidx_d);
@@ -1065,6 +1066,7 @@ inline DEVICE void LatticePruner::CollectToksPerFrame(
     // Set start index in the buffer of the next frame
     SetNextSidx(toks_bpr_fr_sidx_d, size, frame); 
   }
+#if 0
   for (; tid < size; tid += gridDim.x * blockDim.x) {
     Token* to_tok = GetActiveToken(frame, tid, false);
     Token* token_tmp = token_allocator->GetTokenByExactIdx(
@@ -1076,6 +1078,7 @@ inline DEVICE void LatticePruner::CollectToksPerFrame(
     GetActiveToken(frame,tid,true);
     */
   }
+#endif
 }
 
 // collect after each token passing, mainly to update arcs_bpr_fr_sidx_d here
@@ -1238,7 +1241,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     // *modified1 here as it won't be used before grid sync in the very below
     if (rank0) *modified1 = 0; 
     // wait for every thread to enter while, which slow down by 2% here
-    // __grid_sync_nv_internal(barrier_); 
+    __grid_sync_nv_internal(barrier_); // TODO: this makes the following iteration constrain faster and stabler
 
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
@@ -1254,9 +1257,11 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) { 
         // not prune out
-        if (link_extra_cost < -1) // debug
+        if (link_extra_cost < -1) {// debug
           CUDA_PRINTF("%i %f %f %f %f %f\n", frame, next_tok->extra_cost, tok->cost_,
                       link->acoustic_cost, arc_weights[link->arc_id], next_tok->cost_);
+          link_extra_cost = lattice_beam/2;
+        }
         if (link_extra_cost < tok->extra_cost) {
           atomic_min(&tok->extra_cost, link_extra_cost);
           if (*modified0 == 0) atomicAdd((int32 *)modified0, 1);
@@ -1308,7 +1313,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
   if (merge && rank0) {
     int& size_arc_of_frame = arcs_apr_fr_size_d[frame];
     size_arc_of_frame = *arcs_apr_used_d - prev_cidx;
-    if (verbose > 3) CUDA_PRINTF("PR %i %i %i\n", frame,
+    if (verbose > 3 || (size_arc_of_frame == 0 && frame != 0)) CUDA_PRINTF("PR %i %i %i\n", frame,
             GetSize(arcs_bpr_fr_sidx_d, frame), size_arc_of_frame);
   }
   // __grid_sync_nv_internal(barrier_);
@@ -1426,7 +1431,8 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   // for pruning
   bytes_cuda_malloc += lattice_pruner_.Allocate(config.max_tokens_per_frame,
                        config.max_lat_arc_per_frame, config.prune_interval,
-                       config.max_tokens, config.max_arcs, fst_);
+                       config.max_tokens, config.max_arcs, fst_,
+                       token_allocator_.tokens_allocation);
 
   lat_arcs_buf_.Allocate(config.max_arcs, NULL, NULL, NULL,
                          lattice_pruner_.GetDeviceArcsBpr());
@@ -1463,6 +1469,8 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
 CudaLatticeDecoder::~CudaLatticeDecoder() {
   KALDI_VLOG(1) << "CUDA LatticeDecoder DESTRUCTOR\n";
 
+  get_free_memory_stat("End of decoding:");
+  
   for (int32 j = 0; j < LAT_BUF_SIZE; j++) lat_toks_bufs_[j].Free();
   lat_arcs_buf_.Free(true);
   lattice_pruner_.Free();
