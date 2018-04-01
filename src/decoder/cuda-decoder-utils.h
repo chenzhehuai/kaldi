@@ -75,7 +75,7 @@ const int32 num_colors = sizeof(colors) / sizeof(uint32);
 
 // decoder macro
 
- #define __DEBUG__
+// #define __DEBUG__
 #ifdef __DEBUG__
 #define VERBOSE 5
 #define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)

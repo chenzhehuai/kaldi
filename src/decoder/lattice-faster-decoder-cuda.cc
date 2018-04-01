@@ -412,7 +412,7 @@ void LatticeFasterDecoderCuda::PruneForwardLinks(
           *links_pruned = true;
         } else {   // keep the link and update the tok_extra_cost if needed.
           if (link_extra_cost < 0.0) {  // this is just a precaution.
-            if (link_extra_cost < -0.01)
+            if (config_.verbose > 1 && link_extra_cost < -0.01)
               KALDI_WARN << "Negative extra_cost: " << link_extra_cost;
             link_extra_cost = 0.0;
           }
