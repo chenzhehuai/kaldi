@@ -204,6 +204,8 @@ class CudaLatticeDecoder {
 
   // we save all info in this structure, so as to collect all info together
   // in GPU memory and use memcpy to move to CPU memory
+  // this structure is only used before D2H memcpy, during decoding, 
+  // we use LatLinkCompact
   class __align__(32) LatLink {  
    public:
      // below variables are with the same size as ForwardLink, so as to enable memcpy
@@ -223,28 +225,36 @@ class CudaLatticeDecoder {
       p2=(void*)ENCODE_TOK_IDX_PAIR(prev_tok_fr,prev_tok_id);
     }
   };
+
+  // during decoding, as arcs are pre-allocated, we need a more compact 
+  // structure and it is aligned in 16 bits. 
+  // Notably, to work in 16 bits, we have to pack both id & whether it is 
+  // emit arc in is_emit_pack_prev_tok_id
   class __align__(16) LatLinkCompact {  
    public:
-    uint32 prev_tok_id;  // a hack to contain both id & whether it is emit arc
-    uint32 next_tok_id;
+    uint32 next_tok_id; // token index in the frame level token vector
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     int32 arc_id;
 
     HOST DEVICE inline LatLinkCompact(uint32 prev_tok_id, int32 prev_tok_fr,     
                                       uint32 next_tok_id, int32 next_tok_fr, 
                                       BaseFloat acoustic_cost, int32 arc_id): 
-        prev_tok_id(prev_tok_id), next_tok_id(next_tok_id), 
+        is_emit_pack_prev_tok_id(prev_tok_id), next_tok_id(next_tok_id), 
         acoustic_cost(acoustic_cost), arc_id(arc_id) {
-      assert(prev_tok_id < ((uint32)1<<31));  // we can't cope with that large number
+      assert(is_emit_pack_prev_tok_id < ((uint32)1<<31));  // we can't cope with that large number
       uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
-      this->prev_tok_id |= (is_emit_arc<<31); // a hack to save is_emit_arc in prev_tok_id
+      this->is_emit_pack_prev_tok_id |= (is_emit_arc<<31); // a hack to save is_emit_arc in is_emit_pack_prev_tok_id
     }
     HOST DEVICE inline bool IsEmitArc() {
-      return prev_tok_id >= ((uint32)1<<31);
+      return is_emit_pack_prev_tok_id >= ((uint32)1<<31);
     }
     HOST DEVICE inline uint32 GetPrevTokId() {
-      return prev_tok_id & (((uint32)1<<31) - 1);
+      return is_emit_pack_prev_tok_id & (((uint32)1<<31) - 1);
     }
+
+   private:
+    // a hack to contain both id & whether it is emit arc
+    uint32 is_emit_pack_prev_tok_id;  
   };
 
   // align to 16 bits so as to fast memcpy, see store16()
@@ -298,7 +308,7 @@ class CudaLatticeDecoder {
     // advances the allocated token list by num
     DEVICE inline void AdvanceFront(uint32 num); 
 
-    Token *tokens_allocation; // TODO:
+    Token* GetTokenAllocation() { return tokens_allocation };
    private:
     int32_t device; // for MEMADVISE
     uint32 size; // host size
@@ -308,6 +318,7 @@ class CudaLatticeDecoder {
     uint32 *front_d, *front_h;
     // token buffer used discontinuously; Just going static for now.
     // TODO we could have a list of these and dynamically add more.  
+    Token *tokens_allocation; 
   };
 
   // for lattice pruning
@@ -373,7 +384,7 @@ class CudaLatticeDecoder {
    private:
     // before pruning (bpr)
     // aggregate Token data from per-frame TokenState in decoding
-    Token* toks_bpr_d; 
+    Token* toks_bpr_d; // it is shared with TokenAllocator::tokens_allocation
     Token* toks_bpr_h;
     // we keep start idx per-frame to fast index a token by (frame, idx) pair
     // see GetActiveToken() & GetActiveArc()

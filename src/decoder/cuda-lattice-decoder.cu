@@ -187,32 +187,22 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // if haven't seen this token, add into hash by activating it
     // push back the TokenState, and also record its index in lookup table
     int32 tokenstate_idx = params->cur_toks.PushBack(TokenState(nextstate));
-#ifdef ENSURE_tok_idx_allocated_STORE
-    int32 tok_idx_allocated = 
-          params->token_allocator.GetTokenAllocIdx(tokenstate_idx); 
-    // do not need to clear Token* cur_tok, as data will be re-stored in it
-    // in StoreDataByPackIdx()
-    params->cur_toks[tokenstate_idx].tok_idx_allocated = tok_idx_allocated;
-    // thus we can ensure tok_idx_allocated has been allocated
-    lookup_elem.tokenstate_idx = tokenstate_idx; 
-#else
+    // firstly store it, so that other threads can continue processing 
     lookup_elem.tokenstate_idx = tokenstate_idx; 
     int32 tok_idx_allocated = 
           params->token_allocator.GetTokenAllocIdx(tokenstate_idx); 
-    // do not need to clear Token* cur_tok, as data will be re-stored in it
-    // in StoreDataByPackIdx()
+    // do not need to clear Token* cur_tok, as data will be stored in it
+    // in function StoreDataByPackIdx()
+    // use tokenstate_idx + front_d (accumulate number of tokens before 
+    // this frame) as tok_idx_allocated
     params->cur_toks[tokenstate_idx].tok_idx_allocated = tok_idx_allocated;
-    // thus we can ensure tok_idx_allocated has been allocated
-#endif
+    // thus we do not need to ensure tok_idx_allocated has been allocated,
+    // as it will be used after this iteration and at StoreDataByPackIdx()
   }
   // need both 2 steps below, to ensure tokenstate_idx recorded correctly
-  // hasn't pushed
-  while (lookup_elem.tokenstate_idx == LOOKUP_DEACTIVE || 
-    lookup_elem.tokenstate_idx == LOOKUP_READY_PUSH); 
+  while (lookup_elem.tokenstate_idx == LOOKUP_DEACTIVE ||  // hasn't pushed
+    lookup_elem.tokenstate_idx == LOOKUP_READY_PUSH);  // during pushing
   __threadfence();
-    
-  //int32 cur_tok_idx = params->cur_toks[lookup_elem.tokenstate_idx].tok_idx_allocated;
-  //Token* cur_tok = params->token_allocator.GetTokenByExactIdx(cur_tok_idx);
 
   *next_ts = &params->cur_toks[lookup_elem.tokenstate_idx]; // get it using index
   if (add_arc) { // we add lattice arc except in _add_one_token()
@@ -224,10 +214,13 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     LatLinkCompact arc(ts_id, prev_tok_frame,
                        lookup_elem.tokenstate_idx, params->frame,
                        acoustic_cost, j); 
-    // use pushBack idx as update item index because it is unique in each frame
+    // use pushBack (idx - start index of this frame) 
+    // as update item index because it is unique in each frame obtained from 
+    // atomicAdd in pushBack function (lat_arcs_sub_vec 
+    // is recorded accumulatively and cleared only at end of decoding)
     *update_idx = params->lat_arcs_sub_vec.PushBack(arc) - 
                   *params->num_arcs_till_last; 
-    assert(*update_idx < params->max_lat_arc_per_frame);
+    assert(*update_idx < params->max_lat_arc_per_frame); 
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &((*next_ts)->token_pack);
@@ -1255,7 +1248,7 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     // *modified1 here as it won't be used before grid sync in the very below
     if (rank0) *modified1 = 0; 
     // wait for every thread to enter while, which slow down by 2% here
-    __grid_sync_nv_internal(barrier_); // TODO: this makes the following iteration constrain faster and stabler
+    //__grid_sync_nv_internal(barrier_); 
 
     int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
     int32 size = GetSize(arcs_bpr_fr_sidx_d, frame);
@@ -1446,7 +1439,7 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   bytes_cuda_malloc += lattice_pruner_.Allocate(config.max_tokens_per_frame,
                        config.max_lat_arc_per_frame, config.prune_interval,
                        config.max_tokens, config.max_arcs, fst_,
-                       token_allocator_.tokens_allocation);
+                       token_allocator_.GetTokenAllocation());
 
   lat_arcs_buf_.Allocate(config.max_arcs, NULL, NULL, NULL,
                          lattice_pruner_.GetDeviceArcsBpr());
