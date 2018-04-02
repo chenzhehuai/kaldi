@@ -39,28 +39,7 @@ void get_free_memory_stat(char *prefix) {
 }
 
 
-DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch) {
-  __syncthreads();
-  if (threadIdx.x == 0) {
-    // gridDim.x-1 blocks are adding 1
-    // and one block is adding 0x80000000 - (gridDim.x-1)
-    // so the whole sum is 0x80000000
-    int nb = 1;
-    if (blockIdx.x == 0) {
-      nb = 0x80000000 - (gridDim.x - 1);
-    }
-    int old_epoch = *fast_epoch;
-    __threadfence();
-    atomicAdd((int*)fast_epoch, nb);
-    // wait for the sign bit to commute
-    int cnt = 0;
-    while (((*fast_epoch) ^ old_epoch) >= 0) ;
-  }
-  __syncthreads();
-}
-DEVICE  void __grid_sync_nv_internal(int *barrier) {
-  __gpu_sync_fast((volatile int*)barrier);
-}
+
 
 // CudaFst Implementation
 HOST DEVICE float CudaFst::Final(StateId state) const {
