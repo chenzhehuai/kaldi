@@ -227,6 +227,7 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // use pushBack idx as update item index because it is unique in each frame
     *update_idx = params->lat_arcs_sub_vec.PushBack(arc) - 
                   *params->num_arcs_till_last; 
+    assert(*update_idx < params->max_lat_arc_per_frame);
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &((*next_ts)->token_pack);
@@ -390,8 +391,8 @@ DEVICE __inline__ void process_nonemitting_tokens(processTokens_params
     __grid_sync_nv_internal(params->barrier); 
   }
   if (params->verbose > 3 && threadIdx.x == 0
-      && blockIdx.x == 0) CUDA_PRINTF("PNE: %i %i %i\n", params->frame,
-                                        params->cur_toks.Size(), *agg_tok_idx);
+      && blockIdx.x == 0) CUDA_PRINTF("PNE: %i %i %i %f\n", params->frame,
+                                        params->cur_toks.Size(), *agg_tok_idx, *params->cutoff);
   
   while (true) {
     int32 i, j;
@@ -433,6 +434,7 @@ DEVICE __inline__ void process_nonemitting_tokens(processTokens_params
         uint64 ret = atomicMax((unsigned long long *)token_pack,
                                  (unsigned long long)new_token_pack);
         if (ret < new_token_pack) {
+          assert(update_idx < params->max_lat_arc_per_frame);
           Token* cur_te = params->token_per_arc + update_idx;
           cuda_store8(cur_te, &(Token(weight, tok)));
           params->token_per_arc_update[update_idx] = 1;
@@ -483,7 +485,7 @@ static void _add_one_token(processTokens_params params, StateId state) {
 
 // putting this into a kernel to avoid extra latency of a memory copy
 __global__ 
-void _initialize_cutoff(CostType *cutoff) { *cutoff = INFINITY; }
+void _initialize_cutoff(CostType *cutoff) { *cutoff = 1e2; }
 
 // providing additional information of (maxThreadsPerBlock, minBlocksPerMultiprocessor)
 // to the compiler to make more threads and blocks reside on GPU
@@ -547,7 +549,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // we have sync in the end of process_nonemitting_tokens
     // __grid_sync_nv_internal(params.barrier);  
     // wait for everyone to finish process tokens and writes modified0
-  } while ((*modified0) == true);
+  } while ((*modified0) == true && cnt < 10);
   if (rank0 && params.verbose > 0 && params.frame % itv == 0)
     CUDA_PRINTF("TK: %i %i %i %i %f\n", params.frame, tok_E, params.cur_toks.Size(),
                 params.token_allocator.Size(), cutoff);
@@ -667,8 +669,12 @@ HOST DEVICE inline uint32 CudaVector<T>::Size() const {
 template<typename T>
 HOST DEVICE inline uint32 CudaVector<T>::PushBack(const T &val) {
 #ifdef __CUDA_ARCH__
-  assert(*count_d < max_size);
   uint32 idx = atomicAdd(count_d, 1);
+#ifdef __DEBUG__
+  assert(*count_d < max_size);
+#else
+  if (*count_d >= max_size) *count_d = max_size - 1;
+#endif
   if (sizeof(T) == 16) cuda_store16(mem_d+idx, &val);
   else mem_d[idx] = val;
 #else
@@ -938,13 +944,21 @@ DEVICE inline Token* TokenAllocator::GetToken(uint32 offset) {
 
 DEVICE inline Token* TokenAllocator::GetTokenByExactIdx(uint32 offset) {
   int32 idx = offset;
+#ifdef __DEBUG__
   assert(idx >= 0 && idx < size);
+#else
+  if (idx >= size) idx = size - 1;
+#endif
   return &tokens_allocation[idx];
 }
 
 DEVICE inline int32 TokenAllocator::GetTokenAllocIdx(uint32 offset) {
   int32 idx = *front_d + offset;
+#ifdef __DEBUG__
   assert(idx >= 0 && idx < size);
+#else
+  if (idx >= size) idx = size - 1;
+#endif
   return idx;
 }
 
@@ -1566,6 +1580,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->numArcs = fst_.NumArcs();
   params->frame = num_frames_decoded_;
   params->num_arcs_till_last = num_arcs_till_last_d;
+  params->max_lat_arc_per_frame = config_.max_lat_arc_per_frame;
 }
 
 // call InitDecoding if you have already decoded an
