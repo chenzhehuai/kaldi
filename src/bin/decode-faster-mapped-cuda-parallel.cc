@@ -89,6 +89,10 @@ int main(int argc, char *argv[]) {
 
     int num_success = 0, num_fail = 0;
     cuInit(0);
+#if HAVE_CUDA==1
+      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().AllowMultithreading();
+#endif
     CudaFst cuda_fst;
     double elapsed=0;
     Timer timer;
@@ -97,10 +101,7 @@ int main(int argc, char *argv[]) {
 #pragma omp parallel shared(po, cuda_fst) 
     {
       printf("Thread %d of %d\n", omp_get_thread_num(), omp_get_num_threads());
-#if HAVE_CUDA==1
-      CuDevice::Instantiate().SelectGpuId("yes");
-      CuDevice::Instantiate().AllowMultithreading();
-#endif
+
 #pragma omp barrier
 
     SequentialBaseFloatMatrixReader loglikes_reader(loglikes_rspecifier);
