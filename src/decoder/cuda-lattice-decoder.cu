@@ -207,6 +207,8 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
 
   *next_ts = &params->cur_toks[lookup_elem.tokenstate_idx]; // get it using index
   if (add_arc) { // we add lattice arc except in _add_one_token()
+    while ((*next_ts)->tok_idx_allocated == -1);
+    while ((ts)->tok_idx_allocated == -1);
     LatLinkCompact arc(ts->tok_idx_allocated, 
                        (*next_ts)->tok_idx_allocated, 
                        acoustic_cost, j); 
@@ -1173,10 +1175,14 @@ inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id_pack,
 inline DEVICE Token* LatticePruner::GetActiveTokenByExactId(int32 frame, 
   int32 id_exact, bool check) const {
   Token* tok = toks_bpr_d + id_exact;
+  
   if (check) {
+    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF("%i %i\n", id_exact, toks_bpr_fr_sidx_d[frame]);
+    if (id_exact >= toks_bpr_fr_sidx_d[frame+1]) CUDA_PRINTF("%i %i\n", id_exact, toks_bpr_fr_sidx_d[frame+1]);
     assert(toks_bpr_fr_sidx_d[frame] <= id_exact &&
       id_exact < toks_bpr_fr_sidx_d[frame+1]);
   }
+  
   return tok;
 }
 
@@ -1606,6 +1612,7 @@ void CudaLatticeDecoder::InitDecoding() {
   UpdateTokPointersByFrame(num_frames_decoded_);
   lattice_pruner_.Initialize();
   token_allocator_.Reset();
+  CU_SAFE_CALL(cudaGetLastError());
 
   // we launch 64 threads as a block, i.e. 2 cooperative_groups 
   // in cuda kernel of dynamic load balancing. more details are described there
@@ -1718,6 +1725,7 @@ void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sid
   // GPU lattice pruning
   PruneActiveTokens(stream_comp, stream_comp, config_.lat_fraction); 
   // copy the TokenState vector in the last frame, used by ComputeFinalCosts()
+  CU_SAFE_CALL(cudaGetLastError());
   (*cur_toks_).CopyDataToHost(stream_lat[1]);
   *toks_vec_last_fr = cur_toks_;
   cudaStreamSynchronize(stream_comp); // wait for lattice pruning
@@ -1729,6 +1737,7 @@ void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sid
   // get host data from lattice_pruner_, used by CPU lattice processing
   lattice_pruner_.GetHostData(toks_buf, toks_fr_sidx,
                               arcs_buf, arcs_fr_size);
+  CU_SAFE_CALL(cudaGetLastError());
 
   POP_RANGE
 }

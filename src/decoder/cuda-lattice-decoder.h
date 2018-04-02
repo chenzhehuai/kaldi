@@ -248,7 +248,7 @@ class CudaLatticeDecoder {
   struct __align__(16) TokenState {
    public:
 
-    int32_t tok_idx_allocated; // this can ALSO be obtained from 
+    volatile int32_t tok_idx_allocated; // this can ALSO be obtained from 
     //TokenLookupElem[state].tok_idx_allocated in each frame
     StateId state;  // record WFST state
     //CostType cost_; // for CPU to copy lattice without prefetch token_allocator_; totally deprecated
