@@ -34,6 +34,24 @@
 #include "decoder/cuda-lattice-decoder.h"
 #include <omp.h>
 
+static bool ReadStrVectorSimple(std::string rxfilename, 
+                                std::vector<std::string> *list) {
+  kaldi::Input ki;
+  rxfilename.erase(0, 4);
+  if (!ki.OpenTextMode(rxfilename)) return false;
+  std::istream &is = ki.Stream();
+  std::string i;
+  list->clear();
+  int cnt = 0;
+  while ( !(is >> i).fail() ) {
+    if (cnt++ % 2 == 0) { // ignore the value part, only keep the key
+      list->push_back(i);
+    }
+  }
+  is >> std::ws;
+  return is.eof();  // should be eof, or junk at end of file.
+}
+
 int main(int argc, char *argv[]) {
   try {
     using namespace kaldi;
@@ -104,6 +122,11 @@ int main(int argc, char *argv[]) {
     int num_success = 0, num_fail = 0;
 
     double elapsed = 0;
+
+    std::vector<std::string> feature_vector;
+    ReadStrVectorSimple(feature_rspecifier, &feature_vector);
+    RandomAccessBaseFloatMatrixReader loglike_reader(feature_rspecifier);
+
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       Fst<StdArc> *decode_fst;
       decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
@@ -133,7 +156,6 @@ int main(int argc, char *argv[]) {
         #endif
         */
         #pragma omp barrier
-        SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
         // Input FST is just one FST, not a table of FSTs.
 
         if (omp_get_thread_num() == 0) {
@@ -143,30 +165,36 @@ int main(int argc, char *argv[]) {
 
         LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
         {
-
-          for (; !loglike_reader.Done(); loglike_reader.Next()) {
+#pragma omp for
+          for (int i=0; i < feature_vector.size(); i++) {
+            KALDI_LOG << omp_get_thread_num() <<"\t"<< i << "\t" << 
+              feature_vector[i] << "\t" << loglike_reader.HasKey(feature_vector[i]);
+            if (!loglike_reader.HasKey(feature_vector[i])) continue;
             if (omp_get_thread_num() == 0) {
               printf("cudaMallocMemory: %lg GB, cudaMallocManagedMemory: %lg GB\n",
-                     (decoder.Decoder().GetCudaMallocBytes()*omp_get_num_threads() +
-                      decode_fst_cuda.GetCudaMallocBytes()) / 1024.0 / 1024 / 1024,
-                     decoder.Decoder().GetCudaMallocManagedBytes() / 1024.0 / 1024 / 1024 *
-                     omp_get_num_threads());
+               (decoder.Decoder().GetCudaMallocBytes()*omp_get_num_threads() +
+               decode_fst_cuda.GetCudaMallocBytes()) / 1024.0 / 1024 / 1024,
+               decoder.Decoder().GetCudaMallocManagedBytes() / 1024.0 / 1024 / 1024 *
+               omp_get_num_threads());
             }
             PUSH_RANGE("whole decoding", 0);
             PUSH_RANGE("before_decoding", 1);
             if (omp_get_thread_num() == 0) timer.Reset();
-            #pragma omp barrier
+            //#pragma omp barrier
 
-            std::string utt = loglike_reader.Key();
-            Matrix<BaseFloat> loglikes (loglike_reader.Value());
-            loglike_reader.FreeCurrent();
+            std::string utt = feature_vector[i];
+            Matrix<BaseFloat> loglikes;
+            #pragma omp critical
+            {
+              loglikes = Matrix<BaseFloat>(loglike_reader.Value(feature_vector[i]));
+            }
             if (loglikes.NumRows() == 0) {
               KALDI_WARN << "Zero-length utterance: " << utt;
               num_fail++;
               continue;
             }
-
-            DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+            DecodableMatrixScaledMapped decodable(trans_model, loglikes, 
+                                                  acoustic_scale);
 
             POP_RANGE
 
@@ -182,7 +210,7 @@ int main(int argc, char *argv[]) {
               frame_count += loglikes.NumRows();
               num_success++;
             } else num_fail++;
-            #pragma omp barrier
+            //#pragma omp barrier
             if (omp_get_thread_num() == 0) elapsed += timer.Elapsed();
             POP_RANGE
             #pragma omp critical
