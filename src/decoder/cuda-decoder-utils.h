@@ -100,8 +100,36 @@ namespace kaldi {
 // No stream priorities
 
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
-DEVICE void __grid_sync_nv_internal(int *barrier);
-
+#ifdef __CUDACC__
+DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
+{
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        // gridDim.x-1 blocks are adding 1
+        // and one block is adding 0x80000000 - (gridDim.x-1)
+        // so the whole sum is 0x80000000
+        int nb = 1;
+        if (blockIdx.x == 0) {
+            nb = 0x80000000 - (gridDim.x-1);
+        }
+ 
+        int old_epoch = *fast_epoch;
+        __threadfence();
+        atomicAdd((int*)fast_epoch, nb);
+ 
+        // wait for the sign bit to commute   
+        int cnt=0;
+        while (((*fast_epoch) ^ old_epoch) >= 0)//&& ++cnt!=(1<<19) //deadlock hack
+            ;
+        //if (blockIdx.x == 0) *fast_epoch=0;
+    }
+    __syncthreads();
+}
+DEVICE inline void __grid_sync_nv_internal(int *barrier)
+{
+    __gpu_sync_fast((volatile int*)barrier);
+}
+#endif
 
 class CudaFst {
   public:
@@ -111,15 +139,15 @@ class CudaFst {
     typedef StdArc::Weight StdWeight;
     typedef StdArc::Label Label;
     
-    CudaFst() {};
+    inline CudaFst() {};
     void initialize(const fst::Fst<StdArc> &fst);
     void finalize();
 
-    uint32_t NumStates() const {  return numStates; }
-    uint32_t NumArcs() const {  return numArcs; }
-    StateId Start() const { return start; }    
+    inline uint32_t NumStates() const {  return numStates; }
+    inline uint32_t NumArcs() const {  return numArcs; }
+    inline StateId Start() const { return start; }    
     HOST DEVICE float Final(StateId state) const;
-    size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
+    inline size_t getCudaMallocBytes() const { return bytes_cudaMalloc; }
   
     unsigned int numStates;               //total number of states
     unsigned int numArcs;               //total number of states
