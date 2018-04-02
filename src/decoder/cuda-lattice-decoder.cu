@@ -187,6 +187,7 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // if haven't seen this token, add into hash by activating it
     // push back the TokenState, and also record its index in lookup table
     int32 tokenstate_idx = params->cur_toks.PushBack(TokenState(nextstate));
+    if (params->frame == 0) *params->token_allocator.front_d = 0; //TODO
     
     int32 tok_idx_allocated = 
           params->token_allocator.GetTokenAllocIdx(tokenstate_idx); 
@@ -1177,8 +1178,8 @@ inline DEVICE Token* LatticePruner::GetActiveTokenByExactId(int32 frame,
   Token* tok = toks_bpr_d + id_exact;
   
   if (check) {
-    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF("%i %i\n", id_exact, toks_bpr_fr_sidx_d[frame]);
-    if (id_exact >= toks_bpr_fr_sidx_d[frame+1]) CUDA_PRINTF("%i %i\n", id_exact, toks_bpr_fr_sidx_d[frame+1]);
+    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF("h %i %i\n", id_exact, toks_bpr_fr_sidx_d[frame]);
+    if (id_exact >= toks_bpr_fr_sidx_d[frame+1]) CUDA_PRINTF("t %i %i\n", id_exact, toks_bpr_fr_sidx_d[frame+1]);
     assert(toks_bpr_fr_sidx_d[frame] <= id_exact &&
       id_exact < toks_bpr_fr_sidx_d[frame+1]);
   }
@@ -1658,6 +1659,7 @@ void CudaLatticeDecoder::ClearToks(TokenMergeVector &toks) {
 
 void CudaLatticeDecoder::PreProcessTokens() {
   PUSH_RANGE("PreProcessTokens", 1)
+
 
   num_frames_decoded_++;
   /* // TODO: check performance here

@@ -238,7 +238,7 @@ class CudaLatticeDecoder {
                                       uint32 next_tok_id, 
                                       BaseFloat acoustic_cost, int32 arc_id): 
         prev_tok_id(prev_tok_id), next_tok_id(next_tok_id), 
-        acoustic_cost(acoustic_cost), arc_id(arc_id) { }
+        acoustic_cost(acoustic_cost), arc_id(arc_id) { assert(prev_tok_id>=0);}
     HOST DEVICE inline bool IsEmitArc() {
       return acoustic_cost != 0;
     }
@@ -303,10 +303,11 @@ class CudaLatticeDecoder {
     size_t bytes_cuda_malloc_managed;
     uint32 prefetch_size; // amount of elements to prefetch beyond front
     // next free token index
-    uint32 *front_d, *front_h;
     // token buffer used discontinuously; Just going static for now.
     // TODO we could have a list of these and dynamically add more.  
     Token *tokens_allocation; 
+   public:
+    uint32 *front_d, *front_h;
   };
 
   // for lattice pruning
