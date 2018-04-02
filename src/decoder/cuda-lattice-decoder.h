@@ -228,33 +228,20 @@ class CudaLatticeDecoder {
 
   // during decoding, as arcs are pre-allocated, we need a more compact 
   // structure and it is aligned in 16 bits. 
-  // Notably, to work in 16 bits, we have to pack both id & whether it is 
-  // emit arc in is_emit_pack_prev_tok_id
   class __align__(16) LatLinkCompact {  
    public:
-    uint32 next_tok_id; // token index in the frame level token vector
+    uint32 next_tok_id; // next token index in the tokens_allocation
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     int32 arc_id;
-
-    HOST DEVICE inline LatLinkCompact(uint32 prev_tok_id, int32 prev_tok_fr,     
-                                      uint32 next_tok_id, int32 next_tok_fr, 
+    uint32 prev_tok_id; // prev token index in the tokens_allocation
+    HOST DEVICE inline LatLinkCompact(uint32 prev_tok_id,     
+                                      uint32 next_tok_id, 
                                       BaseFloat acoustic_cost, int32 arc_id): 
-        is_emit_pack_prev_tok_id(prev_tok_id), next_tok_id(next_tok_id), 
-        acoustic_cost(acoustic_cost), arc_id(arc_id) {
-      assert(is_emit_pack_prev_tok_id < ((uint32)1<<31));  // we can't cope with that large number
-      uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
-      this->is_emit_pack_prev_tok_id |= (is_emit_arc<<31); // a hack to save is_emit_arc in is_emit_pack_prev_tok_id
-    }
+        prev_tok_id(prev_tok_id), next_tok_id(next_tok_id), 
+        acoustic_cost(acoustic_cost), arc_id(arc_id) { }
     HOST DEVICE inline bool IsEmitArc() {
-      return is_emit_pack_prev_tok_id >= ((uint32)1<<31);
+      return acoustic_cost != 0;
     }
-    HOST DEVICE inline uint32 GetPrevTokId() {
-      return is_emit_pack_prev_tok_id & (((uint32)1<<31) - 1);
-    }
-
-   private:
-    // a hack to contain both id & whether it is emit arc
-    uint32 is_emit_pack_prev_tok_id;  
   };
 
   // align to 16 bits so as to fast memcpy, see store16()
@@ -305,6 +292,7 @@ class CudaLatticeDecoder {
     DEVICE inline Token* GetToken(uint32 index); 
     DEVICE inline Token* GetTokenByExactIdx(uint32 index); 
     DEVICE inline int32 GetTokenAllocIdx(uint32 offset);
+    DEVICE inline int32 GetIdxFromAddr(Token* tok);
     // advances the allocated token list by num
     DEVICE inline void AdvanceFront(uint32 num); 
 

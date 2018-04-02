@@ -187,8 +187,7 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // if haven't seen this token, add into hash by activating it
     // push back the TokenState, and also record its index in lookup table
     int32 tokenstate_idx = params->cur_toks.PushBack(TokenState(nextstate));
-    // firstly store it, so that other threads can continue processing 
-    lookup_elem.tokenstate_idx = tokenstate_idx; 
+    
     int32 tok_idx_allocated = 
           params->token_allocator.GetTokenAllocIdx(tokenstate_idx); 
     // do not need to clear Token* cur_tok, as data will be stored in it
@@ -198,6 +197,8 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     params->cur_toks[tokenstate_idx].tok_idx_allocated = tok_idx_allocated;
     // thus we do not need to ensure tok_idx_allocated has been allocated,
     // as it will be used after this iteration and at StoreDataByPackIdx()
+    // store it at last to make sure tok_idx_allocated has been stored
+    lookup_elem.tokenstate_idx = tokenstate_idx; 
   }
   // need both 2 steps below, to ensure tokenstate_idx recorded correctly
   while (lookup_elem.tokenstate_idx == LOOKUP_DEACTIVE ||  // hasn't pushed
@@ -206,13 +207,8 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
 
   *next_ts = &params->cur_toks[lookup_elem.tokenstate_idx]; // get it using index
   if (add_arc) { // we add lattice arc except in _add_one_token()
-    Token *prev_tok = params->token_allocator.GetTokenByExactIdx(ts->tok_idx_allocated);
-    int32 prev_tok_frame = (!is_emit) ? params->frame : params->frame - 1;
-    int32 ts_id = (!is_emit) ?
-                  params->cur_toks.GetIdxFromAddr(ts) : // process non-emit tokens
-                  params->prev_toks.GetIdxFromAddr(ts); // process emit tokens
-    LatLinkCompact arc(ts_id, prev_tok_frame,
-                       lookup_elem.tokenstate_idx, params->frame,
+    LatLinkCompact arc(ts->tok_idx_allocated, 
+                       next_ts->tok_idx_allocated, 
                        acoustic_cost, j); 
     // use pushBack (idx - start index of this frame) 
     // as update item index because it is unique in each frame obtained from 
@@ -955,6 +951,12 @@ DEVICE inline int32 TokenAllocator::GetTokenAllocIdx(uint32 offset) {
   return idx;
 }
 
+DEVICE inline int32 TokenAllocator::GetIdxFromAddr(Token* tok) {
+  int32 ret = tok - tokens_allocation;
+  assert(ret < size && ret >= 0);
+  return ret;
+}
+
 DEVICE inline void TokenAllocator::AdvanceFront(uint32 num) {
   int32 front = *front_d + num;
   assert(front < size);
@@ -1073,19 +1075,16 @@ inline DEVICE void LatticePruner::CollectToksPerFrame(
     // Set start index in the buffer of the next frame
     SetNextSidx(toks_bpr_fr_sidx_d, size, frame); 
   }
-#if 0
+  // do not need further copy, as tos of lattice_pruner_ and token_allocator 
+  // are shared
+  /*
   for (; tid < size; tid += gridDim.x * blockDim.x) {
     Token* to_tok = GetActiveToken(frame, tid, false);
     Token* token_tmp = token_allocator->GetTokenByExactIdx(
                             cur_toks[tid].tok_idx_allocated);
     cuda_store8(to_tok, token_tmp);
-    /* 
-    // for debug purpose
-    assert(cur_toks[tid].token->frame==frame);
-    GetActiveToken(frame,tid,true);
-    */
   }
-#endif
+  */
 }
 
 // collect after each token passing, mainly to update arcs_bpr_fr_sidx_d here
@@ -1126,8 +1125,10 @@ DEVICE int32 LatticePruner::AddArc(LatLinkCompact* arc, int32 frame) {
   int32 i = atomicAdd(arcs_apr_used_d, 1);
   int32 frame_tok = arc->IsEmitArc() ? frame - 1: frame;
   int32 j = arc->arc_id;
-  LatLink apr_arc(arc->GetPrevTokId(), frame_tok, arc->next_tok_id, frame,
-            arc_ilabels[j], arc_olabels[j], arc_weights[j], arc->acoustic_cost); 
+  LatLink apr_arc(arc->prev_tok_id - toks_bpr_fr_sidx_d[frame_tok], 
+    frame_tok, arc->next_tok_id - toks_bpr_fr_sidx_d[frame], frame,
+    arc_ilabels[j], arc_olabels[j], arc_weights[j], arc->acoustic_cost); 
+  
   cuda_store32(arcs_apr_d + i, &apr_arc);
 }
 
@@ -1164,6 +1165,18 @@ inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id_pack,
     assert(tok->frame == frame);
   }
   */
+  return tok;
+}
+
+// Get the active token indexed by a uint64 pair (frame, idx)
+// the details of the pair can be referred to LatLink::LatLink()
+inline DEVICE Token* LatticePruner::GetActiveTokenByExactId(int32 frame, 
+  int32 id_exact, bool check) const {
+  Token* tok = toks_bpr_d + id_exact;
+  if (check) {
+    assert(toks_bpr_fr_sidx_d[frame] <= id_exact &&
+      id_exact < toks_bpr_fr_sidx_d[frame+1]);
+  }
   return tok;
 }
 
@@ -1255,8 +1268,10 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     for (; tid < size; tid += gridDim.x * blockDim.x) {
       LatLinkCompact* link = GetActiveArc(frame, tid);
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
-      Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
-      Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
+      Token* next_tok = GetActiveTokenByExactId(frame, 
+        link->next_tok_id, true);
+      Token* tok = GetActiveTokenByExactId(frame_tok, 
+        link->prev_tok_id, true);
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
@@ -1286,8 +1301,10 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     for (; tid < size; tid += gridDim.x * blockDim.x) {
       LatLinkCompact* link = GetActiveArc(frame, tid);
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
-      Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
-      Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
+      Token* next_tok = GetActiveTokenByExactId(frame, 
+        link->next_tok_id, true);
+      Token* tok = GetActiveTokenByExactId(frame_tok, 
+        link->prev_tok_id, true);
       BaseFloat link_extra_cost = next_tok->extra_cost +
                                   ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
