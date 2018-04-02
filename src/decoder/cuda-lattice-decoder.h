@@ -230,10 +230,10 @@ class CudaLatticeDecoder {
   // structure and it is aligned in 16 bits. 
   class __align__(16) LatLinkCompact {  
    public:
+    uint32 prev_tok_id; // prev token index in the tokens_allocation
     uint32 next_tok_id; // next token index in the tokens_allocation
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     int32 arc_id;
-    uint32 prev_tok_id; // prev token index in the tokens_allocation
     HOST DEVICE inline LatLinkCompact(uint32 prev_tok_id,     
                                       uint32 next_tok_id, 
                                       BaseFloat acoustic_cost, int32 arc_id): 
@@ -296,7 +296,7 @@ class CudaLatticeDecoder {
     // advances the allocated token list by num
     DEVICE inline void AdvanceFront(uint32 num); 
 
-    Token* GetTokenAllocation() { return tokens_allocation };
+    Token* GetTokenAllocation() { return tokens_allocation; };
    private:
     int32_t device; // for MEMADVISE
     uint32 size; // host size
@@ -341,6 +341,9 @@ class CudaLatticeDecoder {
     inline DEVICE void SetNextSidx(int* sidx_buf, int32 size, int32 frame);
     inline DEVICE Token* GetActiveToken(void* p, bool check=false, int32 frame=-1) const;
     inline DEVICE Token* GetActiveToken(int32 frame, int32 id, bool check=false) const;
+    inline DEVICE Token* GetActiveTokenByExactId(int32 frame, 
+  int32 id_exact, bool check) const;
+
     inline DEVICE LatLinkCompact* GetActiveArc(int32 frame, int32 id) const;
     inline DEVICE int32 GetSize(int* acc_len, int32 frame) const;
     // used in PruneLatticeForFrame()

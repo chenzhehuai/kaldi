@@ -208,7 +208,7 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
   *next_ts = &params->cur_toks[lookup_elem.tokenstate_idx]; // get it using index
   if (add_arc) { // we add lattice arc except in _add_one_token()
     LatLinkCompact arc(ts->tok_idx_allocated, 
-                       next_ts->tok_idx_allocated, 
+                       (*next_ts)->tok_idx_allocated, 
                        acoustic_cost, j); 
     // use pushBack (idx - start index of this frame) 
     // as update item index because it is unique in each frame obtained from 
