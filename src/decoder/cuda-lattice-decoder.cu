@@ -187,8 +187,8 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // if haven't seen this token, add into hash by activating it
     // push back the TokenState, and also record its index in lookup table
     int32 tokenstate_idx = params->cur_toks.PushBack(TokenState(nextstate));
-    if (params->frame == 0) *params->token_allocator.front_d = 0; //TODO: a hack here
-    
+    // firstly store it, so that other threads can continue processing 
+    lookup_elem.tokenstate_idx = tokenstate_idx; 
     int32 tok_idx_allocated = 
           params->token_allocator.GetTokenAllocIdx(tokenstate_idx); 
     // do not need to clear Token* cur_tok, as data will be stored in it
@@ -198,8 +198,6 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     params->cur_toks[tokenstate_idx].tok_idx_allocated = tok_idx_allocated;
     // thus we do not need to ensure tok_idx_allocated has been allocated,
     // as it will be used after this iteration and at StoreDataByPackIdx()
-    // store it at last to make sure tok_idx_allocated has been stored
-    lookup_elem.tokenstate_idx = tokenstate_idx; 
   }
   // need both 2 steps below, to ensure tokenstate_idx recorded correctly
   while (lookup_elem.tokenstate_idx == LOOKUP_DEACTIVE ||  // hasn't pushed
@@ -208,10 +206,13 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
 
   *next_ts = &params->cur_toks[lookup_elem.tokenstate_idx]; // get it using index
   if (add_arc) { // we add lattice arc except in _add_one_token()
-    while ((*next_ts)->tok_idx_allocated == -1);
-    while ((ts)->tok_idx_allocated == -1);
-    LatLinkCompact arc(ts->tok_idx_allocated, 
-                       (*next_ts)->tok_idx_allocated, 
+    Token *prev_tok = params->token_allocator.GetTokenByExactIdx(ts->tok_idx_allocated);
+    int32 prev_tok_frame = (!is_emit) ? params->frame : params->frame - 1;
+    int32 ts_id = (!is_emit) ?
+                  params->cur_toks.GetIdxFromAddr(ts) : // process non-emit tokens
+                  params->prev_toks.GetIdxFromAddr(ts); // process emit tokens
+    LatLinkCompact arc(ts_id, prev_tok_frame,
+                       lookup_elem.tokenstate_idx, params->frame,
                        acoustic_cost, j); 
     // use pushBack (idx - start index of this frame) 
     // as update item index because it is unique in each frame obtained from 
@@ -219,7 +220,7 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // is recorded accumulatively and cleared only at end of decoding)
     *update_idx = params->lat_arcs_sub_vec.PushBack(arc) - 
                   *params->num_arcs_till_last; 
-    assert(*update_idx < params->max_lat_arc_per_frame); 
+    assert(*update_idx < params->max_lat_arc_per_frame);
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &((*next_ts)->token_pack);
@@ -461,6 +462,7 @@ static void _add_one_token(processTokens_params params, StateId state) {
   uint64* token_pack;
   int32 j = 0;
   int32 update_idx = 0;
+  params.token_allocator.Reset();
   if (threadIdx.x != 0 || blockIdx.x != 0) return;
   find_or_add_token_arc(&params, state, 0, // add first token
                          0, NULL, j, false,  &next_ts,
@@ -887,9 +889,14 @@ void TokenAllocator::Finalize() {
   cudaFreeHost(front_h);
 }
 
-void TokenAllocator::Reset() {
+HOST DEVICE void TokenAllocator::Reset() {
+#ifdef __CUDA_ARCH__
+  if (threadIdx.x == 0 && blockIdx.x == 0)
+    *front_d = 0;
+#else
   *front_h = 0;
   cudaMemset(front_d, 0, sizeof(int32));
+#endif
 }
 
 void TokenAllocator::PrefetchNextToDevice(cudaStream_t stream) {
@@ -1128,10 +1135,8 @@ DEVICE int32 LatticePruner::AddArc(LatLinkCompact* arc, int32 frame) {
   int32 i = atomicAdd(arcs_apr_used_d, 1);
   int32 frame_tok = arc->IsEmitArc() ? frame - 1: frame;
   int32 j = arc->arc_id;
-  LatLink apr_arc(arc->prev_tok_id - toks_bpr_fr_sidx_d[frame_tok], 
-    frame_tok, arc->next_tok_id - toks_bpr_fr_sidx_d[frame], frame,
-    arc_ilabels[j], arc_olabels[j], arc_weights[j], arc->acoustic_cost); 
-  
+  LatLink apr_arc(arc->GetPrevTokId(), frame_tok, arc->next_tok_id, frame,
+            arc_ilabels[j], arc_olabels[j], arc_weights[j], arc->acoustic_cost); 
   cuda_store32(arcs_apr_d + i, &apr_arc);
 }
 
@@ -1275,10 +1280,8 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     for (; tid < size; tid += gridDim.x * blockDim.x) {
       LatLinkCompact* link = GetActiveArc(frame, tid);
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
-      Token* next_tok = GetActiveTokenByExactId(frame, 
-        link->next_tok_id, true);
-      Token* tok = GetActiveTokenByExactId(frame_tok, 
-        link->prev_tok_id, true);
+      Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
+      Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
@@ -1308,10 +1311,8 @@ inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     for (; tid < size; tid += gridDim.x * blockDim.x) {
       LatLinkCompact* link = GetActiveArc(frame, tid);
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
-      Token* next_tok = GetActiveTokenByExactId(frame, 
-        link->next_tok_id, true);
-      Token* tok = GetActiveTokenByExactId(frame_tok, 
-        link->prev_tok_id, true);
+      Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
+      Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
       BaseFloat link_extra_cost = next_tok->extra_cost +
                                   ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
@@ -1612,8 +1613,8 @@ void CudaLatticeDecoder::InitDecoding() {
 
   UpdateTokPointersByFrame(num_frames_decoded_);
   lattice_pruner_.Initialize();
-  token_allocator_.Reset();
   CU_SAFE_CALL(cudaGetLastError());
+  // token_allocator_.Reset() is done in _add_one_token() to reduce a separate calling
 
   // we launch 64 threads as a block, i.e. 2 cooperative_groups 
   // in cuda kernel of dynamic load balancing. more details are described there
