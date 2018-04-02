@@ -187,7 +187,7 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
     // if haven't seen this token, add into hash by activating it
     // push back the TokenState, and also record its index in lookup table
     int32 tokenstate_idx = params->cur_toks.PushBack(TokenState(nextstate));
-    if (params->frame == 0) *params->token_allocator.front_d = 0; //TODO
+    if (params->frame == 0) *params->token_allocator.front_d = 0; //TODO: a hack here
     
     int32 tok_idx_allocated = 
           params->token_allocator.GetTokenAllocIdx(tokenstate_idx); 
