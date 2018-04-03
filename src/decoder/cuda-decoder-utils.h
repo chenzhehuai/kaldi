@@ -135,22 +135,23 @@ DEVICE inline void __grid_sync_nv_internal(int *barrier) {
 #define MAX_HISTOGRAM_SIZE 10
 class CudaHistogram {
   public:
-    void Allocate(BaseFloat beam, BaseFloat beam_lowest, int32 cutoff_num, 
-                  BaseFloat step);
+    int32 Allocate(BaseFloat beam, BaseFloat beam_lowest, BaseFloat step);
+    void Free();
 #ifdef __CUDACC__
     inline DEVICE void Initialize(BaseFloat best_cost) { 
-        best_cost_ = best_cost;
+        *best_cost_ = best_cost;
     }
     inline DEVICE int32 Size() const { return (beam_ - beam_lowest_); }
     inline DEVICE void AddScore2LocalHist(BaseFloat cost, int32* hist_local) {
-        int32 dist = (int)(cost - best_cost_);
+        int32 dist = (int)(cost - *best_cost_);
         assert(dist <= beam_);
         if (dist <= beam_lowest_) hist_local[0]++;
-        else if (dist == beam) hist_local[Size() - 1]++;
-        else hist_local[dist - beam_lowest_]++;
+        else if (dist == beam_) hist_local[Size() - 1]++;
+        else hist_local[(int32)(dist - beam_lowest_)]++;
     }
     inline DEVICE void AggregateLocalHist(int32* hist_local) {
-        for (int i=0, i<Size(); i++) {
+        for (int i=0; i<Size(); i++) {
+          if (hist_local[i] != 0)
             atomicAdd(hist_global_+i, hist_local[i]);
         }
     }
@@ -162,20 +163,24 @@ class CudaHistogram {
             if (acc > cutoff_num) break;
         }
         BaseFloat ret_beam=i+beam_lowest_;
-        *cutoff_from_hist=best_cost_+ret_beam;
+        *cutoff_from_hist=*best_cost_+ret_beam;
         if (verbose > 2) {
             CUDA_PRINTF("hist_LF %f %i\n", *cutoff_from_hist, acc);
         }
+        memset(hist_global_, 0, Size());
     }
 #endif
   
   private:
+    // configuration
     BaseFloat beam_;
     BaseFloat beam_lowest_;
     BaseFloat step_;
-    BaseFloat best_cost_;
+    // global cache data
+    BaseFloat* best_cost_;
     int32* hist_global_;
-}
+};
+
 // WFST struct designed for GPU memory
 class CudaFst {
   public:

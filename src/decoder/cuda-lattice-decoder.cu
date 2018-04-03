@@ -229,11 +229,12 @@ DEVICE inline void find_or_add_token_arc(processTokens_params* params,
 
 inline DEVICE void find_prev_cutoff_by_histogram(processTokens_params* params) {
   // to reduce a grid sync, we initialize it in _process_tokens()
-  // params->histogram_prev_toks.Initialize(*params->cutoff + params->beam);
+  // params->histogram_prev_toks.Initialize(*params->cutoff - params->beam);
   bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
   int32 hist_local[MAX_HISTOGRAM_SIZE];
+  memset(hist_local, 0, params->histogram_prev_toks.Size());
+
   int32 size = params->prev_toks.Size();
-  
   for (int32 i = threadIdx.x + blockIdx.x * blockDim.x; 
        i < size; i += gridDim.x * blockDim.x) {
     TokenState ts = params->prev_toks[i];
@@ -258,8 +259,12 @@ inline DEVICE void find_best_cutoff(processTokens_params* params) {
   int32 size = params->prev_toks.Size();
 
   // frame 0 don't obtain params->cutoff
-  if (size > params->max_active && params->frame > 1) 
+  if (size > params->max_active && params->frame > 1) {
     find_prev_cutoff_by_histogram(params);
+    // params->cutoff_prev to be used in find_best_cutoff()
+    __grid_sync_nv_internal(params->barrier); 
+  }
+
 
   // uses dynamically load balanced loop trips.  Tokens are assigned 
   // dynamically instead of statically. details are described in 
@@ -274,6 +279,10 @@ inline DEVICE void find_best_cutoff(processTokens_params* params) {
 
     TokenState ts = params->prev_toks[i];
     Token * tok = params->token_allocator.GetTokenByExactIdx(ts.tok_idx_allocated);
+    
+    if (size > params->max_active && tok->cost_ > *params->cutoff_prev)
+      continue; // histogram pruning for last frame
+
     StateId state = ts.state;
     uint32 start = params->e_offsets[state], finish = params->e_offsets[state + 1];
     int32 ilabel, ilabel_next;
@@ -329,7 +338,7 @@ inline DEVICE void process_emitting_tokens(processTokens_params* params) {
     TokenState& ts = params->prev_toks[i];
     Token * tok = params->token_allocator.GetTokenByExactIdx(ts.tok_idx_allocated);
     
-    if (size > params->max_active && tok->cost_ > params->cutoff_prev)
+    if (size > params->max_active && tok->cost_ > *params->cutoff_prev)
       continue; // histogram pruning for last frame
 
     StateId state = ts.state;
@@ -522,7 +531,8 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     __grid_sync_nv_internal(params.barrier);
 
     // to reduce a grid sync, we initialize here for next frame
-    params->histogram_prev_toks.Initialize(*params->cutoff + params->beam);
+    if (rank0)
+      params.histogram_prev_toks.Initialize(*params.cutoff - params.beam);
   } else if (rank0) {
     *params.num_arcs_till_last = 0;
   }
@@ -546,9 +556,9 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   // debug
   int32 tok_E;
   int32 itv = params.verbose > 2 ? 1 : 10;
-  if (rank0 && params.verbose > 1 && params.frame % itv == 0)
-    tok_E = params.cur_toks.Size();
-
+  // if without -G, this code will be optimized out
+  if (rank0 && params.verbose > 0 && params.frame % itv == 0)
+    tok_E = params.cur_toks.Size(); 
   int32 cnt = 0;
   uint32 size = 0;
   do {
@@ -1454,9 +1464,7 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   CU_SAFE_CALL(cudaGetLastError());
   bytes_cuda_malloc_managed += token_allocator_.GetCudaMallocManagedBytes();
 
-  if (config_.max_active < std::numeric_limits<int32>::max())
-    histogram_prev_toks_.Allocate(config_.beam, (int32)config_.beam * 0.5, 
-                                  config_.max_tokens, 1.0);
+  bytes_cuda_malloc += histogram_prev_toks_.Allocate(config_.beam, (int32)(config_.beam * 0.5), 1.0);
 
   cudaEventCreateWithFlags(&event_pt, cudaEventDisableTiming);
   cudaEventCreateWithFlags(&event_ll, cudaEventDisableTiming);
@@ -1548,6 +1556,7 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
   lat_arcs_buf_.Free(true);
   lattice_pruner_.Free();
   token_allocator_.Finalize();
+  histogram_prev_toks_.Free();
 
   cudaFreeHost(loglikelihoods_h);
   cudaFreeHost(loglikelihoods_old_h);
@@ -1651,7 +1660,6 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
 void CudaLatticeDecoder::InitDecoding() {
   if (config_.verbose > 1 ) KALDI_LOG << "CUDA LatticeDecoder InitDecoding\n";
   num_frames_decoded_ = 0;
-  total_toks_num_ = 0;
   for (int32 i = 0; i < LAT_BUF_SIZE; i++) {
     ClearToks(lat_toks_bufs_[i]);
   }
