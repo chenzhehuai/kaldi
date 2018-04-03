@@ -143,6 +143,11 @@ int main(int argc, char *argv[]) {
 
 
     cuInit(0);
+#if HAVE_CUDA==1
+      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().AllowMultithreading();
+#endif
+
     CudaFst cuda_fst;
 
 #pragma omp parallel shared(po, cuda_fst) 
@@ -153,10 +158,6 @@ int main(int argc, char *argv[]) {
       // as well as the basic features.
 
 
-#if HAVE_CUDA==1
-      CuDevice::Instantiate().SelectGpuId("yes");
-      CuDevice::Instantiate().AllowMultithreading();
-#endif
 #pragma omp barrier
       
 
