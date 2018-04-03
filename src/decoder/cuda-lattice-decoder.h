@@ -25,7 +25,7 @@
 namespace kaldi {
 
 #define LAT_BUF_SIZE 2
-#define ESTIMATED_PRUNE_RATIO 0.1
+#define ESTIMATED_PRUNE_RATIO 0.25
 class CudaLatticeDecoder;
 
 struct CudaLatticeDecoderConfig {
@@ -48,8 +48,8 @@ struct CudaLatticeDecoderConfig {
                        lat_fraction(1.0/2.0),
                        max_tokens_per_frame(400000),
                        max_lat_arc_per_frame(1000000),
-                       max_tokens(10000000),
-                       max_arcs(12000000), // 17000000*10 can fill all mem
+                       max_tokens(12000000),
+                       max_arcs(15000000), // 17000000*10 can fill all mem
                        lattice_beam(10.0),
                        beam(16.0),
                        prune_interval(3000),

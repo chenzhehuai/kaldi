@@ -1084,6 +1084,7 @@ inline DEVICE void LatticePruner::CollectToksPerFrame(
   if (tid == 0) {
     // Set start index in the buffer of the next frame
     SetNextSidx(toks_bpr_fr_sidx_d, size, frame); 
+    assert(*toks_bpr_fr_sidx_d < toks_buf_before_pr_size);
   }
   // do not need further copy, as tos of lattice_pruner_ and token_allocator 
   // are shared
@@ -1129,10 +1130,12 @@ inline DEVICE void LatticePruner::CollectArcsPerFrame(LatLinkVector&
 // by an atomic operation, where the memory is pre-allocated
 DEVICE int32 LatticePruner::AddArc(LatLink* arc) {
   int32 i = atomicAdd(arcs_apr_used_d, 1);
+  assert(i < arcs_buf_before_pr_size * ESTIMATED_PRUNE_RATIO);
   cuda_store32(arcs_apr_d + i, arc);
 }
 DEVICE int32 LatticePruner::AddArc(LatLinkCompact* arc, int32 frame) {
   int32 i = atomicAdd(arcs_apr_used_d, 1);
+  assert(i < arcs_buf_before_pr_size * ESTIMATED_PRUNE_RATIO);
   int32 frame_tok = arc->IsEmitArc() ? frame - 1: frame;
   int32 j = arc->arc_id;
   LatLink apr_arc(arc->GetPrevTokId(), frame_tok, arc->next_tok_id, frame,
