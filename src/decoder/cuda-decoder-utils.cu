@@ -39,7 +39,16 @@ void get_free_memory_stat(char *prefix) {
 }
 
 
-
+// CudaHistogram Implementation
+void CudaHistogram::Allocate(BaseFloat beam, BaseFloat beam_lowest, 
+                             int32 cutoff_num, BaseFloat step) {
+  assert(step == 1);
+  beam_ = beam;
+  beam_lowest_ = beam_lowest;
+  step_ = step;
+  assert(MAX_HISTOGRAM_SIZE >= beam - beam_lowest);
+  cudaMalloc(&hist_global_, sizeof(int32) * (beam - beam_lowest));
+}
 
 // CudaFst Implementation
 HOST DEVICE float CudaFst::Final(StateId state) const {
