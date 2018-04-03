@@ -26,9 +26,8 @@
 #include <float.h>
 #include <math.h>
 #include <cooperative_groups.h>
-#include "omp.h"
 
-#define MEMADVISE //only in Pascal?: http://mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf 
+#define MEMADVISE
 
 //Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError() {                                          \
@@ -77,10 +76,8 @@ DEVICE inline void __gpu_sync_fast(volatile int *fast_epoch)
         atomicAdd((int*)fast_epoch, nb);
  
         // wait for the sign bit to commute   
-        int cnt=0;
-        while (((*fast_epoch) ^ old_epoch) >= 0)//&& ++cnt!=(1<<19) //deadlock hack
+        while (((*fast_epoch) ^ old_epoch) >= 0)
             ;
-        //if (blockIdx.x == 0) *fast_epoch=0;
     }
     __syncthreads();
 }
@@ -191,7 +188,7 @@ template<typename T>
   template<typename T> 
     HOST DEVICE inline void CudaVector<T>::push_back(const T &val) { 
 #ifdef __CUDA_ARCH__
-      //assert(*count_d<max_size);
+      assert(*count_d<max_size);
       uint32_t idx = atomicAdd(count_d,1);
       mem_d[idx]=val; 
 #else
@@ -407,15 +404,11 @@ template<typename T>
     if(count>size-front)
       count = size-front;
 
-#ifdef MEMADVISE
     cudaMemPrefetchAsync(tokens_allocation+front,sizeof(Token)*count,device,stream);  
-#endif
   }
 
   void CudaDecoder::TokenAllocator::prefetch_allocated_to_host(cudaStream_t stream) {
-#ifdef MEMADVISE
     cudaMemPrefetchAsync(tokens_allocation,sizeof(Token)* *front_h,cudaCpuDeviceId,stream);  
-#endif
   }
 
   size_t CudaDecoder::TokenAllocator::getCudaMallocManagedBytes() {
@@ -463,7 +456,7 @@ template<typename T>
 
   DEVICE inline void CudaDecoder::TokenAllocator::advanceFront(uint32_t num) {
     int front = *front_d + num;
-    //assert(front<size);
+    assert(front<size);
     
     *front_d=front;
     *front_h=front;
@@ -475,7 +468,6 @@ template<typename T>
     int device;
     cudaGetDevice(&device);
 
-    if (verbose>4) cudaDeviceSetLimit(cudaLimitPrintfFifoSize, 1e7);
 
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop,device);
@@ -527,8 +519,6 @@ template<typename T>
 
     //sgemm requires shared memory and we don't want cache config changing.  So set a device wide cache config.
     cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
-
-    verbose=config.verbose;
   }
 
   CudaDecoder::~CudaDecoder() {
@@ -570,12 +560,10 @@ template<typename T>
 
     InitDecoding();
 
-
     ComputeLogLikelihoods(decodable);
 
     while( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
 
-      if (verbose>4) KALDI_LOG << num_frames_decoded_<<std::endl;
 #ifndef MEMADVISE
       //no need to prefetch if we have done a memadvise
       allocator.prefetch_next_to_device(cudaStreamPerThread);
@@ -647,6 +635,7 @@ template<typename T>
   void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
       int32 max_num_frames) {
     printf("AdvanceDecoding\n");
+  
 
     nvtxRangePushA("AdvanceDecoding");
     KALDI_ASSERT(num_frames_decoded_ >= 0 &&
@@ -669,7 +658,6 @@ template<typename T>
     
     while (num_frames_decoded_ < target_frames_decoded) {
 
-      if (verbose > 4) KALDI_LOG << num_frames_decoded_<<std::endl;
 #ifndef MEMADVISE
       //no need to prefetch if we have done a memadvise
       allocator.prefetch_next_to_device(cudaStreamPerThread);
@@ -884,9 +872,6 @@ template<typename T>
     int *fb_idx;
     int *barrier;
 
-    //debug
-    int verbose;
-    int frame;
   };
 
   //blockDim.x threads per token
@@ -952,18 +937,6 @@ template<typename T>
     }
   }
 
-inline DEVICE void release_semaphore(volatile int *lock){
-  *lock = 0;
-  __threadfence();
-  }
-
-
-inline DEVICE void acquire_semaphore(volatile int *lock){
-  short cnt=0;
-  while (atomicCAS((int *)lock, 0, 1) != 0) {
-  }
-  }
-
   //blockDim.x threads per token
   template<int blockDimx, int blockDimy>
   inline DEVICE void processEmittingTokens_function(processTokens_params params) {
@@ -983,9 +956,6 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
       int i;
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.pe_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          printf("E: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
       }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
@@ -1035,7 +1005,7 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
-          acquire_semaphore((int*)&params.token_locks[nextstate]);
+            if(params.token_locks[nextstate]==0 && atomicExch((int*)&params.token_locks[nextstate],1)==0) {       //try and grab lock
               if(*cur_tokv < next_tok) {                                                                          //recheck if we are min
                 
                 if(sizeof(Token)==16)
@@ -1043,9 +1013,13 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
                 else
                   *cur_tok=next_tok;
 
+                __threadfence();                                                                                  //ensure my write is visible to all threads   
               }
-              release_semaphore((int*)&params.token_locks[nextstate]);
+              
+              atomicExch((int*)&params.token_locks[nextstate],0);                                                 //release lock
               break;                                                                                              //exit loop as our update is done
+            }
+            __threadfence();                                                                                      //ensure writes cur_tok and token_locks are visible
           } //end while
         } //end total_cost<=cutoff
       } //end arc loop
@@ -1069,9 +1043,6 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
       int i;
       if(group.thread_rank()==0) { //thread 0 nominated to get new token
         i=atomicAdd(params.ne_idx,1);      //get token index
-        if (params.verbose>3 && i%1000==0) {
-          printf("NE: %i %i %i\n", i, threadIdx.x, blockIdx.x);
-        }
       }
       i=group.shfl(i,0);           //broadcast token index
       //i=__shfl_sync(0xffffffff,i,0);
@@ -1080,7 +1051,6 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
       TokenState ts = params.cur_toks[i];
       Token * tok = ts.token;
       StateId state = ts.state;
-      
 
       uint32_t start=params.ne_offsets[state], finish=params.ne_offsets[state+1];
       for(int j=start+group.thread_rank();j<finish;j+=blockDimx) {
@@ -1089,7 +1059,6 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
 
         Token next_tok = Token(weight, tok, j);
 
-      if (params.verbose>4) printf("D: %i %i %i %i %i \n",threadIdx.x, threadIdx.y, j, blockIdx.x,i);
         if (next_tok.cost_ <= cutoff) {
           TokenLookupElem lookup_elem;
           load16(&lookup_elem,&params.current_tokens_lookup[nextstate]);
@@ -1103,25 +1072,26 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
           volatile Token* cur_tokv = reinterpret_cast<volatile Token*>(cur_tok);  //need volatile reads to ensure we don't get cached versions
 
           while(*cur_tokv < next_tok) {   //check if we need to update
-            acquire_semaphore((int*)&params.token_locks[nextstate]);
+            if(params.token_locks[nextstate]==0 && atomicExch((int*)&params.token_locks[nextstate],1)==0) {  //try and grab locks
               if(*cur_tokv < next_tok) {                                                                     //recheck that we are minimum
                 if(sizeof(Token)==16)
                   store16(cur_tok,&next_tok);                                                                       //update token
                 else
                   *cur_tok=next_tok;
 
+                __threadfence();                                                                             //ensure my write is visible to all threads
               }
               
+              atomicExch((int*)&params.token_locks[nextstate],0);                                            //release lock
               
               (*modified) = true;                                                                            //mark as updated
-            release_semaphore((int*)&params.token_locks[nextstate]);
               break;  //exit loop as our update is done
+            }
+            __threadfence(); //ensure writes to cur_tok and token_locks are visible
           } //end try update loop
         }
       }
-
     }
-      if (params.verbose>4) printf("ED: %i %i %i \n",threadIdx.x, group.thread_rank(), blockIdx.x);
   }
 
   //Loop through all tokens repeatdly updating costs until nothing changes
@@ -1164,23 +1134,16 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
       params.allocator.advanceFront(params.cur_toks.size());
   }
 
-  __launch_bounds__(64,64)
+  __launch_bounds__(64,32)
   __global__ void processTokens_cg(processTokens_params params) {
 //    auto grid = cooperative_groups::this_grid();
 
-    bool rank0 = blockIdx.x==0 && threadIdx.x==0;
-    int p=0;
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
 
     findBestCutoff_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);
-   
-   
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
-
+    
+    
     volatile int *modified0 = params.modified;    //modified flag for current iteration
     volatile int *modified1 = params.modified+1;  //modified flag for next/last iteration
     *modified1 = false;
@@ -1189,10 +1152,7 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
     processEmittingTokens_function<32,2>(params);
     //grid.sync();
     __grid_sync_nv_internal(params.barrier);  //ensure cur_toks size is final
-  
-    int tok_E;
-    if (rank0&&params.verbose>2&&params.frame%10==0) 
-      tok_E=params.cur_toks.size();
+    
 
     do {
 
@@ -1215,15 +1175,10 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
 
     } while ((*modified0)==true);
 
-    int itv = params.verbose>2? 1: 10;
-    if (rank0&&params.verbose>1&&params.frame%itv==0) 
-          printf("TK: %i %i %i\n", params.frame, tok_E, params.cur_toks.size());
 
     allocateNewTokens_function(params.current_tokens_lookup, params.cur_toks, params.allocator);
-    
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
   
+    bool rank0 = blockIdx.x==0 && threadIdx.x==0;
     if(rank0) {
       //prepare for next iteration
       params.prev_toks.clear();
@@ -1238,8 +1193,6 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
       params.allocator.advanceFront(params.cur_toks.size());
     }
 
-    if(rank0&&params.verbose>4)  
-    {p++;printf("S: %i\n",p);}
     
   }
 
@@ -1248,7 +1201,7 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
     // Processes nonemitting arcs for one frame.  Propagates within
     // cur_toks_.
 
-    dim3 threads(32,1);
+    dim3 threads(64,1);
 
     dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
 
@@ -1265,9 +1218,6 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
     params.allocator=allocator;
     params.ne_idx=ne_idx_d;
     params.barrier=barrier_d;
-    
-    params.verbose=verbose;
-    params.frame=num_frames_decoded_;
 
 #if 0
     void *args[] = { (void*) &params };
@@ -1283,9 +1233,12 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
 
   void CudaDecoder::ProcessTokens() {
     nvtxRangePushA("ProcessTokens");
+
     processTokens_params params;
+   
     dim3 threads(64,1);
     dim3 blocks(DIV_ROUND_UP(total_threads,(threads.x*threads.y)));
+
 
     params.prev_toks=prev_toks_;
     params.cur_toks=cur_toks_;
@@ -1305,15 +1258,9 @@ inline DEVICE void acquire_semaphore(volatile int *lock){
     params.ne_idx=ne_idx_d;
     params.fb_idx=fb_idx_d;
     params.barrier=barrier_d;
-    params.verbose=verbose;
-    params.frame=num_frames_decoded_;
 
-    if (params.verbose>2&&params.frame==1) KALDI_LOG <<"# of blocks: "<<blocks.x<<std::endl;
-
-     if (params.verbose>4) KALDI_LOG <<std::endl;
     cudaStreamWaitEvent(stream_comp,event_ll,0); //make sure log likelihoods are on the device before starting these kernels
 
-     if (params.verbose>4)  KALDI_LOG <<std::endl;
 #if 0
     void *args[] = { (void*) &params };
     cudaLaunchCooperativeKernel((void*)processTokens_cg, blocks, threads, args, 0, stream_comp);

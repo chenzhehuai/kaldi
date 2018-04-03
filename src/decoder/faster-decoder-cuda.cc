@@ -29,7 +29,8 @@ FasterDecoderCuda::FasterDecoderCuda(const CudaDecoderConfig &decoder_opts,
 
 
 void FasterDecoderCuda::Decode(DecodableInterface *decodable) {
-  decoder_.Decode(decodable);
+  decoder_.InitDecoding();
+  decoder_.AdvanceDecoding(decodable);
   }
 
 // TODO: 
