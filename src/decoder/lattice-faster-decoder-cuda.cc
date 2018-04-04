@@ -76,6 +76,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
 
   while ( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
     bool last_frame = decodable->IsLastFrame(num_frames_decoded_ - 0);
+    if (num_frames_decoded_ >= config_.prune_interval)
+      last_frame = true;
     // clear Token&Arc vector for decoding&lattice 
     // we can hide this func in ComputeLogLikelihoods, however, it's 
     // fast so we might don't need to do so
@@ -89,6 +91,8 @@ bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
     }
     // computes log likelihoods for the next frame
     num_frames_decoded_++;
+    // a protection for too long utterances
+    if (last_frame) break;
   }
   POP_RANGE
   PUSH_RANGE("CudaLatticeDecoder::Decode::final", 1);
