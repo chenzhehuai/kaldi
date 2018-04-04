@@ -1020,11 +1020,11 @@ DEVICE inline void TokenAllocator::AdvanceFront(uint32 num) {
 // LatticePruner Implementation
 // Initialize in InitDecoding()
 void LatticePruner::Initialize() {
-  cudaMemset(arcs_apr_fr_size_d, 0, sizeof(int32) * (prune_interval + 1));
+  cudaMemset(arcs_apr_fr_size_d, 0, sizeof(int32) * (prune_interval + 2));
   cudaMemset(arcs_apr_used_d, 0, sizeof(int32));
   cudaMemset(arcs_bpr_used_d, 0, sizeof(int32));
-  cudaMemset(toks_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 1));
-  cudaMemset(arcs_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 1));
+  cudaMemset(toks_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 2));
+  cudaMemset(arcs_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 2));
 }
 
 int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
@@ -1043,14 +1043,14 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   sz = sizeof(LatLinkCompact) * max_arcs;
   cudaMalloc((void**)&arcs_bpr_d, sz); bytes_cuda_malloc += sz;
   arcs_buf_before_pr_size = max_arcs;
-  sz = sizeof(int32) * (prune_interval + 1);
+  sz = sizeof(int32) * (prune_interval + 2);
   cudaMalloc((void**)&toks_bpr_fr_sidx_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&toks_bpr_fr_sidx_h, sz);
-  sz = sizeof(int32) * (prune_interval + 1);
+  sz = sizeof(int32) * (prune_interval + 2);
   cudaMalloc((void**)&arcs_bpr_fr_sidx_d, sz); bytes_cuda_malloc += sz;
 
   // after pruning
-  sz = sizeof(int32) * (prune_interval + 1);
+  sz = sizeof(int32) * (prune_interval + 2);
   cudaMalloc((void**)&arcs_apr_fr_size_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&arcs_apr_fr_size_h, sz);
   sz = ESTIMATED_PRUNE_RATIO * sizeof(LatLink) * max_arcs;
@@ -1422,6 +1422,7 @@ void LatticePruner::CopyArcsToHost(int32 frame, cudaStream_t st) {
 void LatticePruner::CopyToksToHost(int32 frame, cudaStream_t st) {
   int32 sz;
   // include frame 0 count and the total count in the last element
+  assert(frame <= prune_interval); // the max size of toks_bpr_fr_sidx_h
   sz = sizeof(int32) * (frame + 1 + 1) * (1); 
   cudaMemcpy(toks_bpr_fr_sidx_h, toks_bpr_fr_sidx_d,
              sz, cudaMemcpyDeviceToHost);
