@@ -40,17 +40,17 @@ void get_free_memory_stat(char *prefix) {
 
 
 // CudaHistogram Implementation
-int32 CudaHistogram::Allocate(BaseFloat beam, BaseFloat beam_lowest, 
-                              BaseFloat step) {
+int32 CudaHistogram::Allocate(BaseFloat beam, BaseFloat beam_lowest,
+BaseFloat step) {
   assert(step == 1);
   int32 sz = 0;
   beam_ = beam;
   beam_lowest_ = beam_lowest;
   step_ = step;
-  cudaMalloc(&best_cost_, sizeof(BaseFloat)); sz+=sizeof(BaseFloat);
+  cudaMalloc(&best_cost_, sizeof(BaseFloat)); sz += sizeof(BaseFloat);
   assert(MAX_HISTOGRAM_SIZE >= beam - beam_lowest);
   cudaMalloc(&hist_global_, sizeof(int32) * (beam - beam_lowest));
-  sz+=sizeof(int32) * (beam - beam_lowest);
+  sz += sizeof(int32) * (beam - beam_lowest);
   return sz;
 }
 

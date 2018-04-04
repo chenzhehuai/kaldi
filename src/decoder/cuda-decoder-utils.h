@@ -138,39 +138,39 @@ class CudaHistogram {
     int32 Allocate(BaseFloat beam, BaseFloat beam_lowest, BaseFloat step);
     void Free();
 #ifdef __CUDACC__
-    inline DEVICE void Initialize(BaseFloat best_cost) { 
+    inline DEVICE void Initialize(BaseFloat best_cost) {
         *best_cost_ = best_cost;
     }
     inline DEVICE int32 Size() const { return (beam_ - beam_lowest_); }
-    inline DEVICE void AddScore2LocalHist(BaseFloat cost, int32* hist_local) {
+    inline DEVICE void AddScore2LocalHist(BaseFloat cost, int32 *hist_local) {
         int32 dist = (int)(cost - *best_cost_);
         assert(dist <= beam_);
         if (dist <= beam_lowest_) hist_local[0]++;
         else if (dist == beam_) hist_local[Size() - 1]++;
         else hist_local[(int32)(dist - beam_lowest_)]++;
     }
-    inline DEVICE void AggregateLocalHist(int32* hist_local) {
-        for (int i=0; i<Size(); i++) {
-          if (hist_local[i] != 0)
-            atomicAdd(hist_global_+i, hist_local[i]);
+    inline DEVICE void AggregateLocalHist(int32 *hist_local) {
+        for (int i = 0; i < Size(); i++) {
+            if (hist_local[i] != 0)
+                atomicAdd(hist_global_ + i, hist_local[i]);
         }
     }
-    inline DEVICE void GetCutoff(BaseFloat *cutoff_from_hist, int32 cutoff_num, 
+    inline DEVICE void GetCutoff(BaseFloat *cutoff_from_hist, int32 cutoff_num,
                                  int verbose = 0) {
-        int32 acc=0, i = 0;
-        for (i = 0; i<Size(); i++) {
-            acc+=hist_global_[i];
+        int32 acc = 0, i = 0;
+        for (i = 0; i < Size(); i++) {
+            acc += hist_global_[i];
             if (acc > cutoff_num) break;
         }
-        BaseFloat ret_beam=i+beam_lowest_;
-        *cutoff_from_hist=*best_cost_+ret_beam;
+        BaseFloat ret_beam = i + beam_lowest_;
+        *cutoff_from_hist = *best_cost_ + ret_beam;
         if (verbose > 2) {
             CUDA_PRINTF("hist_LF %f %i\n", *cutoff_from_hist, acc);
         }
         memset(hist_global_, 0, Size());
     }
 #endif
-  
+
   private:
     // configuration
     BaseFloat beam_;

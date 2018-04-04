@@ -1464,7 +1464,8 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   CU_SAFE_CALL(cudaGetLastError());
   bytes_cuda_malloc_managed += token_allocator_.GetCudaMallocManagedBytes();
 
-  bytes_cuda_malloc += histogram_prev_toks_.Allocate(config_.beam, (int32)(config_.beam * 0.5), 1.0);
+  bytes_cuda_malloc += histogram_prev_toks_.Allocate(config_.beam, 
+                                (int32)(config_.beam * 0.5), 1.0);
 
   cudaEventCreateWithFlags(&event_pt, cudaEventDisableTiming);
   cudaEventCreateWithFlags(&event_ll, cudaEventDisableTiming);
