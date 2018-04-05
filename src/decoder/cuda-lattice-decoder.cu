@@ -488,7 +488,7 @@ DEVICE __inline__ void process_nonemitting_tokens(processTokens_params
 __global__
 static void _allocate_all_tokens(TokenLookupElem *current_tokens_lookup,
                                  int32 numStates, int32 *barrier) {
-  allocate_all_tokens(current_tokens_lookup, numStates, allocator);
+  allocate_all_tokens(current_tokens_lookup, numStates);
   __grid_sync_nv_internal(barrier);
   // we do not allocate token, so do not need this
   // if (blockIdx.x == 0 && threadIdx.x == 0) allocator.AdvanceFront(numStates);
@@ -915,8 +915,7 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   // to reduce memory usage, we use cudaMallocManaged, which doesn't
   // allocate in GPU at once
   sz = sizeof(Token) * max_toks;
-  cuda_malloc_managed_preferred_device((void**)&toks_bpr_d,
-                                       sizeof(Token)*size);
+  cuda_malloc_managed_preferred_device((void**)&toks_bpr_d, sz);
   bytes_cuda_malloc += sz;
   // if we directly use managed memory from toks_bpr_d, the RTF is 10% larger
   cudaMallocHost((void**)&toks_bpr_h, sz);
