@@ -907,8 +907,8 @@ void TokenAllocator::Initialize(uint32 size)  {
   prefetch_size = 250000;
   this->size = size;
 
-  // managed so getBestPath can easily access this data in the end; 
-  // unused in lattice decoder
+  // to reduce memory usage, we use cudaMallocManaged, which doesn't 
+  // allocate in GPU at once
   cuda_malloc_managed_preferred_device((void**)&tokens_allocation,
       sizeof(Token)*size);
   bytes_cuda_malloc_managed = sizeof(Token) * size;
