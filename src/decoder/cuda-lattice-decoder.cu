@@ -47,7 +47,7 @@ template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32 idx);
 template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32 idx);
 template HOST DEVICE uint32  CudaVector<TokenState>::Size() const;
 template HOST DEVICE uint32  CudaVector<LatLink>::Size() const;
-template<> DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
+template<> DEVICE void CudaMergeVector<TokenState>::StoreDataByPackIdx(
   void* temp_data_buf, int* temp_data_buf_update, int32 buf_size,
   LatticePruner *lattice_pruner);
 
@@ -626,7 +626,7 @@ static void _prune_active_tokens(processTokens_params params) {
 
 // CudaVector Implementation
 template<typename T>
-inline void CudaVector<T>::Allocate(uint32 max_size,
+void CudaVector<T>::Allocate(uint32 max_size,
                                     uint32* count_h, uint32* count_d, T* mem_h, T* mem_d) {
   alloc_size = 0;
   this->max_size = max_size;
@@ -651,7 +651,7 @@ inline void CudaVector<T>::Allocate(uint32 max_size,
 }
 
 template<typename T>
-inline void CudaVector<T>::Free(bool create_outside) {
+void CudaVector<T>::Free(bool create_outside) {
   cudaFreeHost(mem_h);
   if (!create_outside) {
     cudaFree(mem_d);
@@ -661,7 +661,7 @@ inline void CudaVector<T>::Free(bool create_outside) {
 }
 
 template<typename T>
-HOST DEVICE inline T& CudaVector<T>::operator[](uint32 idx) {
+HOST DEVICE T& CudaVector<T>::operator[](uint32 idx) {
 #ifdef __CUDA_ARCH__
   assert(idx < *count_d);
   return mem_d[idx];
@@ -672,7 +672,7 @@ HOST DEVICE inline T& CudaVector<T>::operator[](uint32 idx) {
 }
 
 template<typename T>
-HOST DEVICE inline const T& CudaVector<T>::operator[](uint32 idx) const {
+HOST DEVICE const T& CudaVector<T>::operator[](uint32 idx) const {
 #ifdef __CUDA_ARCH__
   assert(idx < *count_d);
   return mem_d[idx];
@@ -685,7 +685,7 @@ HOST DEVICE inline const T& CudaVector<T>::operator[](uint32 idx) const {
 // This will cause page faults back and forth when we switch from host to device.
 // need to call e.g. CopySizeToHost() before this function
 template<typename T>
-HOST DEVICE inline uint32 CudaVector<T>::Size() const {
+HOST DEVICE uint32 CudaVector<T>::Size() const {
 #ifdef __CUDA_ARCH__
   return *count_d;
 #else
@@ -696,7 +696,7 @@ HOST DEVICE inline uint32 CudaVector<T>::Size() const {
 // push back function implemented
 // by an atomic operation, where the memory is pre-allocated
 template<typename T>
-HOST DEVICE inline uint32 CudaVector<T>::PushBack(const T &val) {
+HOST DEVICE uint32 CudaVector<T>::PushBack(const T &val) {
 #ifdef __CUDA_ARCH__
   uint32 idx = atomicAdd(count_d, 1);
 #ifdef __DEBUG__
@@ -715,7 +715,7 @@ HOST DEVICE inline uint32 CudaVector<T>::PushBack(const T &val) {
 }
 
 template<typename T>
-HOST DEVICE inline void CudaVector<T>::Clear(cudaStream_t stream) {
+HOST DEVICE void CudaVector<T>::Clear(cudaStream_t stream) {
 #ifdef __CUDA_ARCH__
   *count_d = 0;
 #else
@@ -725,7 +725,7 @@ HOST DEVICE inline void CudaVector<T>::Clear(cudaStream_t stream) {
 }
 
 template<typename T>
-inline void CudaVector<T>::Swap(CudaVector<T> &v) {
+void CudaVector<T>::Swap(CudaVector<T> &v) {
   std::swap(mem_h, v.mem_h);
   std::swap(mem_d, v.mem_d);
   std::swap(count_h, v.count_h);
@@ -735,7 +735,7 @@ inline void CudaVector<T>::Swap(CudaVector<T> &v) {
 
 // given an allocated address in vector memory, calculate its index in the vector
 template<typename T>
-HOST DEVICE inline int32 CudaVector<T>::GetIdxFromAddr(T* addr) {
+HOST DEVICE int32 CudaVector<T>::GetIdxFromAddr(T* addr) {
 #ifdef __CUDA_ARCH__
   int32 ret = addr - mem_d;
   assert(ret < *count_d && ret >= 0);
@@ -749,7 +749,7 @@ HOST DEVICE inline int32 CudaVector<T>::GetIdxFromAddr(T* addr) {
 
 // a series of data transfer functions between host and device
 template<typename T>
-inline void CudaVector<T>::CopyAllToHost(cudaStream_t stream) {
+void CudaVector<T>::CopyAllToHost(cudaStream_t stream) {
   cudaStreamSynchronize(stream);
   cudaMemcpy(count_h, count_d, sizeof(int32), cudaMemcpyDeviceToHost);
   cudaMemcpyAsync(mem_h, mem_d, *count_h * sizeof(T), cudaMemcpyDeviceToHost,
@@ -757,7 +757,7 @@ inline void CudaVector<T>::CopyAllToHost(cudaStream_t stream) {
 }
 
 template<typename T>
-inline void CudaVector<T>::CopyAllToDevice(cudaStream_t stream) {
+void CudaVector<T>::CopyAllToDevice(cudaStream_t stream) {
   cudaStreamSynchronize(stream);
   cudaMemcpyAsync(count_d, count_h, sizeof(int32), cudaMemcpyHostToDevice);
   cudaMemcpyAsync(mem_d, mem_h, *count_h * sizeof(T), cudaMemcpyHostToDevice,
@@ -765,17 +765,17 @@ inline void CudaVector<T>::CopyAllToDevice(cudaStream_t stream) {
 }
 
 template<typename T>
-inline void CudaVector<T>::CopySizeToHost(cudaStream_t stream) {
+void CudaVector<T>::CopySizeToHost(cudaStream_t stream) {
   cudaMemcpyAsync(count_h, count_d, sizeof(int32), cudaMemcpyDeviceToHost, stream);
 }
 
 template<typename T>
-inline void CudaVector<T>::CopySizeToDevice(cudaStream_t stream) {
+void CudaVector<T>::CopySizeToDevice(cudaStream_t stream) {
   cudaMemcpyAsync(count_d, count_h, sizeof(int32), cudaMemcpyHostToDevice, stream);
 }
 
 template<typename T>
-inline void CudaVector<T>::CopyDataToHost(cudaStream_t stream, T* to_buf,
+void CudaVector<T>::CopyDataToHost(cudaStream_t stream, T* to_buf,
     bool copy_size) {
   if (!to_buf) {
     to_buf = mem_h;
@@ -787,7 +787,7 @@ inline void CudaVector<T>::CopyDataToHost(cudaStream_t stream, T* to_buf,
 }
 
 template<typename T>
-inline void CudaVector<T>::CopyDataToDevice(cudaStream_t stream) {
+void CudaVector<T>::CopyDataToDevice(cudaStream_t stream) {
   cudaMemcpyAsync(mem_d, mem_h, *count_h * sizeof(T), cudaMemcpyHostToDevice,
                   stream);
 }
@@ -795,7 +795,7 @@ inline void CudaVector<T>::CopyDataToDevice(cudaStream_t stream) {
 // CudaVector Implementation
 
 template<typename T>
-inline void CudaMergeVector<T>::Allocate(uint32 max_size) {
+void CudaMergeVector<T>::Allocate(uint32 max_size) {
   CudaVector<T>::Allocate(max_size);
 
   cudaMalloc(&mem_update_d, sizeof(int32) * max_size);
@@ -805,7 +805,7 @@ inline void CudaMergeVector<T>::Allocate(uint32 max_size) {
 }
 
 template<typename T>
-inline void CudaMergeVector<T>::Free() {
+void CudaMergeVector<T>::Free() {
   CudaVector<T>::Free();
 
   cudaFree(mem_update_d);
@@ -813,13 +813,13 @@ inline void CudaMergeVector<T>::Free() {
 }
 
 template<typename T>
-inline void CudaMergeVector<T>::Swap(CudaMergeVector<T> &v) {
+void CudaMergeVector<T>::Swap(CudaMergeVector<T> &v) {
   CudaVector<T>::Swap(v);
   std::swap(mem_update_d, v.mem_update_d);
 }
 
 template<typename T>
-inline size_t CudaMergeVector<T>::GetCudaMallocBytes() {
+size_t CudaMergeVector<T>::GetCudaMallocBytes() {
   return CudaVector<T>::GetCudaMallocBytes() +
          sizeof(uint32) * (1 + 2 * (2)) + max_size * (sizeof(T) +
              sizeof(uint64*) + sizeof(int32));
@@ -827,7 +827,7 @@ inline size_t CudaMergeVector<T>::GetCudaMallocBytes() {
 
 
 template<typename T>
-DEVICE inline void CudaMergeVector<T>::StoreDataByPackIdx(
+DEVICE void CudaMergeVector<T>::StoreDataByPackIdx(
   void* temp_data_buf, int* temp_data_buf_update, int32 buf_size,
   LatticePruner* lattice_pruner) {
   assert(0);  // haven't implemented
@@ -843,7 +843,7 @@ DEVICE inline void CudaMergeVector<T>::StoreDataByPackIdx(
 // to get arc indexes, and store token information from the former
 // array to token data structures exploiting thread parallelism.
 template<>
-DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
+DEVICE void CudaMergeVector<TokenState>::StoreDataByPackIdx(
   void* temp_data_buf, int* temp_data_buf_update, int32 buf_size,
   LatticePruner* lattice_pruner) {
   int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -867,7 +867,7 @@ DEVICE inline void CudaMergeVector<TokenState>::StoreDataByPackIdx(
 // check whether the item in index i of the vector is updated in this frame
 // call this function after StoreDataByPackIdx()
 template<typename T>
-DEVICE inline int32 CudaMergeVector<T>::IsUpdated(int32 i) {
+DEVICE int32 CudaMergeVector<T>::IsUpdated(int32 i) {
   if (i >= *count_d) return 0;
   return mem_update_d[i];
 }
@@ -875,7 +875,7 @@ DEVICE inline int32 CudaMergeVector<T>::IsUpdated(int32 i) {
 // push back function implemented
 // by an atomic operation, where the memory is pre-allocated
 template<typename T>
-DEVICE inline uint32 CudaMergeVector<T>::PushBack(const T &val,
+DEVICE uint32 CudaMergeVector<T>::PushBack(const T &val,
     uint64 *val_pack) {
   assert(0); //this func is deprecated
   uint32 idx = atomicAdd(count_d, 1);
@@ -888,7 +888,7 @@ DEVICE inline uint32 CudaMergeVector<T>::PushBack(const T &val,
 }
 
 // TokenState Implementation
-HOST DEVICE inline TokenState::TokenState (StateId state)
+HOST DEVICE TokenState::TokenState (StateId state)
   : tok_idx_allocated(-1), state(state),
     token_pack(pack_cost_idx_into_uint64(-FLT_MAX, 0)) { }
 
@@ -990,7 +990,7 @@ void LatticePruner::Free() {
   cudaFreeHost(arcs_apr_h);
 }
 
-DEVICE inline Token* LatticePruner::GetTokenByExactIdx(uint32 offset) {
+DEVICE Token* LatticePruner::GetTokenByExactIdx(uint32 offset) {
   int32 idx = offset;
 #ifdef __DEBUG__
   assert(idx >= 0 && idx < toks_buf_before_pr_size);
@@ -1000,7 +1000,7 @@ DEVICE inline Token* LatticePruner::GetTokenByExactIdx(uint32 offset) {
   return toks_bpr_d + idx;
 }
 
-DEVICE inline int32 LatticePruner::GetTokenAllocIdx(uint32 offset) {
+DEVICE int32 LatticePruner::GetTokenAllocIdx(uint32 offset) {
   int32 idx = *toks_num_used + offset;
 #ifdef __DEBUG__
   assert(idx >= 0 && idx < toks_buf_before_pr_size);
@@ -1010,14 +1010,14 @@ DEVICE inline int32 LatticePruner::GetTokenAllocIdx(uint32 offset) {
   return idx;
 }
 
-DEVICE inline int32 LatticePruner::GetTokenIdxFromAddr(Token* tok) {
+DEVICE int32 LatticePruner::GetTokenIdxFromAddr(Token* tok) {
   int32 ret = tok - toks_bpr_d;
   assert(ret < toks_buf_before_pr_size && ret >= 0);
   return ret;
 }
 
 // entry of lattice pruning until this frame
-inline DEVICE void LatticePruner::PruneActiveTokens(int32 frame,
+DEVICE void LatticePruner::PruneActiveTokens(int32 frame,
     BaseFloat lattice_beam, int32 verbose) {
   int32 rank0 = threadIdx.x == 0 && blockIdx.x == 0 ? 1 : 0;
   if (frame == 0) return;
@@ -1035,7 +1035,7 @@ inline DEVICE void LatticePruner::PruneActiveTokens(int32 frame,
 
 // collect after each token passing, we store Token data in the sequence of
 // TokenState vector, using continuous memory
-inline DEVICE void LatticePruner::CollectToksPerFrame(
+DEVICE void LatticePruner::CollectToksPerFrame(
   TokenMergeVector& cur_toks_vec, int32 frame) {
   int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
   TokenState* cur_toks = cur_toks_vec.mem_d;
@@ -1049,7 +1049,7 @@ inline DEVICE void LatticePruner::CollectToksPerFrame(
 }
 
 // collect after each token passing, mainly to update arcs_bpr_fr_sidx_d here
-inline DEVICE void LatticePruner::CollectArcsPerFrame(LatLinkVector&
+DEVICE void LatticePruner::CollectArcsPerFrame(LatLinkVector&
     cur_arc_array,
     int32 frame) {
   int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -1095,7 +1095,7 @@ DEVICE int32 LatticePruner::AddArc(LatLinkCompact* arc, int32 frame) {
 
 
 // Set start index in the buffer of the next frame
-inline DEVICE void LatticePruner::SetNextSidx(int* sidx_buf, int32 size,
+DEVICE void LatticePruner::SetNextSidx(int* sidx_buf, int32 size,
     int32 frame) {
   assert(frame >= 0);
   int32 cur_sidx = sidx_buf[(frame)];
@@ -1104,7 +1104,7 @@ inline DEVICE void LatticePruner::SetNextSidx(int* sidx_buf, int32 size,
 
 // Get the active token indexed by a uint64 pair (frame, idx), stored in void* p
 // the details of the pair can be referred to LatLink::LatLink()
-inline DEVICE Token* LatticePruner::GetActiveToken(void* p, bool check,
+DEVICE Token* LatticePruner::GetActiveToken(void* p, bool check,
     int32 iframe) const {
   int32 frame, id;
   DECODE_TOK_IDX_PAIR(frame, id, (uint64)p);
@@ -1114,7 +1114,7 @@ inline DEVICE Token* LatticePruner::GetActiveToken(void* p, bool check,
 
 // Get the active token indexed by a uint64 pair (frame, idx)
 // the details of the pair can be referred to LatLink::LatLink()
-inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id_pack,
+DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id_pack,
     bool check) const {
 
   int32 cur_sidx = toks_bpr_fr_sidx_d[frame];
@@ -1131,7 +1131,7 @@ inline DEVICE Token* LatticePruner::GetActiveToken(int32 frame, int32 id_pack,
 
 // Get the active token indexed by a uint64 pair (frame, idx)
 // the details of the pair can be referred to LatLink::LatLink()
-inline DEVICE Token* LatticePruner::GetActiveTokenByExactId(int32 frame,
+DEVICE Token* LatticePruner::GetActiveTokenByExactId(int32 frame,
     int32 id_exact, bool check) const {
   Token* tok = toks_bpr_d + id_exact;
 
@@ -1149,7 +1149,7 @@ inline DEVICE Token* LatticePruner::GetActiveTokenByExactId(int32 frame,
 
 // Get the active arc indexed by a uint64 pair (frame, idx)
 // the vector memory and the start index of each frame are kept in LatticePruner
-inline DEVICE LatLinkCompact* LatticePruner::GetActiveArc(int32 frame,
+DEVICE LatLinkCompact* LatticePruner::GetActiveArc(int32 frame,
     int32 id) const {
   int32 cur_sidx = arcs_bpr_fr_sidx_d[(frame)];
   assert(cur_sidx + id < arcs_buf_before_pr_size);
@@ -1158,14 +1158,14 @@ inline DEVICE LatLinkCompact* LatticePruner::GetActiveArc(int32 frame,
 }
 
 // Size of items in the frame, it is obtained from an accumulate number array
-inline DEVICE int32 LatticePruner::GetSize(int* acc_len, int32 frame) const {
+DEVICE int32 LatticePruner::GetSize(int* acc_len, int32 frame) const {
   int32 size = acc_len[(frame) + 1] - acc_len[(frame)];
   assert(size >= 0 && size <= arcs_buf_before_pr_size);
   return size;
 }
 
 // used in PruneLatticeForFrame()
-inline DEVICE void LatticePruner::UpdateModifiedFlags(
+DEVICE void LatticePruner::UpdateModifiedFlags(
   volatile int32 **modified0, volatile int32 **modified1,
   volatile int32 **modified2, int cnt, int32 *modified_d) {
   *modified0 = modified_d + cnt % 3;
@@ -1192,7 +1192,7 @@ inline DEVICE void LatticePruner::UpdateModifiedFlags(
 // be changed. ii) the lattice is constructed in CPU by iterating
 // remaining arcs, thus nodes are implicitly pruned. iii) node D2H
 // copy is done in each frame asynchronously, which does not introduce overheads.
-inline DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
+DEVICE void LatticePruner::PruneLatticeForFrame(int32 frame,
     bool merge, BaseFloat lattice_beam, int32 verbose) {
   int32 prev_cidx;
   int32 c = 0;

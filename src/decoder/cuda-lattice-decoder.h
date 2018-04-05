@@ -116,28 +116,28 @@ class CudaLatticeDecoder {
   template<typename T>
   class CudaVector {
    public:
-    inline void Allocate(uint32 max_size, 
+    void Allocate(uint32 max_size, 
        uint32* count_h=NULL, uint32* count_d=NULL, T* mem_d=NULL, T* mem_h=NULL) ;
-    inline void Free(bool create_outside=false);
+    void Free(bool create_outside=false);
 
-    inline HOST DEVICE T& operator[](uint32 idx); 
-    inline HOST DEVICE const T& operator[](uint32 idx) const; 
-    inline HOST DEVICE uint32 Size() const; 
-    HOST DEVICE inline uint32 PushBack(const T &val); 
-    HOST DEVICE inline void Clear(cudaStream_t stream=0); 
-    inline bool Empty() const { return Size() == 0; }
-    HOST DEVICE inline int32 GetIdxFromAddr(T* addr); 
-    inline void Swap(CudaVector<T> &v); 
-    inline size_t GetCudaMallocBytes() { return alloc_size; } 
+    HOST DEVICE T& operator[](uint32 idx); 
+    HOST DEVICE const T& operator[](uint32 idx) const; 
+    HOST DEVICE uint32 Size() const; 
+    HOST DEVICE uint32 PushBack(const T &val); 
+    HOST DEVICE void Clear(cudaStream_t stream=0); 
+    bool Empty() const { return Size() == 0; }
+    HOST DEVICE int32 GetIdxFromAddr(T* addr); 
+    void Swap(CudaVector<T> &v); 
+    size_t GetCudaMallocBytes() { return alloc_size; } 
     
     // a series of data transfer functions between host and device
-    inline void CopyAllToHost(cudaStream_t stream=0);
-    inline void CopyAllToDevice(cudaStream_t stream=0);
-    inline void CopySizeToHost(cudaStream_t stream=0);
-    inline void CopySizeToDevice(cudaStream_t stream=0);
-    inline void CopyDataToHost(cudaStream_t stream=0, T* to_buf=NULL, 
+    void CopyAllToHost(cudaStream_t stream=0);
+    void CopyAllToDevice(cudaStream_t stream=0);
+    void CopySizeToHost(cudaStream_t stream=0);
+    void CopySizeToDevice(cudaStream_t stream=0);
+    void CopyDataToHost(cudaStream_t stream=0, T* to_buf=NULL, 
                                bool copy_size=true);
-    inline void CopyDataToDevice(cudaStream_t stream=0);
+    void CopyDataToDevice(cudaStream_t stream=0);
       
    protected:
     uint32 *count_d, *count_h; // current T number in buf
@@ -157,20 +157,20 @@ class CudaLatticeDecoder {
     using CudaVector<T>::Clear;
     using CudaVector<T>::Size;
 
-    inline void Allocate(uint32 max_size);
-    inline void Free();   
-    inline void Swap(CudaMergeVector<T> &v);
-    inline size_t GetCudaMallocBytes();
+    void Allocate(uint32 max_size);
+    void Free();   
+    void Swap(CudaMergeVector<T> &v);
+    size_t GetCudaMallocBytes();
 
     // according to the unpack index, copy data from external buf to the inside
     // buf; it's used in the 2nd stage of 2-pass atomic token recombination
-    DEVICE inline void StoreDataByPackIdx(void* temp_data_buf, 
+    DEVICE void StoreDataByPackIdx(void* temp_data_buf, 
                       int* temp_data_buf_update, int32 buf_size,
                       LatticePruner *lattice_pruner);
     // check whether data at index i is updated
-    DEVICE inline int32 IsUpdated(int32 i);
+    DEVICE int32 IsUpdated(int32 i);
     // push back data & data_pack to vectors respectively
-    DEVICE inline uint32 PushBack(const T &val, uint64 *val_pack);  
+    DEVICE uint32 PushBack(const T &val, uint64 *val_pack);  
   
    private:
     using CudaVector<T>::count_d;
@@ -190,19 +190,19 @@ class CudaLatticeDecoder {
     CostType cost_; // accumulated total cost up to this place.
     BaseFloat extra_cost; // used in lattice pruning
     
-    HOST DEVICE inline Token(BaseFloat cost, Token* prev) : 
+    HOST DEVICE Token(BaseFloat cost, Token* prev) : 
                             cost_(cost), extra_cost(0) {
       assert(sizeof(Token)==8); 
       if(prev) {
         cost_ += prev->cost_;
       }
     }
-    HOST DEVICE inline Token() { } 
+    HOST DEVICE Token() { } 
 
-    HOST DEVICE inline bool operator < (const Token &other) {
+    HOST DEVICE bool operator < (const Token &other) {
       return cost_ > other.cost_;
     }
-    HOST DEVICE inline bool operator < (const Token &other) volatile{
+    HOST DEVICE bool operator < (const Token &other) volatile{
       return cost_ > other.cost_;
     }
   };
@@ -221,7 +221,7 @@ class CudaLatticeDecoder {
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     void *p2; // pack of (int32 prev_tok_id, int32 prev_tok_fr;)
 
-    HOST DEVICE inline LatLink(int32 prev_tok_id, int32 prev_tok_fr,     
+    HOST DEVICE LatLink(int32 prev_tok_id, int32 prev_tok_fr,     
                                int32 next_tok_id, int32 next_tok_fr, 
         int32 ilabel, int32 olabel, BaseFloat graph_cost, BaseFloat acoustic_cost): 
         ilabel(ilabel), olabel(olabel), graph_cost(graph_cost), 
@@ -241,7 +241,7 @@ class CudaLatticeDecoder {
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     int32 arc_id;
 
-    HOST DEVICE inline LatLinkCompact(uint32 prev_tok_id, int32 prev_tok_fr,     
+    HOST DEVICE LatLinkCompact(uint32 prev_tok_id, int32 prev_tok_fr,     
                                       uint32 next_tok_id, int32 next_tok_fr, 
                                       BaseFloat acoustic_cost, int32 arc_id): 
         next_tok_id(next_tok_id), 
@@ -251,10 +251,10 @@ class CudaLatticeDecoder {
       uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
       this->is_emit_pack_prev_tok_id |= (is_emit_arc<<31); // a hack to save is_emit_arc in is_emit_pack_prev_tok_id
     }
-    HOST DEVICE inline bool IsEmitArc() {
+    HOST DEVICE bool IsEmitArc() {
       return is_emit_pack_prev_tok_id >= ((uint32)1<<31);
     }
-    HOST DEVICE inline uint32 GetPrevTokId() {
+    HOST DEVICE uint32 GetPrevTokId() {
       return is_emit_pack_prev_tok_id & (((uint32)1<<31) - 1);
     }
 
@@ -273,7 +273,7 @@ class CudaLatticeDecoder {
     uint64 token_pack; // the real mem is here
     // if learned from TokenLookupElem that this TS is de-active, we need to firstly giving value or reset all the mem of this; thus don't need to call allocate_new_tokens
     
-    HOST DEVICE inline TokenState (StateId state);
+    HOST DEVICE TokenState (StateId state);
 
   };
 
@@ -301,16 +301,16 @@ class CudaLatticeDecoder {
     LatLinkCompact* GetDeviceArcsBpr() { return arcs_bpr_d; } 
 
 
-    DEVICE inline Token* GetTokenByExactIdx(uint32 offset);
-    DEVICE inline int32 GetTokenIdxFromAddr(Token* tok);
-    DEVICE inline int32 GetTokenAllocIdx(uint32 offset);
+    DEVICE Token* GetTokenByExactIdx(uint32 offset);
+    DEVICE int32 GetTokenIdxFromAddr(Token* tok);
+    DEVICE int32 GetTokenAllocIdx(uint32 offset);
 
     // Entry of lattice pruning until this frame
-    inline DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);    
+    DEVICE void PruneActiveTokens(int32 frame, BaseFloat lattice_beam, int32 verbose);    
     // Collect after each token passing
-    inline DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, 
+    DEVICE void CollectToksPerFrame(TokenMergeVector& cur_toks_vec, 
                                             int32 frame);
-    inline DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
+    DEVICE void CollectArcsPerFrame(LatLinkVector& cur_arc_array,
                                              int32 frame);
 
     // Data transfer from device to host
@@ -321,19 +321,19 @@ class CudaLatticeDecoder {
 
    private:    
     // #define ENCODE_TOK_IDX_PAIR(frame,idx) (((uint64)(frame)<<32)+(idx))
-    inline DEVICE int32 AddArc(LatLink* arc);
-    inline DEVICE int32 AddArc(LatLinkCompact* arc, int32 frame);
+    DEVICE int32 AddArc(LatLink* arc);
+    DEVICE int32 AddArc(LatLinkCompact* arc, int32 frame);
     // Set start index in the buffer of the next frame
-    inline DEVICE void SetNextSidx(int* sidx_buf, int32 size, int32 frame);
-    inline DEVICE Token* GetActiveToken(void* p, bool check=false, int32 frame=-1) const;
-    inline DEVICE Token* GetActiveToken(int32 frame, int32 id, bool check=false) const;
-    inline DEVICE Token* GetActiveTokenByExactId(int32 frame, 
+    DEVICE void SetNextSidx(int* sidx_buf, int32 size, int32 frame);
+    DEVICE Token* GetActiveToken(void* p, bool check=false, int32 frame=-1) const;
+    DEVICE Token* GetActiveToken(int32 frame, int32 id, bool check=false) const;
+    DEVICE Token* GetActiveTokenByExactId(int32 frame, 
   int32 id_exact, bool check) const;
 
-    inline DEVICE LatLinkCompact* GetActiveArc(int32 frame, int32 id) const;
-    inline DEVICE int32 GetSize(int* acc_len, int32 frame) const;
+    DEVICE LatLinkCompact* GetActiveArc(int32 frame, int32 id) const;
+    DEVICE int32 GetSize(int* acc_len, int32 frame) const;
     // used in PruneLatticeForFrame()
-    inline DEVICE void UpdateModifiedFlags( 
+    DEVICE void UpdateModifiedFlags( 
                   volatile int32 **modified0, volatile int32** modified1,
                   volatile int32 **modified2, int cnt, int32* modified_d);
     // The parallel lattice pruning is based on the algorithm in
@@ -355,7 +355,7 @@ class CudaLatticeDecoder {
     // be changed. ii) the lattice is constructed in CPU by iterating
     // remaining arcs, thus nodes are implicitly pruned. iii) node D2H copy is done
     // in each frame asynchronously, which does not introduce overheads.
-    inline DEVICE void PruneLatticeForFrame(int32 frame, 
+    DEVICE void PruneLatticeForFrame(int32 frame, 
                   bool merge, BaseFloat lattice_beam, int32 verbose);
 
    private:
@@ -484,8 +484,8 @@ class CudaLatticeDecoder {
 
   // other functions
   bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
-  inline size_t GetCudaMallocBytes() const { return bytes_cuda_malloc; } 
-  inline size_t GetCudaMallocManagedBytes() const { return bytes_cuda_malloc_managed;  }
+  size_t GetCudaMallocBytes() const { return bytes_cuda_malloc; } 
+  size_t GetCudaMallocManagedBytes() const { return bytes_cuda_malloc_managed;  }
 
  private:
   // configurations
