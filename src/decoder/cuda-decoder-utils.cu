@@ -22,7 +22,7 @@
 
 namespace kaldi {
 
-void get_free_memory_stat(char *prefix) {
+void get_free_memory_stat(const char *prefix) {
   int32 act_gpu_id;
   cudaError_t e = cudaGetDevice(&act_gpu_id);
   char name[128];
@@ -38,6 +38,24 @@ void get_free_memory_stat(char *prefix) {
             << "\t" << mem_stats;
 }
 
+// a combination of cudaMallocManaged & cudaMemAdvise
+void cuda_malloc_managed_preferred_device(void** devPtr, size_t size) {
+  cudaMallocManaged(devPtr, size);
+#ifdef MEMADVISE
+  // Setting the preferred location does not cause data to migrate to 
+  // that location immediately.
+  int32_t device; // for MEMADVISE
+  cudaGetDevice(&device);
+  // Justin: If we do this we get faster perf as long as we don't over subscribe
+  cudaMemAdvise(*devPtr, size,
+                cudaMemAdviseSetPreferredLocation, device);
+  /* 
+  // 
+  cudaMemPrefetchAsync(tokens_allocation, sizeof(Token)*size,
+                       device); // force pages to allocate now
+                       */
+#endif
+}
 
 // CudaHistogram Implementation
 int32 CudaHistogram::Allocate(BaseFloat beam, BaseFloat beam_lowest,
@@ -139,13 +157,13 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst) {
   cudaMallocHost(&arc_ilabels_h, arc_count * sizeof(int32));
   cudaMallocHost(&arc_olabels_h, arc_count * sizeof(int32));
 
-  cudaMalloc((void**)&arc_weights_d, arc_count * sizeof(BaseFloat));
+  cuda_malloc_managed_preferred_device((void**)&arc_weights_d, arc_count * sizeof(BaseFloat));
   bytes_cudaMalloc += arc_count * sizeof(BaseFloat);
-  cudaMalloc((void**)&arc_nextstates_d, arc_count * sizeof(StateId));
+  cuda_malloc_managed_preferred_device((void**)&arc_nextstates_d, arc_count * sizeof(StateId));
   bytes_cudaMalloc += arc_count * sizeof(StateId);
-  cudaMalloc((void**)&arc_ilabels_d, arc_count * sizeof(int32));
+  cuda_malloc_managed_preferred_device((void**)&arc_ilabels_d, arc_count * sizeof(int32));
   bytes_cudaMalloc += arc_count * sizeof(int32);
-  cudaMalloc((void**)&arc_olabels_d, arc_count * sizeof(int32));
+  cuda_malloc_managed_preferred_device((void**)&arc_olabels_d, arc_count * sizeof(int32));
   bytes_cudaMalloc += arc_count * sizeof(int32);
 
   // now populate arc data
@@ -176,14 +194,10 @@ void CudaFst::Initialize(const fst::Fst<StdArc> &fst) {
     }
   }
 
-  cudaMemcpyAsync(arc_weights_d, arc_weights_h, arc_count * sizeof(BaseFloat),
-                  cudaMemcpyHostToDevice, cudaStreamPerThread);
-  cudaMemcpyAsync(arc_nextstates_d, arc_nextstates_h, arc_count * sizeof(StateId),
-                  cudaMemcpyHostToDevice, cudaStreamPerThread);
-  cudaMemcpyAsync(arc_ilabels_d, arc_ilabels_h, arc_count * sizeof(int32),
-                  cudaMemcpyHostToDevice, cudaStreamPerThread);
-  cudaMemcpyAsync(arc_olabels_d, arc_olabels_h, arc_count * sizeof(int32),
-                  cudaMemcpyHostToDevice, cudaStreamPerThread);
+  memcpy(arc_weights_d, arc_weights_h, arc_count * sizeof(BaseFloat));
+  memcpy(arc_nextstates_d, arc_nextstates_h, arc_count * sizeof(StateId));
+  memcpy(arc_ilabels_d, arc_ilabels_h, arc_count * sizeof(int32));
+  memcpy(arc_olabels_d, arc_olabels_h, arc_count * sizeof(int32));
 
   cudaStreamSynchronize(cudaStreamPerThread);
   POP_RANGE

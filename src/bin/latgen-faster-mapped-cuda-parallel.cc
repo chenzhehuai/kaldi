@@ -179,8 +179,12 @@ int main(int argc, char *argv[]) {
             }
             PUSH_RANGE("whole decoding", 0);
             PUSH_RANGE("before_decoding", 1);
-            if (omp_get_thread_num() == 0) timer.Reset();
-            //#pragma omp barrier
+            if (omp_get_thread_num() == 0) {
+              timer.Reset();
+              //#pragma omp barrier
+              if (num_success % config.mem_print_freq == 0)
+                get_free_memory_stat("");
+            }
 
             std::string utt = feature_vector[i];
             Matrix<BaseFloat> loglikes;

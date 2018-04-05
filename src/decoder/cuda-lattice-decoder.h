@@ -42,6 +42,7 @@ struct CudaLatticeDecoderConfig {
 
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
   bool determinize_lattice;
+  int32 mem_print_freq;
   int32 verbose;
   
   CudaLatticeDecoderConfig(): 
@@ -56,6 +57,7 @@ struct CudaLatticeDecoderConfig {
                        prune_interval(3000),
                        max_active(std::numeric_limits<int32>::max()),
                        determinize_lattice(true),
+                       mem_print_freq(10),
                        verbose(0) { }
  
   void Register(OptionsItf *opts) {

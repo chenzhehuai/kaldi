@@ -909,20 +909,14 @@ void TokenAllocator::Initialize(uint32 size)  {
 
   // managed so getBestPath can easily access this data in the end; 
   // unused in lattice decoder
-  cudaMallocManaged((void**)&tokens_allocation, sizeof(Token)*size);
+  cuda_malloc_managed_preferred_device((void**)&tokens_allocation,
+      sizeof(Token)*size);
   bytes_cuda_malloc_managed = sizeof(Token) * size;
 
   // index
   cudaMalloc((void**)&front_d, sizeof(uint32));
   cudaMallocHost((void**)&front_h, sizeof(uint32));
 
-#ifdef MEMADVISE
-  // If we do this we get faster perf as long as we don't over subscribe
-  cudaMemAdvise(tokens_allocation, sizeof(Token)*size,
-                cudaMemAdviseSetPreferredLocation, device);
-  cudaMemPrefetchAsync(tokens_allocation, sizeof(Token)*size,
-                       device); // force pages to allocate now
-#endif
   Reset();
 }
 
@@ -953,7 +947,6 @@ void TokenAllocator::PrefetchNextToDevice(cudaStream_t stream, int32 count) {
     count = size - front;
 
 #ifdef MEMADVISE
-  // it does not work currently, even slower if without MEMADVISE
   cudaMemPrefetchAsync(tokens_allocation + front, sizeof(Token)*count, device,
                        stream);
 #endif
@@ -1027,6 +1020,7 @@ void LatticePruner::Initialize() {
   cudaMemset(arcs_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 2));
 }
 
+// the return value including the cudaMallocManaged size
 int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
                               int32 max_lat_arc_per_frame, int32 prune_interval, 
                               int32 max_toks, int32 max_arcs, 
@@ -1038,10 +1032,16 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   // before pruning
   sz = sizeof(Token) * max_toks;
   toks_bpr_d = tokens_allocation;
+  // if we directly use managed memory from toks_bpr_d, the RTF is 10% larger 
   cudaMallocHost((void**)&toks_bpr_h, sz);
   toks_buf_before_pr_size = sz / sizeof(Token);
   sz = sizeof(LatLinkCompact) * max_arcs;
-  cudaMalloc((void**)&arcs_bpr_d, sz); bytes_cuda_malloc += sz;
+  
+  // to reduce memory usage, we use cudaMallocManaged, which doesn't 
+  // allocate in GPU at once
+  cuda_malloc_managed_preferred_device((void**)&arcs_bpr_d, sz); 
+  bytes_cuda_malloc += sz;
+
   arcs_buf_before_pr_size = max_arcs;
   sz = sizeof(int32) * (prune_interval + 2);
   cudaMalloc((void**)&toks_bpr_fr_sidx_d, sz); bytes_cuda_malloc += sz;
@@ -1054,7 +1054,7 @@ int32 LatticePruner::Allocate(int32 max_tokens_per_frame,
   cudaMalloc((void**)&arcs_apr_fr_size_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&arcs_apr_fr_size_h, sz);
   sz = ESTIMATED_PRUNE_RATIO * sizeof(LatLink) * max_arcs;
-  cudaMalloc((void**)&arcs_apr_d, sz); bytes_cuda_malloc += sz;
+  cuda_malloc_managed_preferred_device((void**)&arcs_apr_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&arcs_apr_h, sz);
   sz = sizeof(int32);
   cudaMalloc((void**)&arcs_apr_used_d, sz); bytes_cuda_malloc += sz;
@@ -1546,13 +1546,15 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   // sgemm requires shared memory and we don't want cache config changing.  
   // So set a device wide cache config.
   cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
-  get_free_memory_stat("After initlization:");
+  if (config_.verbose > 1)
+    get_free_memory_stat("After initlization:");
 }
 
 CudaLatticeDecoder::~CudaLatticeDecoder() {
   KALDI_VLOG(1) << "CUDA LatticeDecoder DESTRUCTOR\n";
 
-  get_free_memory_stat("End of decoding:");
+  if (config_.verbose > 1)
+    get_free_memory_stat("End of decoding:");
   
   for (int32 j = 0; j < LAT_BUF_SIZE; j++) lat_toks_bufs_[j].Free();
   lat_arcs_buf_.Free(true);
@@ -1680,8 +1682,6 @@ void CudaLatticeDecoder::InitDecoding() {
 
   // try to reduce number of tokens_allocation by not doing allocate, but only
   // init TokenLookupElem
-  // start moving these / allocating them on the device
-  //token_allocator_.PrefetchNextToDevice(stream_comp, fst_.numStates + 5000);
 
   _allocate_all_tokens <<< blocks, threads, 0, stream_comp>>>(
     current_tokens_lookup_d, fst_.numStates, token_allocator_, barrier_d);
@@ -1719,7 +1719,7 @@ void CudaLatticeDecoder::PreProcessTokens() {
 
 
   num_frames_decoded_++;
-  /* // TODO: check performance here
+  /* // do prefetch can slow down: why?
 #ifndef MEMADVISE
   // no need to prefetch if we have done a memadvise
   token_allocator_.PrefetchNextToDevice(cudaStreamPerThread);
