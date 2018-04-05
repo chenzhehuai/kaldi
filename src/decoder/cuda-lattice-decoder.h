@@ -108,7 +108,7 @@ class CudaLatticeDecoder {
   typedef StdArc::StateId StateId;
   typedef BaseFloat CostType;
   
-  class LatticePruner;
+  class LatticeProcessor;
 
   // general cuda vector can be used in both host and device. 
   // page faults need to be paid attention to
@@ -149,7 +149,7 @@ class CudaLatticeDecoder {
   // complexer cuda vector used in 2-pass atomic token recombination
   template<typename T>
   class CudaMergeVector : public CudaVector<T> {
-    friend class LatticePruner;
+    friend class LatticeProcessor;
    
    public:
     using CudaVector<T>::operator[];
@@ -166,7 +166,7 @@ class CudaLatticeDecoder {
     // buf; it's used in the 2nd stage of 2-pass atomic token recombination
     DEVICE void StoreDataByPackIdx(void* temp_data_buf, 
                       int* temp_data_buf_update, int32 buf_size,
-                      LatticePruner *lattice_pruner);
+                      LatticeProcessor *lattice_processor);
     // check whether data at index i is updated
     DEVICE int32 IsUpdated(int32 i);
     // push back data & data_pack to vectors respectively
@@ -179,8 +179,11 @@ class CudaLatticeDecoder {
 
     // for arr merge to single; assume create using cudaMallocManaged
     int32 *mem_update_d;
-    // record recombination uint64 address corresponding to each elem in T* mem_d
-    // uint64** mem_pack_buf_d;  // as it's always in mem_d, we do not need this any more
+
+    // recombination uint64 variable corresponding to each elem in T* mem_d
+    // is stored in mem_d, and used in atomic based recombination 
+    // _find_or_add_token_arc()
+
     int* barrier_;
   };
 
@@ -226,6 +229,7 @@ class CudaLatticeDecoder {
         int32 ilabel, int32 olabel, BaseFloat graph_cost, BaseFloat acoustic_cost): 
         ilabel(ilabel), olabel(olabel), graph_cost(graph_cost), 
         acoustic_cost(acoustic_cost) {
+      assert(sizeof(Token)==32); 
       p1=(void*)ENCODE_TOK_IDX_PAIR(next_tok_fr,next_tok_id);
       p2=(void*)ENCODE_TOK_IDX_PAIR(prev_tok_fr,prev_tok_id);
     }
@@ -247,9 +251,12 @@ class CudaLatticeDecoder {
         next_tok_id(next_tok_id), 
         acoustic_cost(acoustic_cost), arc_id(arc_id),
         is_emit_pack_prev_tok_id(prev_tok_id) {
-      assert(is_emit_pack_prev_tok_id < ((uint32)1<<31));  // we can't cope with that large number
+      assert(sizeof(Token)==16); 
+      // we can't cope with that large number
+      assert(is_emit_pack_prev_tok_id < ((uint32)1<<31));  
       uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
-      this->is_emit_pack_prev_tok_id |= (is_emit_arc<<31); // a hack to save is_emit_arc in is_emit_pack_prev_tok_id
+      // a hack to save is_emit_arc in is_emit_pack_prev_tok_id
+      this->is_emit_pack_prev_tok_id |= (is_emit_arc<<31); 
     }
     HOST DEVICE bool IsEmitArc() {
       return is_emit_pack_prev_tok_id >= ((uint32)1<<31);
@@ -271,10 +278,14 @@ class CudaLatticeDecoder {
     //TokenLookupElem[state].tok_idx_allocated in each frame
     StateId state;  // record WFST state
     uint64 token_pack; // the real mem is here
-    // if learned from TokenLookupElem that this TS is de-active, we need to firstly giving value or reset all the mem of this; thus don't need to call allocate_new_tokens
+    // if learned from TokenLookupElem that this TS is de-active, 
+    // we need to firstly giving value or reset all the mem of this; 
+    // thus don't need to call allocate_new_tokens
     
-    HOST DEVICE TokenState (StateId state);
-
+    HOST DEVICE TokenState (StateId state) : tok_idx_allocated(-1), state(state),
+                            token_pack(pack_cost_idx_into_uint64(-FLT_MAX, 0)) {
+      assert(sizeof(Token)==16); 
+    }
   };
 
   // struct to hold pre-allocated tokens (one per WFST state) for fast lookup
@@ -282,16 +293,17 @@ class CudaLatticeDecoder {
     #define LOOKUP_STORE_TYPE uint32
     #define LOOKUP_DEACTIVE ((LOOKUP_STORE_TYPE)-1)
     #define LOOKUP_READY_PUSH ((LOOKUP_STORE_TYPE)-2)
-    // TODO: considering change int32_t to int16
-    volatile LOOKUP_STORE_TYPE tokenstate_idx; // used to index the corresponding TokenState
+    
+    // used to index the corresponding TokenState
+    volatile LOOKUP_STORE_TYPE tokenstate_idx; 
   };
   // typedef CudaVector<TokenState> TokenVector;
   typedef CudaMergeVector<TokenState> TokenMergeVector;
   typedef CudaVector<LatLinkCompact> LatLinkVector;
 
 
-   // for lattice pruning
-  class LatticePruner {
+   // for lattice processing
+  class LatticeProcessor {
    public:  
     void Initialize();
     int32 Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
@@ -299,7 +311,6 @@ class CudaLatticeDecoder {
     void Free();
     // The GPU memory of lattice arcs is shared with LatLinkVector
     LatLinkCompact* GetDeviceArcsBpr() { return arcs_bpr_d; } 
-
 
     DEVICE Token* GetTokenByExactIdx(uint32 offset);
     DEVICE int32 GetTokenIdxFromAddr(Token* tok);
@@ -336,6 +347,7 @@ class CudaLatticeDecoder {
     DEVICE void UpdateModifiedFlags( 
                   volatile int32 **modified0, volatile int32** modified1,
                   volatile int32 **modified2, int cnt, int32* modified_d);
+    
     // The parallel lattice pruning is based on the algorithm in
     // LatticeFasterDecoder::PruneActiveTokens 
     // with necessary modifications for GPU parallelization:
@@ -419,7 +431,7 @@ class CudaLatticeDecoder {
     int* token_per_arc_update;
 
     // tools
-    LatticePruner lattice_pruner;
+    LatticeProcessor lattice_processor;
     CudaHistogram histogram_prev_toks;
 
     // never change
@@ -520,7 +532,7 @@ class CudaLatticeDecoder {
   // lattice
   TokenMergeVector lat_toks_bufs_[LAT_BUF_SIZE];
   LatLinkVector lat_arcs_buf_;
-  LatticePruner lattice_pruner_;
+  LatticeProcessor lattice_processor_;
 
   // GPU usage
   uint32 total_threads; // GPU utilization
