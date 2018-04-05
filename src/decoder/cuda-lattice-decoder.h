@@ -229,7 +229,7 @@ class CudaLatticeDecoder {
         int32 ilabel, int32 olabel, BaseFloat graph_cost, BaseFloat acoustic_cost): 
         ilabel(ilabel), olabel(olabel), graph_cost(graph_cost), 
         acoustic_cost(acoustic_cost) {
-      assert(sizeof(Token)==32); 
+      assert(sizeof(LatLink)==32); 
       p1=(void*)ENCODE_TOK_IDX_PAIR(next_tok_fr,next_tok_id);
       p2=(void*)ENCODE_TOK_IDX_PAIR(prev_tok_fr,prev_tok_id);
     }
@@ -251,7 +251,7 @@ class CudaLatticeDecoder {
         next_tok_id(next_tok_id), 
         acoustic_cost(acoustic_cost), arc_id(arc_id),
         is_emit_pack_prev_tok_id(prev_tok_id) {
-      assert(sizeof(Token)==16); 
+      assert(sizeof(LatLinkCompact)==16); 
       // we can't cope with that large number
       assert(is_emit_pack_prev_tok_id < ((uint32)1<<31));  
       uint32 is_emit_arc = prev_tok_fr != next_tok_fr;
@@ -284,7 +284,7 @@ class CudaLatticeDecoder {
     
     HOST DEVICE TokenState (StateId state) : tok_idx_allocated(-1), state(state),
                             token_pack(pack_cost_idx_into_uint64(-FLT_MAX, 0)) {
-      assert(sizeof(Token)==16); 
+      assert(sizeof(TokenState)==16); 
     }
   };
 

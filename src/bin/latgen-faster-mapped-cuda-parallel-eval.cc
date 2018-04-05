@@ -183,7 +183,11 @@ int main(int argc, char *argv[]) {
               num_success++;
             } else num_fail++;
             #pragma omp barrier
-            if (omp_get_thread_num() == 0) elapsed += timer.Elapsed();
+            if (omp_get_thread_num() == 0) {
+              elapsed += timer.Elapsed();
+              if (num_success % config.mem_print_freq == 0)
+                get_free_memory_stat("");
+            }
             POP_RANGE
             #pragma omp critical
             {
