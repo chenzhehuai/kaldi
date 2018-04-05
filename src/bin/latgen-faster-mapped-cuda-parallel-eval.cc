@@ -108,14 +108,14 @@ int main(int argc, char *argv[]) {
       Fst<StdArc> *decode_fst;
       decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
       cuInit(0);
-#if HAVE_CUDA==1
-        CuDevice::Instantiate().SelectGpuId("yes");
-        CuDevice::Instantiate().AllowMultithreading();
-#endif
       CudaFst decode_fst_cuda;
       #pragma omp parallel shared(po, decode_fst_cuda)
       {
         printf("Thread %d of %d\n", omp_get_thread_num(), omp_get_num_threads());
+#if HAVE_CUDA==1
+        CuDevice::Instantiate().SelectGpuId("yes");
+        CuDevice::Instantiate().AllowMultithreading();
+#endif
         /*
         #if 1
               cuInit(0);
