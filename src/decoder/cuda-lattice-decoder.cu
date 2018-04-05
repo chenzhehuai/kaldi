@@ -131,9 +131,10 @@ DEVICE static inline void _find_or_add_token_arc(processTokens_params* params,
     // as update item index because it is unique in each frame obtained from
     // atomicAdd in pushBack function (lat_arcs_sub_vec
     // is recorded accumulatively and cleared only at end of decoding)
-    *update_idx = params->lat_arcs_sub_vec.PushBack(arc) -
+    int32 ret = params->lat_arcs_sub_vec.PushBack(arc) -
                   *params->num_arcs_till_last;
-    assert(*update_idx < params->max_lat_arc_per_frame);
+    assert(ret < params->max_lat_arc_per_frame);
+    *update_idx = ret;
   }
   // get token_pack variable address for atomic based token recombination
   *token_pack = &((*next_ts)->token_pack);

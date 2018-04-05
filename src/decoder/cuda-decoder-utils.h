@@ -88,8 +88,10 @@ const int32 num_colors = sizeof(colors) / sizeof(uint32);
 #define CUDA_PRINTF(format,...)
 #endif
 
-#define MEMADVISE // used after Pascal, details: 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 600
+#define MEMADVISE // used after Pascal, details in: 
 // http:// mug.mvapich.cse.ohio-state.edu/static/media/mug/presentations/2016/MUG16_GPU_tutorial_V5.pdf
+#endif
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 

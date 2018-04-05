@@ -171,11 +171,9 @@ int main(int argc, char *argv[]) {
               feature_vector[i] << "\t" << loglike_reader.HasKey(feature_vector[i]);
             if (!loglike_reader.HasKey(feature_vector[i])) continue;
             if (omp_get_thread_num() == 0) {
-              printf("cudaMallocMemory: %lg GB, cudaMallocManagedMemory: %lg GB\n",
+              printf("cudaMallocMemory: %lg GB\n",
                (decoder.Decoder().GetCudaMallocBytes()*omp_get_num_threads() +
-               decode_fst_cuda.GetCudaMallocBytes()) / 1024.0 / 1024 / 1024,
-               decoder.Decoder().GetCudaMallocManagedBytes() / 1024.0 / 1024 / 1024 *
-               omp_get_num_threads());
+               decode_fst_cuda.GetCudaMallocBytes()) / 1024.0 / 1024 / 1024);
             }
             PUSH_RANGE("whole decoding", 0);
             PUSH_RANGE("before_decoding", 1);

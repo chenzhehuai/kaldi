@@ -146,11 +146,9 @@ int main(int argc, char *argv[]) {
 
           for (; !loglike_reader.Done(); loglike_reader.Next()) {
             if (omp_get_thread_num() == 0) {
-              printf("cudaMallocMemory: %lg GB, cudaMallocManagedMemory: %lg GB\n",
+              printf("cudaMallocMemory: %lg GB\n",
                      (decoder.Decoder().GetCudaMallocBytes()*omp_get_num_threads() +
-                      decode_fst_cuda.GetCudaMallocBytes()) / 1024.0 / 1024 / 1024,
-                     decoder.Decoder().GetCudaMallocManagedBytes() / 1024.0 / 1024 / 1024 *
-                     omp_get_num_threads());
+                      decode_fst_cuda.GetCudaMallocBytes()) / 1024.0 / 1024 / 1024);
             }
             PUSH_RANGE("whole decoding", 0);
             PUSH_RANGE("before_decoding", 1);
@@ -158,7 +156,11 @@ int main(int argc, char *argv[]) {
             #pragma omp barrier
 
             std::string utt = loglike_reader.Key();
-            Matrix<BaseFloat> loglikes (loglike_reader.Value());
+            Matrix<BaseFloat> loglikes;
+            #pragma omp critical
+            {
+              loglikes = Matrix<BaseFloat>(loglike_reader.Value());
+            }
             loglike_reader.FreeCurrent();
             if (loglikes.NumRows() == 0) {
               KALDI_WARN << "Zero-length utterance: " << utt;

@@ -55,7 +55,7 @@ struct CudaLatticeDecoderConfig {
                        lattice_beam(10.0),
                        beam(16.0),
                        prune_interval(3000),
-                       max_active(std::numeric_limits<int32>::max()),
+                       max_active(100000),
                        determinize_lattice(true),
                        mem_print_freq(10),
                        verbose(0) { }
