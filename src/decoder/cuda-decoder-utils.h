@@ -249,7 +249,8 @@ class CudaHistogram {
     inline DEVICE void AggregateLocalHist(int32 *hist_local) {
         for (int i = 0; i < Size(); i++) {
             if (hist_local[i] != 0)
-                atomicAdd(hist_global_ + i, hist_local[i]);
+              // "fire and forget" atomics
+              atomicAdd(hist_global_ + i, hist_local[i]);
         }
     }
     inline DEVICE void GetCutoff(BaseFloat *cutoff_from_hist, int32 cutoff_num,
