@@ -42,15 +42,16 @@ uint64  RandInt64() {
 #define MAX_NGRAM 5+1
 #define RAND_TYPE int64
 class FasterArpaLm {
+  typedef std::vector<LmState> HASH_STORE;
+
  public:
 
   // LmState in FasterArpaLm: the basic storage unit
   class LmState {
    public:
-    LmState(): logprob_(0), h_value(0), word_ids_(NULL), next(NULL) { }
+    LmState(): logprob_(0), h_value(0), word_ids_(NULL) { }
     LmState(float logprob, float backoff_logprob): 
-      logprob_(logprob), backoff_logprob_(backoff_logprob), h_value(0),
-    next(NULL) { }
+      logprob_(logprob), backoff_logprob_(backoff_logprob), h_value(0) { }
     void Allocate(const NGram* ngram, float lm_scale=1) {
       logprob_ = ngram->logprob*lm_scale;
       backoff_logprob_ = ngram->backoff*lm_scale;
@@ -75,7 +76,6 @@ class FasterArpaLm {
     RAND_TYPE h_value;
     int32 *word_ids_;
     int32 ngram_order_;
-    LmState* next; // for colid
   };
 
   // Class to build FasterArpaLm from Arpa format language model. It relies on the
@@ -149,19 +149,14 @@ class FasterArpaLm {
     }
     return hashed_idx;
   }
-  inline void InsertHash(int32 hashed_idx, int32 ngrams_saved_num_) {
-    if (ngrams_map_.at(hashed_idx)) {
-      LmState *lm_state = ngrams_map_[hashed_idx];
-      int32 cnt=0;
-      while (lm_state->next) {
-        lm_state = lm_state->next;
-        cnt++;
-      }
-      lm_state->next = &ngrams_[ngrams_saved_num_];
-      max_collision_=std::max(cnt,max_collision_);
-    } else {
-      ngrams_map_[hashed_idx] = &ngrams_[ngrams_saved_num_];
+  inline void InsertHash(int32 hashed_idx, const int32* word_ids, int32 ngram_order) {
+    if (!ngrams_map_.at(hashed_idx)) {
+      ngrams_map_[hashed_idx] = (HASH_STORE *)calloc(sizeof(HASH_STORE), 1);
+      ngrams_map_[hashed_idx]->resize(0);
     }
+    ngrams_map_[hashed_idx]->push_back(lm_state_pattern);
+    ngrams_map_.back()->SaveWordIds(word_ids, ngram_order);
+    max_collision_=std::max(ngrams_map_[hashed_idx]->size(),max_collision_);
   }
   inline void SaveHashedState(const int32* word_ids, 
       int query_ngram_order, LmState &lm_state_pattern) {
@@ -173,9 +168,7 @@ class FasterArpaLm {
       ngrams_[hashed_idx] = lm_state_pattern;
       ngrams_[hashed_idx].SaveWordIds(word_ids, ngram_order);
     } else {
-      ngrams_[ngrams_saved_num_] = lm_state_pattern;
-      ngrams_[ngrams_saved_num_].SaveWordIds(word_ids, ngram_order);
-      InsertHash(hashed_idx, ngrams_saved_num_++);
+      InsertHash(hashed_idx, word_ids, ngram_order);
     }
   }
   inline void SaveHashedState(const std::vector<int32> &word_ids, LmState &lm_state_pattern,
@@ -200,14 +193,14 @@ class FasterArpaLm {
     if (ngram_order == 1) {
       ret_lm_state = &ngrams_[hashed_idx];
     } else {
-      LmState *lm_state = ngrams_map_[hashed_idx];
-      while (lm_state) {
-        if (lm_state->h_value == h_value) {
-          ret_lm_state = lm_state;
+      HASH_STORE *lm_state_store = ngrams_map_[hashed_idx];
+      for (auto it = myvector.cbegin(); it != myvector.cend(); ++it) {
+        if (it.h_value == h_value) {
+          ret_lm_state = &it;
           break;
         }
-        lm_state = lm_state->next;
       }
+      
     }
     if (ret_lm_state && lm_state_idx) *lm_state_idx = ret_lm_state - ngrams_;
    
@@ -326,7 +319,7 @@ class FasterArpaLm {
     KALDI_VLOG(2) << " hashed_size/size = "<< 
         1.0 * (hash_size_except_uni_+symbol_size_) / acc <<" "<<acc;
     
-    ngrams_ = (LmState* )calloc(sizeof(LmState), acc); //use default constructor
+    ngrams_ = (LmState* )calloc(sizeof(LmState), symbol_size_); //use default constructor
     ngrams_saved_num_ = symbol_size_; // assume uni-gram is allocated
     ngrams_map_.resize(hash_size_except_uni_, NULL);
     is_built_ = true;
@@ -366,10 +359,9 @@ class FasterArpaLm {
   // data
 
   // Memory blcok for storing N-gram; ngrams_[ngram_order][hashed_idx]
-  LmState* ngrams_;
+  LmState* ngrams_; // save uni-gram
   int32 ngrams_saved_num_;
-
-  std::vector<LmState *> ngrams_map_; // hash to ngrams_ index
+  std::vector<HASH_STORE *> ngrams_map_; // hash to ngrams_ index
   // used to obtain hash value; randint_per_word_gram_[ngram_order][word_id]
   RAND_TYPE** randint_per_word_gram_;
   int32* ngrams_hashed_size_; //after init, it's an accumulate value
