@@ -107,6 +107,7 @@ int main(int argc, char *argv[]) {
       // Input FST is just one FST, not a table of FSTs.
       decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
 
+      timer.Reset();
       {
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
           std::string utt = loglike_reader.Key();
