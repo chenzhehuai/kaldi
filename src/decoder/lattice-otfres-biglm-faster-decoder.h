@@ -313,7 +313,7 @@ class LatticeBiglmFasterDecoder {
     }
   }
 
-  // FindOrAddToken either locates a token in hash of toks_,
+  // FindOrAddToken_2 either locates a token in hash of toks_,
   // or if necessary inserts a new, empty token (i.e. with no forward links)
   // for the current frame.  [note: it's inserted if necessary into hash toks_
   // and also into the singly linked list of tokens active on this frame
@@ -356,7 +356,7 @@ class LatticeBiglmFasterDecoder {
     }
   }
 #define res_beam 0.5
-   inline bool FindOrAddToken(StateId state_id, int32 frame, BaseFloat tot_cost,
+   inline bool FindOrAddToken_1(StateId state_id, int32 frame, BaseFloat tot_cost,
                                bool emitting, bool *changed, bool pp) {
     // Returns the Token pointer.  Sets "changed" (if non-NULL) to true
     // if the token was newly created or the cost changed.
@@ -796,7 +796,7 @@ class LatticeBiglmFasterDecoder {
             Arc arc(arc_ref);
             bool pp=arc.olabel>0;
             BaseFloat ac_cost = -decodable->LogLikelihood(frame-1, arc.ilabel);
-            if (!FindOrAddToken(arc.nextstate, frame, tok->tot_cost + ac_cost+ arc.weight.Value(), true, NULL, pp)) continue;
+            if (!FindOrAddToken_1(arc.nextstate, frame, tok->tot_cost + ac_cost+ arc.weight.Value(), true, NULL, pp)) continue;
             StateId next_lm_state = PropagateLm(lm_state, &arc, &pp);
             BaseFloat graph_cost = arc.weight.Value(),
                 cur_cost = tok->tot_cost,
@@ -868,7 +868,7 @@ class LatticeBiglmFasterDecoder {
         if (arc_ref.ilabel == 0) {  // propagate nonemitting only...
           Arc arc(arc_ref);
           bool pp=arc.olabel>0;
-          if (!FindOrAddToken(arc.nextstate, frame, tok->tot_cost + arc.weight.Value(), true, NULL, pp)) continue;
+          if (!FindOrAddToken_1(arc.nextstate, frame, tok->tot_cost + arc.weight.Value(), true, NULL, pp)) continue;
           StateId next_lm_state = PropagateLm(lm_state, &arc, &pp);          
           BaseFloat graph_cost = arc.weight.Value(),
               tot_cost = cur_cost + graph_cost;

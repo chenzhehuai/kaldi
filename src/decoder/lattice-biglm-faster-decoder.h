@@ -255,11 +255,13 @@ class LatticeBiglmFasterDecoder {
         graph_cost(graph_cost), acoustic_cost(acoustic_cost), 
         next(next) { }
   };  
-  
+
+  #define MAX_TOK2_PER_TOK1 10
   // Token is what's resident in a particular state at a particular time.
   // In this decoder a Token actually contains *forward* links.
   // When first created, a Token just has the (total) cost.    We add forward
   // links to it when we process the next frame.
+  typedef std::forward_list<Token *> TokenPArr;
   struct Token {
     BaseFloat tot_cost; // would equal weight.Value()... cost up to this point.
     BaseFloat extra_cost; // >= 0.  After calling PruneForwardLinks, this equals
@@ -272,10 +274,16 @@ class LatticeBiglmFasterDecoder {
     ForwardLink *links; // Head of singly linked list of ForwardLinks
     
     Token *next; // Next in list of tokens for this frame.
+
+    StateId state_id;
+
+    // a pointer array, each pointer is to a Token in g_2; 
+    // make_shared<TokenPArr>() during each PropagateLm; only copy shared_ptr during token passing
+    std::shared_ptr<TokenPArr> token2_pointer_arr; 
     
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
                  Token *next): tot_cost(tot_cost), extra_cost(extra_cost),
-                 links(links), next(next) { }
+                 links(links), next(next), state_id(-1), token2_pointer_arr(NULL) { }
     inline void DeleteForwardLinks() {
       ForwardLink *l = links, *m; 
       while (l != NULL) {
@@ -284,6 +292,14 @@ class LatticeBiglmFasterDecoder {
         l = m;
       }
       links = NULL;
+    }
+
+    void CreateTokArr() {
+      token2_pointer_arr = make_shared<TokenPArr>();
+    }
+
+    void PushToken2(Token* token2) {
+      token2_pointer_arr.push_front(token2);
     }
   };
   
@@ -312,27 +328,67 @@ class LatticeBiglmFasterDecoder {
   // for the current frame.  [note: it's inserted if necessary into hash toks_
   // and also into the singly linked list of tokens active on this frame
   // (whose head is at active_toks_[frame]).
-  inline Token *FindOrAddToken(PairId state_pair, int32 frame, BaseFloat tot_cost,
-                               bool emitting, bool *changed) {
+  inline Token *FindOrAddToken2(StateId state, int32 frame, BaseFloat tot_cost) {
+    // toks2_
+  }
+  inline Token *FindOrAddToken(StateId state_id, int32 frame, BaseFloat tot_cost,
+                               bool emitting, bool *changed, bool pp, Token* ptok,
+                               const Arc& g1_arc, BaseFloat next_cutoff) {
     // Returns the Token pointer.  Sets "changed" (if non-NULL) to true
     // if the token was newly created or the cost changed.
     KALDI_ASSERT(frame < active_toks_.size());
     Token *&toks = active_toks_[frame].toks;
-    Elem *e_found = toks_.Find(state_pair);
+    Elem *e_found = toks_.Find(state_id);
+
+    // Stage 1: Get next tok
+    Token *tok=NULL;
     if (e_found == NULL) { // no such token presently.
       const BaseFloat extra_cost = 0.0;
       // tokens on the currently final frame have zero extra_cost
       // as any of them could end up
       // on the winning path.
-      Token *new_tok = new Token (tot_cost, extra_cost, NULL, toks);
+      // TODO
+      tok = new Token (tot_cost, extra_cost, NULL, toks);
       // NULL: no forward links yet
-      toks = new_tok;
-      num_toks_++;
-      toks_.Insert(state_pair, new_tok);
-      if (changed) *changed = true;
-      return new_tok;
+      
+      if (pp) tok->CreateTokArr(); // else just copy prev
     } else {
-      Token *tok = e_found->val; // There is an existing Token for this state.
+      tok = e_found->val; // There is an existing Token for this state.
+    }
+
+    // Stage 2: Proc token2
+    if (pp) {
+      // propagateLM
+      for ( auto it = ptok->token2_pointer_arr.cbegin(); 
+        it != ptok->token2_pointer_arr.cend(); ++it ) {
+        Arc g2_arc(g1_arc);
+        StateId next_lm_state = PropagateLm(it->state_id, &g2_arc);
+        // find or add g2
+        BaseFloat graph_cost = g2_arc.weight.Value(),
+        cur_cost = tot_cost,
+        tot_cost2 = cur_cost + graph_cost;
+        // TODO: per-tok prune design
+        if (tot_cost2 > next_cutoff) continue;
+        Token* next_token2 = FindOrAddToken2(next_lm_state, frame, tot_cost2);
+        // merge into forward_list
+        tok->PushToken2(next_token2);
+      }
+      // TODO: sort & prune by num
+
+    } else {
+      assert(e_found != NULL || tok->tot_cost > tot_cost);
+      if (tok->tot_cost > tot_cost) {
+        tok->token2_pointer_arr = ptok->token2_pointer_arr;
+      }
+    }
+
+    // TODO: update tok->tot_cost by token2->tot_cost
+    // Stage 3: recombine token1
+    if (e_found == NULL) { // no such token presently.
+      num_toks_++;
+      toks_.Insert(state_id, tok);
+      if (changed) *changed = true;
+    } else {
       if (tok->tot_cost > tot_cost) { // replace old token
         tok->tot_cost = tot_cost;
         // we don't allocate a new token, the old stays linked in active_toks_
@@ -346,8 +402,8 @@ class LatticeBiglmFasterDecoder {
       } else {
         if (changed) *changed = false;
       }
-      return tok;
     }
+    return tok;
   }
   
   // prunes outgoing links for all tokens in active_toks_[frame]
@@ -732,7 +788,7 @@ class LatticeBiglmFasterDecoder {
            !aiter.Done();
            aiter.Next()) {
         Arc arc = aiter.Value();
-        if (arc.ilabel != 0) {  // propagate..
+        if (arc.ilabel != 0) {  // propagate.. // TODO
           PropagateLm(lm_state, &arc); // may affect "arc.weight".
           // We don't need the return value (the new LM state).
           arc.weight = Times(arc.weight,
@@ -856,7 +912,8 @@ class LatticeBiglmFasterDecoder {
   // HashList defined in ../util/hash-list.h.  It actually allows us to maintain
   // more than one list (e.g. for current and previous frames), but only one of
   // them at a time can be indexed by StateId.
-  HashList<PairId, Token*> toks_;
+  HashList<StateId, Token*> toks_;
+  HashList<StateId, Token*> toks2_;  
   std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
   // frame (members of TokenList are toks, must_prune_forward_links,
   // must_prune_tokens).
