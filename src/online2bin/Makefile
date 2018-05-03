@@ -6,6 +6,13 @@ include ../kaldi.mk
 LDFLAGS += $(CUDA_LDFLAGS)
 LDLIBS += $(CUDA_LDLIBS)
 
+ifeq ($(CUDA), true)
+LDLIBS += -lnvToolsExt -lcuda 
+CXXFLAGS += -fopenmp
+LDFLAGS += -fopenmp
+endif
+
+
 BINFILES = online2-wav-gmm-latgen-faster apply-cmvn-online \
      extend-wav-with-silence compress-uncompress-speex \
      online2-wav-nnet2-latgen-faster ivector-extract-online2 \
