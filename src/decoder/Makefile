@@ -7,7 +7,7 @@ TESTFILES =
 
 OBJFILES = training-graph-compiler.o lattice-simple-decoder.o lattice-faster-decoder.o \
    lattice-faster-online-decoder.o simple-decoder.o faster-decoder.o \
-   decoder-wrappers.o
+   decoder-wrappers.o cuda-decoder_prelink.o cuda-decoder.o
 
 LIBNAME = kaldi-decoder
 
@@ -15,5 +15,12 @@ ADDLIBS = ../lat/kaldi-lat.a ../hmm/kaldi-hmm.a \
           ../transform/kaldi-transform.a ../gmm/kaldi-gmm.a \
           ../tree/kaldi-tree.a ../util/kaldi-util.a \
           ../matrix/kaldi-matrix.a ../base/kaldi-base.a
+
+cuda-decoder_prelink.o: cuda-decoder.cu cuda-decoder.h
+	nvcc -g -Xptxas -v -arch=sm_70  -dc -DCUDA_API_PER_THREAD_DEFAULT_STREAM -lineinfo -w -std=c++11 -I.. -I../../tools/openfst/include -DKALDI_DOUBLEPRECISION=0 -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_ATLAS -I/home/jluitjens/git/kaldi/tools/ATLAS_headers/include -Xcompiler "-msse -msse2 -pthread -fopenmp" -O3  -Xcompiler -fPIC -DHAVE_CUDA -I${CUDA_HOME}/include -I${CUDA_HOME}/samples/common/inc -I${CUDA_HOME}/include/CL -I${CUDA_HOME}/extras/CUPTI/include -I${CUDA_HOME}/extras/Debugger/include -I${CUDA_HOME}/nvvm/include   -o cuda-decoder_prelink.o cuda-decoder.cu -lcuda
+	
+cuda-decoder.o: cuda-decoder_prelink.o
+	nvcc cuda-decoder_prelink.o -arch=sm_70 -dlink -o cuda-decoder.o -Xcompiler "-pthread -fPIC"
+
 
 include ../makefiles/default_rules.mk
