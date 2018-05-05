@@ -10,7 +10,7 @@ OBJFILES = training-graph-compiler.o lattice-simple-decoder.o lattice-faster-dec
            decoder-wrappers.o 
 
 ifeq ($(CUDA), true)
-OBJFILES += cuda-decoder.o
+OBJFILES += cuda-decoder.o faster-decoder-cuda.o
 LDLIBS += -lnvToolsExt -lcudart
 LDFLAGS += $(CUDA_LDFLAGS)
 LDFLAGS += ../cudamatrix/libkaldi-cudamatrix.so
