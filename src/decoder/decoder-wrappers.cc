@@ -1,6 +1,6 @@
-// decoder/decoder-wrappers.cc
 
-// Copyright 2014  Johns Hopkins University (author: Daniel Povey)
+
+// Copyrigha 2014  Johns Hopkins University (author: Daniel Povey)
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -243,37 +243,7 @@ bool DecodeUtteranceLatticeFasterCuda(
 
   PUSH_RANGE("post_decoding", 0);
   Timer timer;
-  double likelihood;
-  LatticeWeight weight;
-  int32 num_frames;
-  {
-    // First do some stuff with word-level traceback...
-    VectorFst<LatticeArc> decoded;
-    PUSH_RANGE("get_lattice_shortest", 5);
-    if (!decoder.GetBestPath(&decoded))
-      // Shouldn't really reach this point as already checked success.
-      KALDI_WARN << "Failed to get traceback for utterance " << utt;
-    POP_RANGE
-    std::vector<int32> alignment;
-    std::vector<int32> words;
-    GetLinearSymbolSequence(decoded, &alignment, &words, &weight);
-    num_frames = alignment.size();
-    if (words_writer->IsOpen())
-      words_writer->Write(utt, words);
-    if (alignment_writer->IsOpen())
-      alignment_writer->Write(utt, alignment);
-    if (word_syms != NULL) {
-      std::cerr << utt << ' ';
-      for (size_t i = 0; i < words.size(); i++) {
-        std::string s = word_syms->Find(words[i]);
-        if (s == "")
-          KALDI_ERR << "Word-id " << words[i] << " not in symbol table.";
-        std::cerr << s << ' ';
-      }
-      std::cerr << '\n';
-    }
-    likelihood = -(weight.Value1() + weight.Value2());
-  }
+
   // Get lattice, and do determinization if requested.
   PUSH_RANGE("get_lattice", 1);
   Lattice& lat = *olat;
@@ -286,12 +256,7 @@ bool DecodeUtteranceLatticeFasterCuda(
   double t4 = timer.Elapsed();
   KALDI_VLOG(1) << "post_decoding: " << t4;
 
-  KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
-            << (likelihood / num_frames) << " over "
-            << num_frames << " frames.";
-  KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
-                << weight.Value1() << " + " << weight.Value2();
-  *like_ptr = likelihood;
+
   POP_RANGE
 
   return true;
@@ -315,6 +280,45 @@ bool DecodeUtteranceLatticeFasterCudaOutput(
   LatticeWriter *lattice_writer,
   double *like_ptr,
   Lattice& lat) {
+  using fst::VectorFst;
+  // First do some stuff with word-level traceback...
+  VectorFst<LatticeArc> decoded;
+  double likelihood;
+  LatticeWeight weight;
+  int32 num_frames;
+  {
+    likelihood = -(weight.Value1() + weight.Value2());
+  }
+
+  PUSH_RANGE("get_lattice_shortest", 5);
+  if (!decoder.GetBestPath(&decoded))
+    // Shouldn't really reach this point as already checked success.
+    KALDI_WARN << "Failed to get traceback for utterance " << utt;
+  POP_RANGE
+  std::vector<int32> alignment;
+  std::vector<int32> words;
+  GetLinearSymbolSequence(decoded, &alignment, &words, &weight);
+  num_frames = alignment.size();
+  if (words_writer->IsOpen())
+    words_writer->Write(utt, words);
+  if (alignment_writer->IsOpen())
+    alignment_writer->Write(utt, alignment);
+  if (word_syms != NULL) {
+    std::cerr << utt << ' ';
+    for (size_t i = 0; i < words.size(); i++) {
+      std::string s = word_syms->Find(words[i]);
+      if (s == "")
+        KALDI_ERR << "Word-id " << words[i] << " not in symbol table.";
+      std::cerr << s << ' ';
+    }
+    std::cerr << '\n';
+  }
+  KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
+            << (likelihood / num_frames) << " over "
+            << num_frames << " frames.";
+  KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
+                << weight.Value1() << " + " << weight.Value2();
+  *like_ptr = likelihood;
   if (determinize) {
     CompactLattice clat;
     if (!DeterminizeLatticePhonePrunedWrapper(
