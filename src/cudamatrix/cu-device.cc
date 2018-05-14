@@ -94,14 +94,13 @@ static bool GetCudaContext(int32 num_gpus, std::string *debug_str) {
  * (before first allocation in cudamatrix), or not at all (default to CPU).
  *
  */
-void CuDevice::SelectGpuId(std::string use_gpu) {
+void SelectGpuId(std::string use_gpu, CUcontext &ctx) {
 #if 1
 //quick and dirty hack to get one context per device.  This should not be commited to tree.
    CUdevice device;
    cuDeviceGet(&device,0);
-   CUcontext ctx;
-   cuCtxCreate(&ctx, 0, device);
-   cuCtxSetCurrent(ctx);
+   cuCtxCreate(ctx, 0, device);
+   cuCtxSetCurrent(*ctx);
    FinalizeActiveGpu();
 #else
   // Possible modes
@@ -216,6 +215,7 @@ void CuDevice::SelectGpuId(std::string use_gpu) {
 #endif
 }
 
+void CuDevice::SelectGpuId(std::string use_gpu) { SelectGpuId(use_gpu); }
 
 void CuDevice::FinalizeActiveGpu() {
   // The device at this point should have active GPU, so we can query its name
