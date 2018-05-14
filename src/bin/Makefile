@@ -32,7 +32,7 @@ LDLIBS += -lnvToolsExt -lcuda
 CXXFLAGS += -fopenmp
 LDFLAGS += -fopenmp
 LDFLAGS += ../cudamatrix/libkaldi-cudamatrix.so
-BINFILES += latgen-faster-mapped-cuda latgen-faster-mapped-cuda-parallel latgen-faster-mapped-cuda-parallel-eval latgen-faster-mapped-cuda-parallel-split
+BINFILES += latgen-faster-mapped-cuda latgen-faster-mapped-cuda-parallel latgen-faster-mapped-cuda-parallel-eval latgen-faster-mapped-cuda-parallel-split latgen-faster-mapped-cuda-parallelclass
 endif
 
 OBJFILES =

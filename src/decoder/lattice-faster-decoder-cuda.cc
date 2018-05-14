@@ -36,8 +36,8 @@ namespace kaldi {
 // instantiate this class once for each thing you have to decode.
 LatticeFasterDecoderCuda::LatticeFasterDecoderCuda(const CudaFst &fst,
     const CudaLatticeDecoderConfig &config):
-  fst_(fst), delete_fst_(false), config_(config), num_toks_(0),
-  decoder_(fst, config_) {
+  config_(config), fst_(fst), delete_fst_(false), num_toks_(0),
+  decoder_(fst, config_), ctx(NULL) {
   toks_buf_ = (Token*)malloc(sizeof(Token) * config_.max_tokens);
   toks_buf_used_ = 0;
 }
@@ -759,6 +759,21 @@ void LatticeFasterDecoderCuda::TopSortTokens(Token *tok_list,
   topsorted_list->resize(cur_pos, NULL);  // create a list with NULLs in between.
   for (IterType iter = token2pos.begin(); iter != token2pos.end(); ++iter)
     (*topsorted_list)[iter->second] = iter->first;
+}
+
+void LatticeFasterDecoderCuda::SetCudaCtx(CUcontext ctx) {
+  this->ctx = ctx;
+}
+void LatticeFasterDecoderCuda::CudaInit() {
+  if (!ctx) {
+    assert(0);
+    CuDevice::Instantiate().SelectGpuId("yes", &ctx);
+    CuDevice::Instantiate().AllowMultithreading();
+  } else {
+    cuInit(0);
+    CuDevice::Instantiate().SetCudaCtx(ctx);//cuCtxSetCurrent(ctx);
+    CuDevice::Instantiate().AllowMultithreading();
+  }
 }
 
 } // end namespace kaldi.

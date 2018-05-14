@@ -498,14 +498,12 @@ class CudaLatticeDecoder {
   bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
   size_t GetCudaMallocBytes() const { return bytes_cuda_malloc; } 
   size_t GetCudaMallocManagedBytes() const { return bytes_cuda_malloc_managed;  }
-  void SetCudaCtx(CUcontext ctx);
-  void CudaInit();
 
+ private:
   // configurations
   CudaLatticeDecoderConfig config_;
   const CudaFst fst_;
 
- private:
   // dynamic load balancing
   int32 *pe_idx_d, *ne_idx_d, *fb_idx_d; // warp assignment indexes
   int32 *agg_idx_d, *ne_queue_d; // for aggregation of token idx
@@ -545,7 +543,6 @@ class CudaLatticeDecoder {
   cudaStream_t stream_comp; // decoding
   cudaStream_t stream_lat[LAT_BUF_SIZE]; // lattice processing and copying
   cudaStream_t stream_ll; // log likelihoods calculation
-  CUcontext ctx;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

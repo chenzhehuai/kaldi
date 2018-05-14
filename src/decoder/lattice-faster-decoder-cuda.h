@@ -119,6 +119,10 @@ class LatticeFasterDecoderCuda {
   // Returns the number of frames decoded so far.  The value returned changes
   // whenever we call ProcessEmitting().
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
+  void SetCudaCtx(CUcontext ctx);
+  void CudaInit();
+  
+  const CudaLatticeDecoderConfig &config_;
 
  private:
 
@@ -283,11 +287,11 @@ class LatticeFasterDecoderCuda {
   // as we pre-allocate all the token memory, we do not really clear them
   void ClearActiveTokens();
 
+
  private:
   const CudaFst& fst_;
   bool delete_fst_;
 
-  const CudaLatticeDecoderConfig &config_;
   int32 num_toks_; // current total number of toks allocated
   int32 num_frames_decoded_;
   CudaLatticeDecoder decoder_; // GPU decoder
@@ -333,6 +337,7 @@ class LatticeFasterDecoderCuda {
   BaseFloat final_relative_cost_;
   BaseFloat final_best_cost_;
 
+  CUcontext ctx;
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeFasterDecoderCuda);
 };
 

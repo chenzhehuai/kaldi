@@ -26,6 +26,7 @@
 #include "cudamatrix/cu-device.h"
 #include "decoder/decodable-matrix.h"
 #include "base/timer.h"
+#include "util/kaldi-thread.h"
 
 #include "decoder/cuda-decoder-utils.h"
 #include "decoder/decoder-wrappers.h"
@@ -105,7 +106,7 @@ int main(int argc, char *argv[]) {
 
     double elapsed = 0;
 
-    TaskSequencer<DecodeUtteranceLatticeFasterClass> sequencer(sequencer_config);
+    TaskSequencer<DecodeUtteranceLatticeFasterClassCuda> sequencer(sequencer_config);
 
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
@@ -117,7 +118,7 @@ int main(int argc, char *argv[]) {
       decoder_vec.reserve(num_threads);
 
       std::mutex vec_mutex;
-      Semaphore decoder_avail = num_threads;
+      Semaphore decoder_avail(num_threads);
 
       for (int i=0; i<num_threads; i++) {
         CUcontext ctx; // init ctxs
@@ -144,13 +145,14 @@ int main(int argc, char *argv[]) {
             num_fail++;
             continue;
           }
-          DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+          DecodableMatrixScaledMapped *decodable = new DecodableMatrixScaledMapped(trans_model, loglikes, acoustic_scale);
           POP_RANGE
 
           // get a decoder //LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
-          decoder_avail_.Wait();
+          decoder_avail.Wait();
           vec_mutex.lock();
-          LatticeFasterDecoderCuda *decoder = decoder_vec.pop();
+          LatticeFasterDecoderCuda *decoder = decoder_vec.back();
+          decoder_vec.pop_back();
           vec_mutex.unlock();
 
           DecodeUtteranceLatticeFasterClassCuda *task =
@@ -170,6 +172,11 @@ int main(int argc, char *argv[]) {
       }
       decode_fst_cuda.Finalize();
       delete decode_fst; // delete this only after decoder goes out of scope.
+      for (int i=0; i<num_threads; i++) {
+        delete decoder_vec.back();
+        decoder_vec.pop_back();
+      }
+ 
     } else { // We have different FSTs for different utterances.
       KALDI_ERR << "Unimplemented yet. ";
     }

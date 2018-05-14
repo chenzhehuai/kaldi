@@ -116,7 +116,7 @@ class DecodeUtteranceLatticeFasterClassCuda {
     int32 *num_err,  // on failure, increments this.
     int32 *num_partial, // If partial decode (final-state not reached), increments this.
     std::mutex *vec_mutex, Semaphore* decoder_avail,
-    std::vector<LatticeFasterDecoderCuda> *decoder_vec);  
+    std::vector<LatticeFasterDecoderCuda*> *decoder_vec);  
   void operator () (); // The decoding happens here.
   ~DecodeUtteranceLatticeFasterClassCuda(); // Output happens here.
  private:
@@ -148,7 +148,7 @@ class DecodeUtteranceLatticeFasterClassCuda {
 
   std::mutex *vec_mutex_;
   Semaphore* decoder_avail_;
-  std::vector<LatticeFasterDecoderCuda> *decoder_vec_;
+  std::vector<LatticeFasterDecoderCuda*> *decoder_vec_;
 };
 
 #if HAVE_CUDA == 1

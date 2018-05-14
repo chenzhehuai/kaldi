@@ -1271,10 +1271,8 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
 // CudaLatticeDecoder Implementation
 // constructor
 CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
-                                       const CudaLatticeDecoderConfig &config,
-                  std::mutex *vec_mutex, Semaphore* decoder_avail):
-  config_(config), fst_(fst), bytes_cuda_malloc(0), 
-  ctx(NULL) {
+                                       const CudaLatticeDecoderConfig &config):
+  config_(config), fst_(fst), bytes_cuda_malloc(0) {
   KALDI_VLOG(1) << "CudaLatticeDecoder Constructor\n";
   int32 device;
   cudaGetDevice(&device);
@@ -1643,19 +1641,5 @@ bool CudaLatticeDecoder::GetBestPath(Lattice *fst_out,
   KALDI_ERR << "We don't have this implementation in lattice decoder";
   return false;
 }
-
-void CudaLatticeDecoder::SetCudaCtx(CUcontext ctx) {
-  this->ctx = ctx;
-}
-void CudaLatticeDecoder::CudaInit() {
-  if (!ctx) {
-    assert(0);
-    CuDevice::Instantiate().SelectGpuId("yes", &ctx);
-    CuDevice::Instantiate().AllowMultithreading();
-  } else {
-    cuCtxSetCurrent(ctx);
-  }
-}
-
 
 } // end namespace kaldi.

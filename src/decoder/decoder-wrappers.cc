@@ -224,7 +224,7 @@ DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
   int32 *num_err,  // on failure, increments this.
   int32 *num_partial,
   std::mutex *vec_mutex, Semaphore* decoder_avail,
-  std::vector<LatticeFasterDecoderCuda> *decoder_vec)
+  std::vector<LatticeFasterDecoderCuda*> *decoder_vec)
   :  // If partial decode (final-state not reached), increments this.
      decoder_(decoder), decodable_(decodable), trans_model_(&trans_model),
      word_syms_(word_syms), utt_(utt), acoustic_scale_(acoustic_scale),
@@ -379,13 +379,13 @@ DecodeUtteranceLatticeFasterClassCuda::~DecodeUtteranceLatticeFasterClassCuda() 
   // the initializer.
   
   // release a decoder
-  if (*num_done_ % decoder_.config_.mem_print_freq == 0)
+  if (*num_done_ % decoder_->config_.mem_print_freq == 0)
     get_free_memory_stat(""); 
   
-  vec_mutex_.lock();
-  decoder_vec_.push_back(decoder_);
-  vec_mutex_.unlock();
-  decoder_avail_.Signal();
+  vec_mutex_->lock();
+  decoder_vec_->push_back(decoder_);
+  vec_mutex_->unlock();
+  decoder_avail_->Signal();
 
   //delete decoder_;
   delete decodable_;
