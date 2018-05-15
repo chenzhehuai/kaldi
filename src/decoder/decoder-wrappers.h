@@ -188,7 +188,8 @@ bool DecodeUtteranceLatticeFasterCudaOutput(
   CompactLatticeWriter *compact_lattice_writer,
   LatticeWriter *lattice_writer,
   double *like_ptr,
-  Lattice& lat);
+  Lattice& lat,
+  Mutex *examples_mutex_ = NULL);
 #endif
 
 /// This function DecodeUtteranceLatticeFaster is used in several decoders, and

@@ -247,7 +247,7 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
   kaldi::int64 frame_count = 0;
   int num_success = 0, num_fail = 0;  
   using fst::VectorFst;
-  double elapsed = 0;
+  double elapsed = 0, elapsed2= 0;
   Timer timer;
   double tot_like = 0;
 
@@ -257,9 +257,9 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
   CuDevice::Instantiate().SelectGpuId("yes");
   CuDevice::Instantiate().AllowMultithreading();
   #endif
-  examples_mutex_->Unlock();
-
   LatticeFasterDecoderCuda decoder(decode_fst_cuda_, config_);
+  examples_mutex_->Unlock(); // to make it stable
+
   nnet0::NnetExample *example;
 
   while ((example = 
@@ -294,24 +294,25 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
       num_success++;
     } else num_fail++;
 
-    elapsed += timer.Elapsed();
+    double t1 = timer.Elapsed();
+    elapsed += t1;
     if (num_success % config_.mem_print_freq == 0)
       get_free_memory_stat("");
-    // TODO: lock inside
-    examples_mutex_->Lock();
-
+    
+    // lock inside
     DecodeUtteranceLatticeFasterCudaOutput(
       decoder, decodable, trans_model_, word_syms_, utt,
           acoustic_scale_, determinize_, allow_partial_, alignments_writer_,
           words_writer_, compact_lattice_writer_, lattice_writer_,
-          &like, lat);
-    examples_mutex_->Unlock(); 
+          &like, lat, examples_mutex_);
+    elapsed2 = timer.Elapsed() - t1;
     POP_RANGE
   }
   KALDI_LOG << "Thread: " << thread_id_ << " "
-            << "Time taken " << elapsed
+            << "Time taken " << elapsed << " " << elapsed2
             << "s: real-time factor assuming 100 frames/sec is "
-            << (elapsed * 100.0 / frame_count);
+            << (elapsed * 100.0 / frame_count) << " "
+            << (elapsed2 * 100.0 / frame_count);
   KALDI_LOG << "Done " << num_success << " utterances, failed for "
             << num_fail;
   KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like / frame_count) <<
@@ -404,7 +405,8 @@ bool DecodeUtteranceLatticeFasterCudaOutput(
   CompactLatticeWriter *compact_lattice_writer,
   LatticeWriter *lattice_writer,
   double *like_ptr,
-  Lattice& lat) {
+  Lattice& lat,
+  Mutex *examples_mutex_) {
   using fst::VectorFst;
   // First do some stuff with word-level traceback...
   VectorFst<LatticeArc> decoded;
@@ -424,10 +426,12 @@ bool DecodeUtteranceLatticeFasterCudaOutput(
   std::vector<int32> words;
   GetLinearSymbolSequence(decoded, &alignment, &words, &weight);
   num_frames = alignment.size();
+  if (examples_mutex_) examples_mutex_->Lock();
   if (words_writer->IsOpen())
     words_writer->Write(utt, words);
   if (alignment_writer->IsOpen())
     alignment_writer->Write(utt, alignment);
+  if (examples_mutex_) examples_mutex_->Unlock();
   if (word_syms != NULL) {
     std::cerr << utt << ' ';
     for (size_t i = 0; i < words.size(); i++) {
@@ -457,14 +461,18 @@ bool DecodeUtteranceLatticeFasterCudaOutput(
     // We'll write the lattice without acoustic scaling.
     if (acoustic_scale != 0.0)
       fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &clat);
+    if (examples_mutex_) examples_mutex_->Lock();
     compact_lattice_writer->Write(utt, clat);
+    if (examples_mutex_) examples_mutex_->Unlock();
 
   } else {
     PUSH_RANGE("write_lat", 0);
     // We'll write the lattice without acoustic scaling.
     if (acoustic_scale != 0.0)
       fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &lat);
+    if (examples_mutex_) examples_mutex_->Lock();
     lattice_writer->Write(utt, lat);
+    if (examples_mutex_) examples_mutex_->Unlock();
     POP_RANGE
   }
   return true;

@@ -152,7 +152,7 @@ int main(int argc, char *argv[]) {
       KALDI_ERR << "Unimplemented yet. ";
     }
 
-    KALDI_LOG << "Time taken (ALL) " << elapsed
+    KALDI_LOG << "Time taken (inc. constr.&deconstr.) " << elapsed
               << "s: real-time factor (ALL) assuming 100 frames/sec is "
               << (elapsed * 100.0 / frame_count);
     KALDI_LOG << "Done " << num_success << " utterances, failed for "
