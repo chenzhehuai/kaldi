@@ -119,10 +119,7 @@ class LatticeFasterDecoderCuda {
   // Returns the number of frames decoded so far.  The value returned changes
   // whenever we call ProcessEmitting().
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
-  void SetCudaCtx(CUcontext ctx);
-  void CudaInit();
   
-  const CudaLatticeDecoderConfig &config_;
 
  private:
 
@@ -289,6 +286,7 @@ class LatticeFasterDecoderCuda {
 
 
  private:
+  const CudaLatticeDecoderConfig &config_;
   const CudaFst& fst_;
   bool delete_fst_;
 
@@ -337,7 +335,6 @@ class LatticeFasterDecoderCuda {
   BaseFloat final_relative_cost_;
   BaseFloat final_best_cost_;
 
-  CUcontext ctx;
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeFasterDecoderCuda);
 };
 

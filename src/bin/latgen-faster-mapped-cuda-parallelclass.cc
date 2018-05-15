@@ -106,77 +106,53 @@ int main(int argc, char *argv[]) {
 
     double elapsed = 0;
 
-    TaskSequencer<DecodeUtteranceLatticeFasterClassCuda> sequencer(sequencer_config);
-
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
-      // Input FST is just one FST, not a table of FSTs.
-      Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
       // GPU version of WFST
       CudaFst decode_fst_cuda;
-      std::vector<LatticeFasterDecoderCuda*> decoder_vec;
-      decoder_vec.reserve(num_threads);
+      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().AllowMultithreading();
+      // Input FST is just one FST, not a table of FSTs.
+      Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
+      decode_fst_cuda.Initialize(*decode_fst);
 
-      std::mutex vec_mutex;
-      Semaphore decoder_avail(num_threads);
-
-      for (int i=0; i<num_threads; i++) {
-        CUcontext ctx; // init ctxs
-        // call cudevice
-        CuDevice::Instantiate().SelectGpuId("yes", &ctx);
-        CuDevice::Instantiate().AllowMultithreading();
-        if (i==0) decode_fst_cuda.Initialize(*decode_fst);
-        LatticeFasterDecoderCuda* decoder = 
-        new LatticeFasterDecoderCuda(decode_fst_cuda, config);
-        decoder_vec.push_back(decoder);
-        decoder->SetCudaCtx(ctx);
-      }
-      
+      timer.Reset();
       {
-        timer.Reset();
-        for (; !loglike_reader.Done(); loglike_reader.Next()) {
-          
-          PUSH_RANGE("before_decoding", 1)
-          std::string utt = loglike_reader.Key();
-          Matrix<BaseFloat> loglikes (loglike_reader.Value());
-          loglike_reader.FreeCurrent();
-          if (loglikes.NumRows() == 0) {
-            KALDI_WARN << "Zero-length utterance: " << utt;
-            num_fail++;
-            continue;
-          }
-          DecodableMatrixScaledMapped *decodable = new DecodableMatrixScaledMapped(trans_model, loglikes, acoustic_scale);
-          POP_RANGE
+        ExamplesRepository repository;
+        Mutex examples_mutex;
 
-          // get a decoder //LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
-          decoder_avail.Wait();
-          vec_mutex.lock();
-          LatticeFasterDecoderCuda *decoder = decoder_vec.back();
-          decoder_vec.pop_back();
-          vec_mutex.unlock();
-
-          DecodeUtteranceLatticeFasterClassCuda *task =
-              new DecodeUtteranceLatticeFasterClassCuda(
-                  decoder, decodable, trans_model, word_syms, utt,
+        DecodeUtteranceLatticeFasterClassCuda c(
+                  decode_fst_cuda, config, trans_model, word_syms, utt,
                   acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
-                  &tot_like, &frame_count, &num_success, &num_fail, NULL, 
-                  &vec_mutex, &decoder_avail, &decoder_vec);
+                  &tot_like, &frame_count, &num_success, &num_fail, NULL,
+                  &repository, &examples_mutex);
 
-          sequencer.Run(task); // takes ownership of "task",
+        // The initialization of the following class spawns the threads that
+        // process the examples.  They get re-joined in its destructor.
+        MultiThreader<NnetForwardParallelClass> m(num_threads, c);
+
+        // iterate over all feature files
+        NnetExample *example;
+        std::vector<NnetExample*> examples;
+        for (; !loglike_reader.Done(); loglike_reader.Next()) {
+          example = new FeatureExample(&loglike_reader);
+          if (example->PrepareData(examples))
+          {
+            for (int i = 0; i < examples.size(); i++)
+              repository.AcceptExample(examples[i]);
+            if (examples[0] != example)
+                      delete example;
+          }
+          else
+            delete example;
         }
-
-        sequencer.Wait();
-
-        elapsed += timer.Elapsed();
+        repository.ExamplesDone();
       }
+      elapsed += timer.Elapsed();
+
       decode_fst_cuda.Finalize();
-      delete decode_fst; // delete this only after decoder goes out of scope.
-      for (int i=0; i<num_threads; i++) {
-        delete decoder_vec.back();
-        decoder_vec.pop_back();
-      }
- 
+      delete decode_fst; // delete this only after decoder goes out of scope. 
     } else { // We have different FSTs for different utterances.
       KALDI_ERR << "Unimplemented yet. ";
     }

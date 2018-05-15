@@ -206,8 +206,8 @@ DecodeUtteranceLatticeFasterClass::~DecodeUtteranceLatticeFasterClass() {
 
 
 DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
-  LatticeFasterDecoderCuda *decoder,
-  DecodableInterface *decodable,
+  CudaFst &decode_fst_cuda,
+  CudaLatticeDecoderConfig &config,
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,
@@ -223,10 +223,11 @@ DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
   int32 *num_done, // on success (including partial decode), increments this.
   int32 *num_err,  // on failure, increments this.
   int32 *num_partial,
-  std::mutex *vec_mutex, Semaphore* decoder_avail,
-  std::vector<LatticeFasterDecoderCuda*> *decoder_vec)
+  ExamplesRepository *repository,
+  BaseFloatMatrixWriter *feature_writer,
+  Mutex *examples_mutex)
   :  // If partial decode (final-state not reached), increments this.
-     decoder_(decoder), decodable_(decodable), trans_model_(&trans_model),
+     decode_fst_cuda_(decode_fst_cuda), config_(config), trans_model_(&trans_model),
      word_syms_(word_syms), utt_(utt), acoustic_scale_(acoustic_scale),
      determinize_(determinize), allow_partial_(allow_partial),
      alignments_writer_(alignments_writer),
@@ -237,158 +238,93 @@ DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
      num_done_(num_done), num_err_(num_err),
      num_partial_(num_partial),
      computed_(false), success_(false), partial_(false),
-     clat_(NULL), lat_(NULL), vec_mutex_(vec_mutex), 
-     decoder_avail_(decoder_avail), decoder_vec_(decoder_vec)  { }
+     clat_(NULL), lat_(NULL), repository_(repository), 
+     feature_writer_(feature_writer), examples_mutex_(examples_mutex) { }
 
 
 void DecodeUtteranceLatticeFasterClassCuda::operator () () {
   // Decoding and lattice determinization happens here.
-  computed_ = true; // Just means this function was called-- a check on the
-  // calling code.
-  success_ = true;
+  kaldi::int64 frame_count = 0;
+  int num_success = 0, num_fail = 0;  
   using fst::VectorFst;
-  
-  decoder_->CudaInit();
+  double elapsed = 0;
+  Timer timer;
 
-  if (!decoder_->Decode(decodable_)) {
-    KALDI_WARN << "Failed to decode file " << utt_;
-    success_ = false;
-  }
-  if (!decoder_->ReachedFinal()) {
-    if (allow_partial_) {
-      KALDI_WARN << "Outputting partial output for utterance " << utt_
-                 << " since no final-state reached\n";
-      partial_ = true;
-    } else {
-      KALDI_WARN << "Not producing output for utterance " << utt_
-                 << " since no final-state reached and "
-                 << "--allow-partial=false.\n";
-      success_ = false;
+  examples_mutex->Lock();
+  // Select the GPU
+  #if HAVE_CUDA == 1
+  CuDevice::Instantiate().SelectGpuId("yes");
+  CuDevice::Instantiate().AllowMultithreading();
+  #endif
+  examples_mutex->Unlock();
+
+  LatticeFasterDecoderCuda decoder(decode_fst_cuda_, config_);
+
+  while ((example = 
+    dynamic_cast<FeatureExample*>(repository->ProvideExample())) != NULL) {
+
+    timer.Reset();
+    PUSH_RANGE("whole decoding", 0)
+    PUSH_RANGE("before_decoding", 1)
+    //std::string utt = loglike_reader.Key();
+    std::string utt = example->utt;
+    //Matrix<BaseFloat> loglikes (loglike_reader.Value());
+    //loglike_reader.FreeCurrent();
+    Matrix<BaseFloat> &loglikes = example->input_frames;
+    if (loglikes.NumRows() == 0) {
+      KALDI_WARN << "Thread: " << thread_id_ << " "
+                 << "Zero-length utterance: " << utt;
+      num_fail++;
+      continue;
     }
-  }
-  if (!success_) return;
+    DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+    POP_RANGE
 
-  // Get lattice, and do determinization if requested.
-  lat_ = new Lattice;
-  decoder_->GetRawLattice(lat_);
-  if (lat_->NumStates() == 0)
-    KALDI_ERR << "Unexpected problem getting lattice for utterance " << utt_;
-  fst::Connect(lat_);
-  if (determinize_) {
-    clat_ = new CompactLattice;
-    if (!DeterminizeLatticePhonePrunedWrapper(
-          *trans_model_,
-          lat_,
-          decoder_->GetOptions().lattice_beam,
-          clat_,
-          decoder_->GetOptions().det_opts))
-      KALDI_WARN << "Determinization finished earlier than the beam for "
-                 << "utterance " << utt_;
-    delete lat_;
-    lat_ = NULL;
-    // We'll write the lattice without acoustic scaling.
-    if (acoustic_scale_ != 0.0)
-      fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale_), clat_);
-  } else {
-    // We'll write the lattice without acoustic scaling.
-    if (acoustic_scale_ != 0.0)
-      fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale_), lat_);
+    double like;
+    Lattice lat;
+    if (DecodeUtteranceLatticeFasterCuda(
+          decoder, decodable, trans_model, word_syms, utt,
+          acoustic_scale, determinize, allow_partial, &alignment_writer,
+          &words_writer, &compact_lattice_writer, &lattice_writer,
+          &like, &lat)) {
+      tot_like += like;
+      frame_count += loglikes.NumRows();
+      num_success++;
+    } else num_fail++;
+
+    elapsed += timer.Elapsed();
+    if (num_success % config_.mem_print_freq == 0)
+      get_free_memory_stat("");
+    // TODO: lock inside
+    examples_mutex->Lock();
+
+    DecodeUtteranceLatticeFasterCudaOutput(
+      decoder, decodable, trans_model, word_syms, utt,
+      acoustic_scale, determinize, allow_partial, &alignment_writer,
+      &words_writer, &compact_lattice_writer, &lattice_writer,
+      &like, lat);
+    examples_mutex->Unlock(); 
+    POP_RANGE
   }
+  KALDI_LOG << "Thread: " << thread_id_ << " "
+            << "Time taken " << elapsed
+            << "s: real-time factor assuming 100 frames/sec is "
+            << (elapsed * 100.0 / frame_count);
+  KALDI_LOG << "Done " << num_success << " utterances, failed for "
+            << num_fail;
+  KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like / frame_count) <<
+            " over "
+            << frame_count << " frames.";
+  
+  examples_mutex->Lock();            
+  if (like_sum_ != NULL) *like_sum_ += tot_like;
+  if (frame_sum_ != NULL) *frame_sum_ += frame_count;
+  if (num_done_ != NULL) (*num_done_) += num_success;
+  if (num_err_ != NULL) (*num_err_) += num_fail;
+  examples_mutex->Unlock(); 
 }
 
-DecodeUtteranceLatticeFasterClassCuda::~DecodeUtteranceLatticeFasterClassCuda() {
-  if (!computed_)
-    KALDI_ERR << "Destructor called without operator (), error in calling code.";
-
-  if (!success_) {
-    if (num_err_ != NULL) (*num_err_)++;
-  } else { // successful decode.
-    // Getting the one-best output is lightweight enough that we can do it in
-    // the destructor (easier than adding more variables to the class, and
-    // will rarely slow down the main thread.)
-    double likelihood;
-    LatticeWeight weight;
-    int32 num_frames;
-    {
-      // First do some stuff with word-level traceback...
-      // This is basically for diagnostics.
-      fst::VectorFst<LatticeArc> decoded;
-      decoder_->GetBestPath(&decoded);
-      if (decoded.NumStates() == 0) {
-        // Shouldn't really reach this point as already checked success.
-        KALDI_ERR << "Failed to get traceback for utterance " << utt_;
-      }
-      std::vector<int32> alignment;
-      std::vector<int32> words;
-      GetLinearSymbolSequence(decoded, &alignment, &words, &weight);
-      num_frames = alignment.size();
-      if (words_writer_->IsOpen())
-        words_writer_->Write(utt_, words);
-      if (alignments_writer_->IsOpen())
-        alignments_writer_->Write(utt_, alignment);
-      if (word_syms_ != NULL) {
-        std::cerr << utt_ << ' ';
-        for (size_t i = 0; i < words.size(); i++) {
-          std::string s = word_syms_->Find(words[i]);
-          if (s == "")
-            KALDI_ERR << "Word-id " << words[i] << " not in symbol table.";
-          std::cerr << s << ' ';
-        }
-        std::cerr << '\n';
-      }
-      likelihood = -(weight.Value1() + weight.Value2());
-    }
-
-    
-
-    // Ouptut the lattices.
-    if (determinize_) { // CompactLattice output.
-      KALDI_ASSERT(compact_lattice_writer_ != NULL && clat_ != NULL);
-      if (clat_->NumStates() == 0) {
-        KALDI_WARN << "Empty lattice for utterance " << utt_;
-      } else {
-        compact_lattice_writer_->Write(utt_, *clat_);
-      }
-      delete clat_;
-      clat_ = NULL;
-    } else {
-      KALDI_ASSERT(lattice_writer_ != NULL && lat_ != NULL);
-      if (lat_->NumStates() == 0) {
-        KALDI_WARN << "Empty lattice for utterance " << utt_;
-      } else {
-        lattice_writer_->Write(utt_, *lat_);
-      }
-      delete lat_;
-      lat_ = NULL;
-    }
-
-    // Print out logging information.
-    KALDI_LOG << "Log-like per frame for utterance " << utt_ << " is "
-              << (likelihood / num_frames) << " over "
-              << num_frames << " frames.";
-    KALDI_VLOG(2) << "Cost for utterance " << utt_ << " is "
-                  << weight.Value1() << " + " << weight.Value2();
-
-    // Now output the various diagnostic variables.
-    if (like_sum_ != NULL) *like_sum_ += likelihood;
-    if (frame_sum_ != NULL) *frame_sum_ += num_frames;
-    if (num_done_ != NULL) (*num_done_)++;
-    if (partial_ && num_partial_ != NULL) (*num_partial_)++;
-  }
-  // We were given ownership of these two objects that were passed in in
-  // the initializer.
-  
-  // release a decoder
-  if (*num_done_ % decoder_->config_.mem_print_freq == 0)
-    get_free_memory_stat(""); 
-  
-  vec_mutex_->lock();
-  decoder_vec_->push_back(decoder_);
-  vec_mutex_->unlock();
-  decoder_avail_->Signal();
-
-  //delete decoder_;
-  delete decodable_;
+DecodeUtteranceLatticeFasterClassCuda::~DecodeUtteranceLatticeFasterClassCuda() {  
 }
 
 #if HAVE_CUDA == 1

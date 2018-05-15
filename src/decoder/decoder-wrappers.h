@@ -92,14 +92,31 @@ void AlignUtteranceWrapper(
 void ModifyGraphForCarefulAlignment(
   fst::VectorFst<fst::StdArc> *fst);
 
-class DecodeUtteranceLatticeFasterClassCuda {
+//use ExamplesRepository *repository;
+struct FeatureExample: NnetExample
+{
+  FeatureExample(SequentialBaseFloatMatrixReader *feature_reader)
+  :NnetExample(feature_reader){}
+
+  bool PrepareData(std::vector<NnetExample*> &examples)
+  {
+    examples.resize(1);
+    utt = feature_reader->Key();
+    input_frames = feature_reader->Value();
+    examples[0] = this;
+    return true;
+  }
+
+};
+
+class DecodeUtteranceLatticeFasterClassCuda : public MultiThreadable {
  public:
   // Initializer sets various variables.
   // NOTE: we "take ownership" of "decoder" and "decodable".  These
   // are deleted by the destructor.  On error, "num_err" is incremented.
   DecodeUtteranceLatticeFasterClassCuda(
-    LatticeFasterDecoderCuda *decoder,
-    DecodableInterface *decodable,
+    LatticeFasterDecoderCuda &decoder,
+    CudaLatticeDecoderConfig &config,
     const TransitionModel &trans_model,
     const fst::SymbolTable *word_syms,
     std::string utt,
@@ -115,14 +132,16 @@ class DecodeUtteranceLatticeFasterClassCuda {
     int32 *num_done, // on success (including partial decode), increments this.
     int32 *num_err,  // on failure, increments this.
     int32 *num_partial, // If partial decode (final-state not reached), increments this.
-    std::mutex *vec_mutex, Semaphore* decoder_avail,
-    std::vector<LatticeFasterDecoderCuda*> *decoder_vec);  
+    ExamplesRepository *repository,
+    BaseFloatMatrixWriter *feature_writer,
+    Mutex *examples_mutex);  
   void operator () (); // The decoding happens here.
   ~DecodeUtteranceLatticeFasterClassCuda(); // Output happens here.
  private:
   // The following variables correspond to inputs:
-  LatticeFasterDecoderCuda *decoder_;
-  DecodableInterface *decodable_;
+  CudaFst &decode_fst_cuda_;
+  CudaLatticeDecoderConfig &config_;
+
   const TransitionModel *trans_model_;
   const fst::SymbolTable *word_syms_;
   std::string utt_;
@@ -146,9 +165,9 @@ class DecodeUtteranceLatticeFasterClassCuda {
   CompactLattice *clat_; // Stored output, if determinize_ == true.
   Lattice *lat_; // Stored output, if determinize_ == false.
 
-  std::mutex *vec_mutex_;
-  Semaphore* decoder_avail_;
-  std::vector<LatticeFasterDecoderCuda*> *decoder_vec_;
+  ExamplesRepository *repository_;
+  BaseFloatMatrixWriter *feature_writer_;
+  Mutex *examples_mutex_;
 };
 
 #if HAVE_CUDA == 1
