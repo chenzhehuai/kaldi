@@ -22,6 +22,8 @@
 #include "decoder/decoder-wrappers.h"
 #include "decoder/faster-decoder.h"
 #include "lat/lattice-functions.h"
+#include "hmm/transition-model.h"
+#include "decoder/decodable-matrix.h"
 
 #if HAVE_CUDA == 1
 #include "omp.h"
@@ -210,7 +212,6 @@ DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
   CudaLatticeDecoderConfig &config,
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
-  std::string utt,
   BaseFloat acoustic_scale,
   bool determinize,
   bool allow_partial,
@@ -223,12 +224,11 @@ DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
   int32 *num_done, // on success (including partial decode), increments this.
   int32 *num_err,  // on failure, increments this.
   int32 *num_partial,
-  ExamplesRepository *repository,
-  BaseFloatMatrixWriter *feature_writer,
+  nnet0::ExamplesRepository *repository,
   Mutex *examples_mutex)
   :  // If partial decode (final-state not reached), increments this.
-     decode_fst_cuda_(decode_fst_cuda), config_(config), trans_model_(&trans_model),
-     word_syms_(word_syms), utt_(utt), acoustic_scale_(acoustic_scale),
+     decode_fst_cuda_(decode_fst_cuda), config_(config), trans_model_(trans_model),
+     word_syms_(word_syms), acoustic_scale_(acoustic_scale),
      determinize_(determinize), allow_partial_(allow_partial),
      alignments_writer_(alignments_writer),
      words_writer_(words_writer),
@@ -239,7 +239,7 @@ DecodeUtteranceLatticeFasterClassCuda::DecodeUtteranceLatticeFasterClassCuda(
      num_partial_(num_partial),
      computed_(false), success_(false), partial_(false),
      clat_(NULL), lat_(NULL), repository_(repository), 
-     feature_writer_(feature_writer), examples_mutex_(examples_mutex) { }
+     examples_mutex_(examples_mutex) { }
 
 
 void DecodeUtteranceLatticeFasterClassCuda::operator () () {
@@ -249,19 +249,21 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
   using fst::VectorFst;
   double elapsed = 0;
   Timer timer;
+  double tot_like = 0;
 
-  examples_mutex->Lock();
+  examples_mutex_->Lock();
   // Select the GPU
   #if HAVE_CUDA == 1
   CuDevice::Instantiate().SelectGpuId("yes");
   CuDevice::Instantiate().AllowMultithreading();
   #endif
-  examples_mutex->Unlock();
+  examples_mutex_->Unlock();
 
   LatticeFasterDecoderCuda decoder(decode_fst_cuda_, config_);
+  nnet0::NnetExample *example;
 
   while ((example = 
-    dynamic_cast<FeatureExample*>(repository->ProvideExample())) != NULL) {
+    dynamic_cast<nnet0::FeatureExample*>(repository_->ProvideExample())) != NULL) {
 
     timer.Reset();
     PUSH_RANGE("whole decoding", 0)
@@ -277,15 +279,15 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
       num_fail++;
       continue;
     }
-    DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+    DecodableMatrixScaledMapped decodable(trans_model_, loglikes, acoustic_scale_);
     POP_RANGE
 
     double like;
     Lattice lat;
     if (DecodeUtteranceLatticeFasterCuda(
-          decoder, decodable, trans_model, word_syms, utt,
-          acoustic_scale, determinize, allow_partial, &alignment_writer,
-          &words_writer, &compact_lattice_writer, &lattice_writer,
+          decoder, decodable, trans_model_, word_syms_, utt,
+          acoustic_scale_, determinize_, allow_partial_, alignments_writer_,
+          words_writer_, compact_lattice_writer_, lattice_writer_,
           &like, &lat)) {
       tot_like += like;
       frame_count += loglikes.NumRows();
@@ -296,14 +298,14 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
     if (num_success % config_.mem_print_freq == 0)
       get_free_memory_stat("");
     // TODO: lock inside
-    examples_mutex->Lock();
+    examples_mutex_->Lock();
 
     DecodeUtteranceLatticeFasterCudaOutput(
-      decoder, decodable, trans_model, word_syms, utt,
-      acoustic_scale, determinize, allow_partial, &alignment_writer,
-      &words_writer, &compact_lattice_writer, &lattice_writer,
-      &like, lat);
-    examples_mutex->Unlock(); 
+      decoder, decodable, trans_model_, word_syms_, utt,
+          acoustic_scale_, determinize_, allow_partial_, alignments_writer_,
+          words_writer_, compact_lattice_writer_, lattice_writer_,
+          &like, lat);
+    examples_mutex_->Unlock(); 
     POP_RANGE
   }
   KALDI_LOG << "Thread: " << thread_id_ << " "
@@ -316,12 +318,12 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
             " over "
             << frame_count << " frames.";
   
-  examples_mutex->Lock();            
+  examples_mutex_->Lock();            
   if (like_sum_ != NULL) *like_sum_ += tot_like;
   if (frame_sum_ != NULL) *frame_sum_ += frame_count;
   if (num_done_ != NULL) (*num_done_) += num_success;
   if (num_err_ != NULL) (*num_err_) += num_fail;
-  examples_mutex->Unlock(); 
+  examples_mutex_->Unlock(); 
 }
 
 DecodeUtteranceLatticeFasterClassCuda::~DecodeUtteranceLatticeFasterClassCuda() {  

@@ -21,10 +21,8 @@
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
 #include "tree/context-dep.h"
-#include "hmm/transition-model.h"
 #include "fstext/fstext-lib.h"
 #include "cudamatrix/cu-device.h"
-#include "decoder/decodable-matrix.h"
 #include "base/timer.h"
 #include "util/kaldi-thread.h"
 
@@ -81,8 +79,8 @@ int main(int argc, char *argv[]) {
     TransitionModel trans_model;
     ReadKaldiObject(model_in_filename, &trans_model);
 
+    int num_threads =  sequencer_config.num_threads;
     bool determinize = config.determinize_lattice;
-    int num_threads = sequencer_config.num_threads;
     CompactLatticeWriter compact_lattice_writer;
     LatticeWriter lattice_writer;
     if (! (determinize ? compact_lattice_writer.Open(lattice_wspecifier)
@@ -118,25 +116,22 @@ int main(int argc, char *argv[]) {
 
       timer.Reset();
       {
-        ExamplesRepository repository;
+        nnet0::ExamplesRepository repository;
         Mutex examples_mutex;
 
         DecodeUtteranceLatticeFasterClassCuda c(
-                  decode_fst_cuda, config, trans_model, word_syms, utt,
+                  decode_fst_cuda, config, trans_model, word_syms, 
                   acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
                   &tot_like, &frame_count, &num_success, &num_fail, NULL,
                   &repository, &examples_mutex);
-
-        // The initialization of the following class spawns the threads that
-        // process the examples.  They get re-joined in its destructor.
-        MultiThreader<NnetForwardParallelClass> m(num_threads, c);
+        MultiThreader<DecodeUtteranceLatticeFasterClassCuda> m(num_threads, c);
 
         // iterate over all feature files
-        NnetExample *example;
-        std::vector<NnetExample*> examples;
+        nnet0::NnetExample *example;
+        std::vector<nnet0::NnetExample*> examples;
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
-          example = new FeatureExample(&loglike_reader);
+          example = new nnet0::FeatureExample(&loglike_reader);
           if (example->PrepareData(examples))
           {
             for (int i = 0; i < examples.size(); i++)
