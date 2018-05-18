@@ -23,7 +23,7 @@
 // Do not include this file directly.  It is included by determinize-star.h
 
 #include <omp.h>
-
+#include <atomic>
 #include "base/kaldi-error.h"
 #include "base/timer.h"
 
@@ -231,35 +231,43 @@ template<class F> class DeterminizerStar {
           break;
         }
       }
-      if (Q_.size()>1000*omp_get_max_threads()) break;
+      if (Q_.size()>10*omp_get_max_threads()) break;
     }
 
     int cur_up_bd = Q_.size();
     int cur_down_bd = Q_proc_;
+    int iter=0;
     while (Q_proc_ < Q_.size()) {
-#pragma omp parallel for
-      for (int idx = cur_down_bd; idx < cur_up_bd; idx++)
-      {
-        pair<vector<Element>*, OutputStateId> cur_pair = Q_[idx];
-        ProcessSubset(cur_pair);
-        if (debug_ptr && *debug_ptr) Debug();  // will exit.
-/*        if (max_states_ > 0 && output_arcs_.size() > max_states_) {
-          if (allow_partial_ == false) {
-            KALDI_ERR << "Determinization aborted since passed " << max_states_
-                      << " states";
-          } else {
-            KALDI_WARN << "Determinization terminated since passed " << max_states_
-                       << " states, partial results will be generated";
-            is_partial_ = true;
-            break;
-          }
-        }*/
-      } // end of #pragma omp parallel for
-      Q_proc_ = cur_up_bd;
-      cur_up_bd = Q_.size();
-      cur_down_bd = Q_proc_;
-    } // while
-    
+    g_idx = (cur_down_bd);
+    printf("[%d %d] - %d\n", cur_down_bd, cur_up_bd, iter);
+#pragma omp parallel 
+    {
+      while (1) {
+          int idx = std::atomic_fetch_add(&g_idx, 1);
+          if (idx >= cur_up_bd) break;
+          pair<vector<Element>*, OutputStateId> cur_pair = Q_[idx];
+          //printf("%d / %d\n", idx, omp_get_thread_num());
+          ProcessSubset(cur_pair);
+          if (debug_ptr && *debug_ptr) Debug();  // will exit.
+  /*        if (max_states_ > 0 && output_arcs_.size() > max_states_) {
+            if (allow_partial_ == false) {
+              KALDI_ERR << "Determinization aborted since passed " << max_states_
+                        << " states";
+            } else {
+              KALDI_WARN << "Determinization terminated since passed " << max_states_
+                         << " states, partial results will be generated";
+              is_partial_ = true;
+              break;
+            }
+          }*/
+      } // while
+    #pragma omp barrier
+    } // end of #pragma omp parallel for
+    cur_down_bd = cur_up_bd;
+    Q_proc_ = cur_down_bd;
+    cur_up_bd = Q_.size();
+    iter++;
+    }
 
     t3+=timer.Elapsed() - t;
     determinized_ = true;
@@ -289,7 +297,7 @@ template<class F> class DeterminizerStar {
   }
   double t1,t2,t3,t4,t4_2,t4_3,t5;
   kaldi::Timer timer;
-
+  std::atomic_int g_idx;
 
  private:
   typedef typename Arc::Label Label;
@@ -595,10 +603,10 @@ template<class F> class DeterminizerStar {
         cur++;
       }
       double t;
-      if (this_subset.size() != 1) t=timer.Elapsed();
+      //if (this_subset.size() != 1) t=timer.Elapsed();
       // We now have a subset for this ilabel.
       ProcessTransition(state, ilabel, &this_subset);
-      if (this_subset.size() != 1) t5+=timer.Elapsed() - t;
+      //if (this_subset.size() != 1) t5+=timer.Elapsed() - t;
     }
   }
 
@@ -613,9 +621,6 @@ template<class F> class DeterminizerStar {
       vector<Element> *new_subset;
       OutputStateId new_state_id;
       {
-      lock_guard<mutex> lock(hash_mutex_);
-      iter = hash_.find(&subset);
-      if (iter != hash_.end()) return iter->second;
       new_subset = new vector<Element>(subset);
       new_state_id = (OutputStateId) output_arcs_.size();
       bool ans = hash_.insert(std::pair<const vector<Element>*,
@@ -653,7 +658,7 @@ template<class F> class DeterminizerStar {
   // of the state, and then handle transitions out (this may add more determinized states
   // to the queue).
   void ProcessSubset(const pair<vector<Element>*, OutputStateId> & pair) {
-    double t=timer.Elapsed();
+    //double t=timer.Elapsed();
     const vector<Element> *subset = pair.first;
     OutputStateId state = pair.second;
 
@@ -662,11 +667,11 @@ template<class F> class DeterminizerStar {
 
     // Now follow non-epsilon arcs [and also process final states]
     ProcessFinal(closed_subset, state);
-    t1+=timer.Elapsed() - t;
+    //t1+=timer.Elapsed() - t;
 
     // Now handle transitions out of these states.
     ProcessTransitions(closed_subset, state);
-    t2+=timer.Elapsed() - t;
+    //t2+=timer.Elapsed() - t;
   }
 
   void Debug();
@@ -1140,11 +1145,17 @@ ProcessTransition(OutputStateId state, Label ilabel, vector<Element> *subset) {
   TempArc temp_arc;
   temp_arc.ilabel = ilabel;
   // TODO add mutex
+  {
+  lock_guard<mutex> lock(hash_mutex_);
   temp_arc.nextstate = SubsetToStateId(*subset);  // may or may not really add the subset.
+  }
   temp_arc.ostring = common_str;
   temp_arc.weight = tot_weight;
   // TODO add mutex
+  {
+  lock_guard<mutex> lock(output_arcs_mutex_);
   output_arcs_[state].push_back(temp_arc);  // record the arc.
+  }
 }
 
 template<class F>
