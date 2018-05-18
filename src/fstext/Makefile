@@ -27,4 +27,8 @@ LIBNAME = kaldi-fstext
 ADDLIBS = ../tree/kaldi-tree.a ../util/kaldi-util.a \
           ../matrix/kaldi-matrix.a ../base/kaldi-base.a 
 
+CXXFLAGS += -fopenmp
+LDFLAGS += -fopenmp
+
+
 include ../makefiles/default_rules.mk
