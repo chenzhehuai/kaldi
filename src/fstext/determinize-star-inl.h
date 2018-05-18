@@ -38,6 +38,8 @@ namespace fst {
 // This class maps back and forth from/to integer id's to sequences of strings.
 // used in determinization algorithm.
 
+#define MUTEX_NUM (int)1e4
+
 template<class Label, class StringId> class StringRepository {
   // Label and StringId are both integer types, possibly the same.
   // This is a utility that maps back and forth between a vector<Label> and StringId
@@ -194,6 +196,7 @@ template<class F> class DeterminizerStar {
         t3 = 0;
         t2 = 0;
         t1 = 0;
+        output_arcs_per_mutex_ = new mutex[MUTEX_NUM]; // TODO better method
       }
 
   void Determinize(bool *debug_ptr) {
@@ -524,7 +527,11 @@ template<class F> class DeterminizerStar {
       temp_arc.nextstate = kNoStateId;  // special marker meaning "final weight".
       temp_arc.ostring = final_string;
       temp_arc.weight = final_weight;
+      // per state mutex
+      {
+      lock_guard<mutex> lock((output_arcs_per_mutex_[state%MUTEX_NUM]));
       output_arcs_[state].push_back(temp_arc);
+      }
     }
   }
 
@@ -616,18 +623,23 @@ template<class F> class DeterminizerStar {
   // Side effects on hash_ and Q_, and on output_arcs_ [just affects the size].
   OutputStateId SubsetToStateId(const vector<Element> &subset) {  // may add the subset to the queue.
     typedef typename SubsetHash::iterator IterType;
+    //hash_mutex_.lock(); // TODO: better method
     IterType iter = hash_.find(&subset);
+    //hash_mutex_.unlock();
     if (iter == hash_.end()) {  // was not there.
       vector<Element> *new_subset;
       OutputStateId new_state_id;
       {
+      //iter = hash_.find(&subset);
+      //if (iter != hash_.end()) return iter->second;
       new_subset = new vector<Element>(subset);
       new_state_id = (OutputStateId) output_arcs_.size();
+      lock_guard<mutex> lock(hash_mutex_); // TODO
       bool ans = hash_.insert(std::pair<const vector<Element>*,
                                         OutputStateId>(new_subset,
                                                        new_state_id)).second;
       
-      assert(ans);
+      //assert(ans); // may already exist
       }
       {
         lock_guard<mutex> lock(output_arcs_mutex_);
@@ -684,6 +696,7 @@ template<class F> class DeterminizerStar {
   mutex hash_mutex_;
 
   vector<vector<TempArc> > output_arcs_;  // essentially an FST in our format.
+  mutex*  output_arcs_per_mutex_;  // essentially an FST in our format.
 
   const Fst<Arc> *ifst_;
   float delta_;
@@ -1144,16 +1157,11 @@ ProcessTransition(OutputStateId state, Label ilabel, vector<Element> *subset) {
   // We may create a new state id for this (in SubsetToStateId).
   TempArc temp_arc;
   temp_arc.ilabel = ilabel;
-  // TODO add mutex
-  {
-  lock_guard<mutex> lock(hash_mutex_);
   temp_arc.nextstate = SubsetToStateId(*subset);  // may or may not really add the subset.
-  }
   temp_arc.ostring = common_str;
   temp_arc.weight = tot_weight;
-  // TODO add mutex
   {
-  lock_guard<mutex> lock(output_arcs_mutex_);
+  lock_guard<mutex> lock((output_arcs_per_mutex_[state%MUTEX_NUM]));
   output_arcs_[state].push_back(temp_arc);  // record the arc.
   }
 }
