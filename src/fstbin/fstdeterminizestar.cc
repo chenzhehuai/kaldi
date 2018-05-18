@@ -19,6 +19,7 @@
 
 
 #include "base/kaldi-common.h"
+#include "base/timer.h"
 #include "util/common-utils.h"
 #include "fst/fstlib.h"
 #include "fstext/determinize-star.h"
@@ -98,9 +99,12 @@ int main(int argc, char *argv[]) {
 #endif
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       // Normal case: just files.
+      Timer timer;
       VectorFst<StdArc> *fst = ReadFstKaldi(fst_in_str);
 
-      ArcSort(fst, ILabelCompare<StdArc>());  // improves speed.
+      double t1 = timer.Elapsed();
+      if (!use_log) ArcSort(fst, ILabelCompare<StdArc>());  // if use_log, DeterminizeStarInLog will do that
+      double t2 = timer.Elapsed();
       if (use_log) {
         DeterminizeStarInLog(fst, delta, &debug_location, max_states);
       } else {
@@ -109,7 +113,9 @@ int main(int argc, char *argv[]) {
         *fst = det_fst;  // will do shallow copy and then det_fst goes
         // out of scope anyway.
       }
+      double t3 = timer.Elapsed();
       WriteFstKaldi(*fst, fst_out_str);
+      KALDI_LOG << t1 << " " << t2-t1 << " " << t3-t2 << " " << timer.Elapsed()-t3;
       delete fst;
     } else { // Dealing with archives.
       SequentialTableReader<VectorFstHolder> fst_reader(fst_in_str);

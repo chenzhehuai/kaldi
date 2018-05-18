@@ -23,6 +23,7 @@
 // Do not include this file directly.  It is included by determinize-star.h
 
 #include "base/kaldi-error.h"
+#include "base/timer.h"
 
 #include <unordered_map>
 using std::unordered_map;
@@ -182,12 +183,20 @@ template<class F> class DeterminizerStar {
               down_cast<const ExpandedFst<Arc>*,
               const Fst<Arc> >(&ifst)->NumStates()/2 + 3 : 20,
             hasher_, equal_),
-      epsilon_closure_(ifst_, max_states, &repository_, delta) { }
+      epsilon_closure_(ifst_, max_states, &repository_, delta) {
+        timer.Reset();
+        t5 = 0;
+        t4 = 0;
+        t3 = 0;
+        t2 = 0;
+        t1 = 0;
+      }
 
   void Determinize(bool *debug_ptr) {
     assert(!determinized_);
     // This determinizes the input fst but leaves it in the "special format"
     // in "output_arcs_".
+    double t=timer.Elapsed();
     InputStateId start_id = ifst_->Start();
     if (start_id == kNoStateId) { determinized_ = true; return; } // Nothing to do.
     else {  // Insert start state into hash and queue.
@@ -217,6 +226,7 @@ template<class F> class DeterminizerStar {
         }
       }
     }
+    t3+=timer.Elapsed() - t;
     determinized_ = true;
   }
 
@@ -240,7 +250,12 @@ template<class F> class DeterminizerStar {
 
   ~DeterminizerStar() {
     FreeMostMemory();
+    KALDI_LOG<< t1 << " " << t2 << " " << t3 << " "<< t4 << " " << t5 << " " <<timer.Elapsed();
   }
+  double t1,t2,t3,t4,t5;
+  kaldi::Timer timer;
+
+
  private:
   typedef typename Arc::Label Label;
   typedef typename Arc::Weight Weight;
@@ -357,6 +372,7 @@ template<class F> class DeterminizerStar {
     // Has no side effects except on the repository.
     void GetEpsilonClosure(const vector<Element> &input_subset,
                         vector<Element> *output_subset);
+
 
    private:
     struct EpsilonClosureInfo {
@@ -543,8 +559,11 @@ template<class F> class DeterminizerStar {
         this_subset.push_back(cur->second);
         cur++;
       }
+      double t;
+      if (this_subset.size() != 1) t=timer.Elapsed();
       // We now have a subset for this ilabel.
       ProcessTransition(state, ilabel, &this_subset);
+      if (this_subset.size() != 1) t5+=timer.Elapsed() - t;
     }
   }
 
@@ -586,6 +605,7 @@ template<class F> class DeterminizerStar {
   // of the state, and then handle transitions out (this may add more determinized states
   // to the queue).
   void ProcessSubset(const pair<vector<Element>*, OutputStateId> & pair) {
+    double t=timer.Elapsed();
     const vector<Element> *subset = pair.first;
     OutputStateId state = pair.second;
 
@@ -594,9 +614,11 @@ template<class F> class DeterminizerStar {
 
     // Now follow non-epsilon arcs [and also process final states]
     ProcessFinal(closed_subset, state);
+    t1+=timer.Elapsed() - t;
 
     // Now handle transitions out of these states.
     ProcessTransitions(closed_subset, state);
+    t2+=timer.Elapsed() - t;
   }
 
   void Debug();
@@ -911,6 +933,7 @@ void DeterminizerStar<F>::Output(MutableFst<GallicArc<Arc> > *ofst,
 template<class F>
 void DeterminizerStar<F>::Output(MutableFst<Arc> *ofst, bool destroy) {
   assert(determinized_);
+  double t=timer.Elapsed();
   if (destroy) determinized_ = false;
   // Outputs to standard fst.
   OutputStateId num_states = static_cast<OutputStateId>(output_arcs_.size());
@@ -983,6 +1006,7 @@ void DeterminizerStar<F>::Output(MutableFst<Arc> *ofst, bool destroy) {
     temp.swap(output_arcs_);
     repository_.Destroy();
   }
+  t4+=timer.Elapsed() - t;
 }
 
 template<class F> void DeterminizerStar<F>::
