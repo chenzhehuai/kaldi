@@ -174,6 +174,7 @@ template<class F> class DeterminizerStar {
   // (but we cannot output again).
 
   void  Output(MutableFst<Arc> *ofst, bool destroy = true);
+  void  Output(VectorFst<Arc> *ofst, bool destroy = true);
 
 
   // Initializer.  After initializing the object you will typically call
@@ -638,7 +639,6 @@ template<class F> class DeterminizerStar {
       bool ans = hash_.insert(std::pair<const vector<Element>*,
                                         OutputStateId>(new_subset,
                                                        new_state_id)).second;
-      
       //assert(ans); // may already exist
       }
       {
@@ -724,6 +724,19 @@ bool DeterminizeStar(F &ifst, MutableFst<typename F::Arc> *ofst,
   det.Output(ofst);
   return det.IsPartial();
 }
+
+template<class F>
+bool DeterminizeStar(F &ifst, VectorFst<typename F::Arc> *ofst,
+                     float delta, bool *debug_ptr, int max_states,
+                     bool allow_partial) {
+  ofst->SetOutputSymbols(ifst.OutputSymbols());
+  ofst->SetInputSymbols(ifst.InputSymbols());
+  DeterminizerStar<F> det(ifst, delta, max_states, allow_partial);
+  det.Determinize(debug_ptr);
+  det.Output(ofst);
+  return det.IsPartial();
+}
+
 
 
 template<class F>
@@ -1019,6 +1032,90 @@ void DeterminizerStar<F>::Output(MutableFst<Arc> *ofst, bool destroy) {
   // Add basic states-- but will add extra ones to account for strings on output.
   for (OutputStateId s = 0; s < num_states; s++) {
     OutputStateId news = ofst->AddState();
+    assert(news == s);
+  }
+  ofst->SetStart(0);
+  t4_2+=timer.Elapsed() - tt;
+  for (OutputStateId this_state = 0; this_state < num_states; this_state++) {
+    vector<TempArc> &this_vec(output_arcs_[this_state]);
+
+    typename vector<TempArc>::const_iterator iter = this_vec.begin(),
+        end = this_vec.end();
+    ofst->ReserveArcs(this_state, this_vec.size());
+    for (; iter != end; ++iter) {
+      const TempArc &temp_arc(*iter);
+      vector<Label> seq;
+      repository_.SeqOfId(temp_arc.ostring, &seq);
+      if (temp_arc.nextstate == kNoStateId) {  // Really a final weight.
+        // Make a sequence of states going to a final state, with the strings as labels.
+        // Put the weight on the first arc.
+        OutputStateId cur_state = this_state;
+        for (size_t i = 0; i < seq.size();i++) {
+          OutputStateId next_state = ofst->AddState();
+          Arc arc;
+          arc.nextstate = next_state;
+          arc.weight = (i == 0 ? temp_arc.weight : Weight::One());
+          arc.ilabel = 0;  // epsilon.
+          arc.olabel = seq[i];
+          ofst->AddArc(cur_state, arc);
+          cur_state = next_state;
+        }
+        ofst->SetFinal(cur_state, (seq.size() == 0 ? temp_arc.weight : Weight::One()));
+      } else {  // Really an arc.
+        OutputStateId cur_state = this_state;
+        // Have to be careful with this integer comparison (i+1 < seq.size()) because unsigned.
+        // i < seq.size()-1 could fail for zero-length sequences.
+        for (size_t i = 0; i+1 < seq.size();i++) {
+          // for all but the last element of seq, create new state.
+          OutputStateId next_state = ofst->AddState();
+          Arc arc;
+          arc.nextstate = next_state;
+          arc.weight = (i == 0 ? temp_arc.weight : Weight::One());
+          arc.ilabel = (i == 0 ? temp_arc.ilabel : 0);  // put ilabel on first element of seq.
+          arc.olabel = seq[i];
+          ofst->AddArc(cur_state, arc);
+          cur_state = next_state;
+        }
+        // Add the final arc in the sequence.
+        Arc arc;
+        arc.nextstate = temp_arc.nextstate;
+        arc.weight = (seq.size() <= 1 ? temp_arc.weight : Weight::One());
+        arc.ilabel = (seq.size() <= 1 ? temp_arc.ilabel : 0);
+        arc.olabel = (seq.size() > 0 ? seq.back() : 0);
+        ofst->AddArc(cur_state, arc);
+      }
+    }
+    // Free up memory.  Do this inside the loop as ofst is also allocating memory
+    if (destroy) { vector<TempArc> temp; temp.swap(this_vec); }
+  }
+  t4_3+=timer.Elapsed() - tt;
+  if (destroy) {
+    vector<vector<TempArc> > temp;
+    temp.swap(output_arcs_);
+    repository_.Destroy();
+  }
+  t4+=timer.Elapsed() - t;
+}
+template<class F>
+void DeterminizerStar<F>::Output(VectorFst<Arc> *ofst, bool destroy) {
+  assert(determinized_);
+  double t=timer.Elapsed();
+  if (destroy) determinized_ = false;
+  // Outputs to standard fst.
+  OutputStateId num_states = static_cast<OutputStateId>(output_arcs_.size());
+  if (destroy)
+    FreeMostMemory();
+  ofst->DeleteStates();
+  if (num_states == 0) {
+    ofst->SetStart(kNoStateId);
+    return;
+  }
+  double tt=timer.Elapsed();
+  ofst->ReserveStates(num_states); // TODO: add resize for vectorFst
+  // Add basic states-- but will add extra ones to account for strings on output.
+  VectorState<Arc> *states = (VectorState<Arc>*)malloc(sizeof(VectorState<Arc>)*num_states);
+  for (OutputStateId s = 0; s < num_states; s++) {
+    OutputStateId news = ofst->AddState(states+s);
     assert(news == s);
   }
   ofst->SetStart(0);
