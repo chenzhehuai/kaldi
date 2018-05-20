@@ -99,7 +99,8 @@ int main(int argc, char *argv[]) {
 #endif
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       // Normal case: just files.
-      Timer timer;
+      Timer timer; // TODO
+      using FST = VectorFst<LogArc, VectorState<LogArc, PoolAllocator<LogArc>>>;
       VectorFst<StdArc> *fst = ReadFstKaldi(fst_in_str);
 
       double t1 = timer.Elapsed();
@@ -113,11 +114,14 @@ int main(int argc, char *argv[]) {
         *fst = det_fst;  // will do shallow copy and then det_fst goes
         // out of scope anyway.
       }
+      FST pool_fst;
+      Cast(*fst, &pool_fst); // shallow copy
       double t3 = timer.Elapsed();
-      WriteFstKaldi(*fst, fst_out_str);
+      WriteFstKaldi(pool_fst, fst_out_str);
       KALDI_LOG << t1 << " " << t2-t1 << " " << t3-t2 << " " << timer.Elapsed()-t3;
-      delete fst;
+      //delete pool_fst;
     } else { // Dealing with archives.
+        assert(0);
       SequentialTableReader<VectorFstHolder> fst_reader(fst_in_str);
       TableWriter<VectorFstHolder> fst_writer(fst_out_str);
       for (; !fst_reader.Done(); fst_reader.Next()) {

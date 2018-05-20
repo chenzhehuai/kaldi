@@ -372,12 +372,13 @@ void DeterminizeStarInLog(VectorFst<StdArc> *fst, float delta, bool *debug_ptr, 
   // DeterminizeStarInLog determinizes 'fst' in the log semiring, using
   // the DeterminizeStar algorithm (which also removes epsilons).
 
+  using FST = VectorFst<LogArc, VectorState<LogArc, PoolAllocator<LogArc>>>;
   ArcSort(fst, ILabelCompare<StdArc>());  // helps DeterminizeStar to be faster.
   VectorFst<LogArc> *fst_log = new VectorFst<LogArc>;  // Want to determinize in log semiring.
   Cast(*fst, fst_log);
   VectorFst<StdArc> tmp;
   *fst = tmp;  // make fst empty to free up memory. [actually may make no difference..]
-  VectorFst<LogArc> *fst_det_log = new VectorFst<LogArc>;
+  FST *fst_det_log = new FST;
   DeterminizeStar(*fst_log, fst_det_log, delta, debug_ptr, max_states);
   Cast(*fst_det_log, fst);
   delete fst_log;

@@ -113,6 +113,16 @@ void ReadFstKaldi(std::string rxfilename, fst::StdVectorFst *ofst) {
   delete fst;
 }
 
+void WriteFstKaldi(const VectorFst<LogArc, VectorState<LogArc, PoolAllocator<LogArc>>> &fst,
+                   std::string wxfilename) {
+  if (wxfilename == "") wxfilename = "-"; // interpret "" as stdout,
+  // for compatibility with OpenFst conventions.
+  bool write_binary = true, write_header = false;
+  kaldi::Output ko(wxfilename, write_binary, write_header);
+  FstWriteOptions wopts(kaldi::PrintableWxfilename(wxfilename));
+  fst.Write(ko.Stream(), wopts);
+}
+
 void WriteFstKaldi(const VectorFst<StdArc> &fst,
                    std::string wxfilename) {
   if (wxfilename == "") wxfilename = "-"; // interpret "" as stdout,
