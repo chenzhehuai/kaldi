@@ -140,8 +140,10 @@ class VectorFstBaseImpl : public FstImpl<typename S::Arc> {
 
   ~VectorFstBaseImpl() override {
     for (StateId s = 0; s < states_.size(); ++s) {
-      State::Destroy(states_[s], &state_alloc_);
+      //State::Destroy(states_[s], &state_alloc_);
+      // TODO how to free mem is a problem
     }
+    if (states_.size()) free(states_[0]);
   }
 
   StateId Start() const { return start_; }
