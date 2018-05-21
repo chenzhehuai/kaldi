@@ -29,10 +29,12 @@
 #include <fst/fstlib.h>
 #include <fst/fst-decl.h>
 #include "fstext/determinize-star.h"
+#include "fstext/minimize.h"
 #include "fstext/remove-eps-local.h"
 #include "base/kaldi-common.h" // for error reporting macros.
 #include "util/text-utils.h" // for SplitStringToVector
 #include "fst/script/print-impl.h"
+#include "base/timer.h"
 
 namespace fst {
 
@@ -112,12 +114,17 @@ void PushInLog(VectorFst<StdArc> *fst, uint32 ptype, float delta = kDelta) {
 // that is satisified by our normal FSTs.
 template<class Arc>
 void MinimizeEncoded(VectorFst<Arc> *fst, float delta = kDelta) {
-
+  kaldi::Timer timer;
+  double t1=0,t2=0,t3=0;
   Map(fst, QuantizeMapper<Arc>(delta));
   EncodeMapper<Arc> encoder(kEncodeLabels | kEncodeWeights, ENCODE);
   Encode(fst, &encoder);
-  internal::AcceptorMinimize(fst);
+  t1 = timer.Elapsed();
+  internal::AcceptorMinimizeAdv(fst);
+  t2 = timer.Elapsed();
   Decode(fst, encoder);
+  t3 = timer.Elapsed();
+  KALDI_LOG << t1 << " " << t2-t1 << " "<< t3-t2;
 }
 
 
