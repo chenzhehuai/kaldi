@@ -30,7 +30,7 @@ ADDLIBS = ../tree/kaldi-tree.a ../util/kaldi-util.a \
 CXXFLAGS += -fopenmp
 LDFLAGS += -fopenmp
 
-CXXFLAGS += -I/fgfs/users/zhc00/works/para_wfst/src/tbb2018_20180312oss/include/ 
-LDFLAGS += -L/fgfs/users/zhc00/works/para_wfst/src/tbb2018_20180312oss/lib/intel64/gcc4.7/
+CXXFLAGS += -I${OPENFSTINC}/../../tbb2018_20180312oss/include/ 
+LDFLAGS += -L${OPENFSTINC}/../../tbb2018_20180312oss/lib/intel64/gcc4.7/ -ltbb
 
 include ../makefiles/default_rules.mk

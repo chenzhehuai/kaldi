@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include <omp.h>
+
 #include <fst/log.h>
 
 #include <fst/arcsort.h>
@@ -59,9 +61,16 @@ class CyclicMinimizerAdv {
   using Weight = typename Arc::Weight;
   using RevArc = ReverseArc<Arc>;
 
-  explicit CyclicMinimizerAdv(const ExpandedFst<Arc> &fst) {
+  explicit CyclicMinimizerAdv(const ExpandedFst<Arc> &fst):
+  t1(0), t2(0), t3(0), t4(0), t5(0) {
+    timer.Reset();
     Initialize(fst);
+    t1 = timer.Elapsed();
     Compute(fst);
+    t2 = timer.Elapsed()-t1;
+  }
+  ~CyclicMinimizerAdv() {
+    KALDI_LOG<< t1<<" "<<t2 <<" "<< t3<< " "<< t4<<" "<<t5;
   }
 
   const Partition<StateId> &GetPartition() const { return P_; }
@@ -232,6 +241,8 @@ class CyclicMinimizerAdv {
   // Priority queue of open arc iterators for all states in the splitter
   // equivalence class.
   std::unique_ptr<ArcIterQueue> aiter_queue_;
+  kaldi::Timer timer;
+  double t1,t2,t3,t4,t5;
 };
 
 // Given a partition and a Mutable FST, merges states of Fst in place (i.e.,
@@ -244,12 +255,20 @@ void MergeStatesAdv(const Partition<typename Arc::StateId> &partition,
                  VectorFst<Arc, B> *fst) {
   using StateId = typename Arc::StateId;
   std::vector<StateId> state_map(partition.NumClasses());
+#pragma omp parallel for
   for (StateId i = 0; i < partition.NumClasses(); ++i) {
     PartitionIterator<StateId> siter(partition, i);
     state_map[i] = siter.Value();  // First state in partition.
   }
   // Relabels destination states.
-  for (StateId c = 0; c < partition.NumClasses(); ++c) {
+    atomic_int g_c(0);
+    int num_class=partition.NumClasses();
+#pragma omp parallel
+  {
+    while (1) {
+      StateId c = atomic_fetch_add(&g_c, 1);
+      if (c >= num_class) break;
+  //for (StateId c = 0; c < partition.NumClasses(); ++c) {
     for (PartitionIterator<StateId> siter(partition, c); !siter.Done();
          siter.Next()) {
       const auto s = siter.Value();
@@ -263,6 +282,7 @@ void MergeStatesAdv(const Partition<typename Arc::StateId> &partition,
           fst->AddArc(state_map[c], arc);
         }
       }
+    }
     }
   }
   fst->SetStart(state_map[partition.ClassId(fst->Start())]);
