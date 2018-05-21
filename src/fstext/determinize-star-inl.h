@@ -27,8 +27,10 @@
 #include "base/kaldi-error.h"
 #include "base/timer.h"
 
-#include <unordered_map>
-using std::unordered_map;
+//#include <unordered_map>
+//using std::unordered_map;
+#include "tbb/tbb.h"
+using namespace tbb;
 
 #include <vector>
 #include <climits>
@@ -37,8 +39,6 @@ namespace fst {
 
 // This class maps back and forth from/to integer id's to sequences of strings.
 // used in determinization algorithm.
-
-#define MUTEX_NUM (int)1e4
 
 template<class Label, class StringId> class StringRepository {
   // Label and StringId are both integer types, possibly the same.
@@ -197,7 +197,6 @@ template<class F> class DeterminizerStar {
         t3 = 0;
         t2 = 0;
         t1 = 0;
-        output_arcs_per_mutex_ = new mutex[MUTEX_NUM]; // TODO better method
       }
 
   void Determinize(bool *debug_ptr) {
@@ -403,7 +402,7 @@ template<class F> class DeterminizerStar {
   };
 
   // Define the hash type we use to store subsets.
-  typedef unordered_map<const vector<Element>*, OutputStateId, SubsetKey, SubsetEqual> SubsetHash;
+  typedef concurrent_unordered_map<const vector<Element>*, OutputStateId, SubsetKey, SubsetEqual> SubsetHash;
 
   class EpsilonClosure {
    public:
@@ -528,9 +527,7 @@ template<class F> class DeterminizerStar {
       temp_arc.nextstate = kNoStateId;  // special marker meaning "final weight".
       temp_arc.ostring = final_string;
       temp_arc.weight = final_weight;
-      // per state mutex
       {
-      lock_guard<mutex> lock((output_arcs_per_mutex_[state%MUTEX_NUM]));
       output_arcs_[state].push_back(temp_arc);
       }
     }
@@ -624,9 +621,7 @@ template<class F> class DeterminizerStar {
   // Side effects on hash_ and Q_, and on output_arcs_ [just affects the size].
   OutputStateId SubsetToStateId(const vector<Element> &subset) {  // may add the subset to the queue.
     typedef typename SubsetHash::iterator IterType;
-    //hash_mutex_.lock(); // TODO: better method
     IterType iter = hash_.find(&subset);
-    //hash_mutex_.unlock();
     if (iter == hash_.end()) {  // was not there.
       vector<Element> *new_subset;
       OutputStateId new_state_id;
@@ -635,19 +630,16 @@ template<class F> class DeterminizerStar {
       //if (iter != hash_.end()) return iter->second;
       new_subset = new vector<Element>(subset);
       new_state_id = (OutputStateId) output_arcs_.size();
-      lock_guard<mutex> lock(hash_mutex_); // TODO
       bool ans = hash_.insert(std::pair<const vector<Element>*,
                                         OutputStateId>(new_subset,
                                                        new_state_id)).second;
       //assert(ans); // may already exist
       }
       {
-        lock_guard<mutex> lock(output_arcs_mutex_);
-        output_arcs_.push_back(vector<TempArc>());
+        output_arcs_.push_back(concurrent_vector<TempArc>());
       }
       if (allow_partial_ == false) {
         // If --allow-partial is not requested, we do the old way.
-        lock_guard<mutex> lock(Q_mutex_);
         Q_.push_back(pair<vector<Element>*, OutputStateId>(new_subset,  new_state_id));
       } else {
           assert(0);
@@ -689,14 +681,10 @@ template<class F> class DeterminizerStar {
   void Debug();
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(DeterminizerStar);
-  vector<pair<vector<Element>*, OutputStateId> > Q_;  // queue of subsets to be processed.
+  concurrent_vector<pair<vector<Element>*, OutputStateId> > Q_;  // queue of subsets to be processed.
   int Q_proc_;
-  mutex Q_mutex_;
-  mutex output_arcs_mutex_;
-  mutex hash_mutex_;
 
-  vector<vector<TempArc> > output_arcs_;  // essentially an FST in our format.
-  mutex*  output_arcs_per_mutex_;  // essentially an FST in our format.
+  concurrent_vector<concurrent_vector<TempArc> > output_arcs_;  // essentially an FST in our format.
 
   const Fst<Arc> *ifst_;
   float delta_;
@@ -1037,9 +1025,9 @@ void DeterminizerStar<F>::Output(MutableFst<Arc> *ofst, bool destroy) {
   ofst->SetStart(0);
   t4_2+=timer.Elapsed() - tt;
   for (OutputStateId this_state = 0; this_state < num_states; this_state++) {
-    vector<TempArc> &this_vec(output_arcs_[this_state]);
+    concurrent_vector<TempArc> &this_vec(output_arcs_[this_state]);
 
-    typename vector<TempArc>::const_iterator iter = this_vec.begin(),
+    typename concurrent_vector<TempArc>::const_iterator iter = this_vec.begin(),
         end = this_vec.end();
     ofst->ReserveArcs(this_state, this_vec.size());
     for (; iter != end; ++iter) {
@@ -1086,11 +1074,11 @@ void DeterminizerStar<F>::Output(MutableFst<Arc> *ofst, bool destroy) {
       }
     }
     // Free up memory.  Do this inside the loop as ofst is also allocating memory
-    if (destroy) { vector<TempArc> temp; temp.swap(this_vec); }
+    if (destroy) { concurrent_vector<TempArc> temp; temp.swap(this_vec); }
   }
   t4_3+=timer.Elapsed() - tt;
   if (destroy) {
-    vector<vector<TempArc> > temp;
+    concurrent_vector<concurrent_vector<TempArc> > temp;
     temp.swap(output_arcs_);
     repository_.Destroy();
   }
@@ -1113,17 +1101,18 @@ void DeterminizerStar<F>::Output(VectorFst<Arc> *ofst, bool destroy) {
   double tt=timer.Elapsed();
   ofst->ReserveStates(num_states); // TODO: add resize for vectorFst
   // Add basic states-- but will add extra ones to account for strings on output.
-  VectorState<Arc> *states = (VectorState<Arc>*)malloc(sizeof(VectorState<Arc>)*num_states);
+  //VectorState<Arc> *states = (VectorState<Arc>*)malloc(sizeof(VectorState<Arc>)*num_states);
   for (OutputStateId s = 0; s < num_states; s++) {
-    OutputStateId news = ofst->AddState(states+s);
+    //OutputStateId news = ofst->AddState(states+s);
+    OutputStateId news = ofst->AddState();
     assert(news == s);
   }
   ofst->SetStart(0);
   t4_2+=timer.Elapsed() - tt;
   for (OutputStateId this_state = 0; this_state < num_states; this_state++) {
-    vector<TempArc> &this_vec(output_arcs_[this_state]);
+    concurrent_vector<TempArc> &this_vec(output_arcs_[this_state]);
 
-    typename vector<TempArc>::const_iterator iter = this_vec.begin(),
+    typename concurrent_vector<TempArc>::const_iterator iter = this_vec.begin(),
         end = this_vec.end();
     ofst->ReserveArcs(this_state, this_vec.size());
     for (; iter != end; ++iter) {
@@ -1170,11 +1159,11 @@ void DeterminizerStar<F>::Output(VectorFst<Arc> *ofst, bool destroy) {
       }
     }
     // Free up memory.  Do this inside the loop as ofst is also allocating memory
-    if (destroy) { vector<TempArc> temp; temp.swap(this_vec); }
+    if (destroy) { concurrent_vector<TempArc> temp; temp.swap(this_vec); }
   }
   t4_3+=timer.Elapsed() - tt;
   if (destroy) {
-    vector<vector<TempArc> > temp;
+    concurrent_vector<concurrent_vector<TempArc> > temp;
     temp.swap(output_arcs_);
     repository_.Destroy();
   }
@@ -1258,7 +1247,6 @@ ProcessTransition(OutputStateId state, Label ilabel, vector<Element> *subset) {
   temp_arc.ostring = common_str;
   temp_arc.weight = tot_weight;
   {
-  lock_guard<mutex> lock((output_arcs_per_mutex_[state%MUTEX_NUM]));
   output_arcs_[state].push_back(temp_arc);  // record the arc.
   }
 }
