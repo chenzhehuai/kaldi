@@ -78,8 +78,10 @@ int main(int argc, char *argv[]) {
     float delta = kDelta;
     int max_states = -1;
     bool use_log = false;
+    bool destroy = true;
     ParseOptions po(usage);
     po.Register("use-log", &use_log, "Determinize in log semiring.");
+    po.Register("destroy", &destroy, "destroy memory in hash_map.");
     po.Register("delta", &delta, "Delta value used to determine equivalence of weights.");
     po.Register("max-states", &max_states, "Maximum number of states in determinized FST before it will abort.");
     po.Read(argc, argv);
@@ -107,7 +109,7 @@ int main(int argc, char *argv[]) {
       if (!use_log) ArcSort(fst, ILabelCompare<StdArc>());  // if use_log, DeterminizeStarInLog will do that
       double t2 = timer.Elapsed();
       if (use_log) {
-        DeterminizeStarInLog(fst, delta, &debug_location, max_states);
+        DeterminizeStarInLog(fst, delta, &debug_location, max_states, destroy);
       } else {
         assert(0);
       }

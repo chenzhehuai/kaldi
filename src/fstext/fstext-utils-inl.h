@@ -368,7 +368,7 @@ void SafeDeterminizeMinimizeWrapper(MutableFst<Arc> *ifst, VectorFst<Arc> *ofst,
 
 
 inline
-void DeterminizeStarInLog(VectorFst<StdArc> *fst, float delta, bool *debug_ptr, int max_states) {
+void DeterminizeStarInLog(VectorFst<StdArc> *fst, float delta, bool *debug_ptr, int max_states, bool destroy) {
   // DeterminizeStarInLog determinizes 'fst' in the log semiring, using
   // the DeterminizeStar algorithm (which also removes epsilons).
 
@@ -379,7 +379,7 @@ void DeterminizeStarInLog(VectorFst<StdArc> *fst, float delta, bool *debug_ptr, 
   VectorFst<StdArc> tmp;
   *fst = tmp;  // make fst empty to free up memory. [actually may make no difference..]
   FST *fst_det_log = new FST;
-  DeterminizeStar(*fst_log, fst_det_log, delta, debug_ptr, max_states);
+  DeterminizeStar(*fst_log, fst_det_log, delta, debug_ptr, max_states, false, destroy);
   Cast(*fst_det_log, fst);
   delete fst_log;
   delete fst_det_log;

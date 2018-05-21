@@ -82,7 +82,7 @@ void GetSymbols(const SymbolTable &symtab,
 
 inline
 void DeterminizeStarInLog(VectorFst<StdArc> *fst, float delta = kDelta, bool *debug_ptr = NULL,
-                          int max_states = -1);
+                          int max_states = -1, bool destroy = true);
 
 
 // e.g. of using this function: PushInLog<REWEIGHT_TO_INITIAL>(fst, kPushWeights|kPushLabels);

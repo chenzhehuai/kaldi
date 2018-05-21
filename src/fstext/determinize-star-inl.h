@@ -178,7 +178,8 @@ template<class F> class DeterminizerStar {
   // Initializer.  After initializing the object you will typically call
   // Determinize() and then one of the Output functions.
   DeterminizerStar(const Fst<Arc> &ifst, float delta = kDelta,
-                   int max_states = -1, bool allow_partial = false):
+                   int max_states = -1, bool allow_partial = false,
+                   bool destroy = true):
       ifst_(ifst.Copy()), delta_(delta), max_states_(max_states),
       determinized_(false), allow_partial_(allow_partial),
       is_partial_(false), equal_(delta),
@@ -186,7 +187,8 @@ template<class F> class DeterminizerStar {
               down_cast<const ExpandedFst<Arc>*,
               const Fst<Arc> >(&ifst)->NumStates()/2 + 3 : 20,
             hasher_, equal_),
-      epsilon_closure_(ifst_, max_states, &repository_, delta) {
+      epsilon_closure_(ifst_, max_states, &repository_, delta), 
+      destroy_(destroy) {
         timer.Reset();
         t5 = 0;
         t4 = 0;
@@ -286,10 +288,11 @@ template<class F> class DeterminizerStar {
       ifst_ = NULL;
     }
     // TODO: better method to free these mem
-    /*for (typename SubsetHash::iterator iter = hash_.begin();
+    if (destroy_) 
+    for (typename SubsetHash::iterator iter = hash_.begin();
         iter != hash_.end(); ++iter)
       delete iter->first;
-      */
+      
     SubsetHash tmp;
     tmp.swap(hash_);
   }
@@ -695,16 +698,18 @@ template<class F> class DeterminizerStar {
 
   StringRepository<Label, StringId> repository_;  // associate integer id's with sequences of labels.
   EpsilonClosure epsilon_closure_;
+
+  bool destroy_;
 };
 
 
 template<class F>
 bool DeterminizeStar(F &ifst, MutableFst<typename F::Arc> *ofst,
                      float delta, bool *debug_ptr, int max_states,
-                     bool allow_partial) {
+                     bool allow_partial, bool destroy) {
   ofst->SetOutputSymbols(ifst.OutputSymbols());
   ofst->SetInputSymbols(ifst.InputSymbols());
-  DeterminizerStar<F> det(ifst, delta, max_states, allow_partial);
+  DeterminizerStar<F> det(ifst, delta, max_states, allow_partial, destroy);
   det.Determinize(debug_ptr);
   det.Output(ofst);
   return det.IsPartial();

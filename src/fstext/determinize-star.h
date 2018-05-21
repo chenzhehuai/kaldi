@@ -88,15 +88,8 @@ bool DeterminizeStar(F &ifst, MutableFst<typename F::Arc> *ofst,
                      float delta = kDelta,
                      bool *debug_ptr = NULL,
                      int max_states = -1,
-                     bool allow_partial = false);
-
-template<class F>
-bool DeterminizeStar(F &ifst, VectorFst<typename F::Arc> *ofst,
-                     float delta = kDelta,
-                     bool *debug_ptr = NULL,
-                     int max_states = -1,
-                     bool allow_partial = false);
-
+                     bool allow_partial = false,
+                     bool destroy = true);
 
 
 /*  This is a version of DeterminizeStar with a slightly more "natural" output format,
