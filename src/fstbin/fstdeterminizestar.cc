@@ -109,10 +109,7 @@ int main(int argc, char *argv[]) {
       if (use_log) {
         DeterminizeStarInLog(fst, delta, &debug_location, max_states);
       } else {
-        VectorFst<StdArc> det_fst;
-        DeterminizeStar(*fst, &det_fst, delta, &debug_location, max_states);
-        *fst = det_fst;  // will do shallow copy and then det_fst goes
-        // out of scope anyway.
+        assert(0);
       }
       FST pool_fst;
       Cast(*fst, &pool_fst); // shallow copy
