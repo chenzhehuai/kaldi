@@ -33,8 +33,120 @@
 
 #include "base/timer.h"
 
+#include "fstext/encode.h"
+
 namespace fst {
+
+namespace internal2 {
+template <class A, class C>
+void ArcMapAdv(VectorFst<A> *fst, C *mapper) {
+  using FromArc = A;
+  using ToArc = A;
+  using StateId = typename FromArc::StateId;
+  using Weight = typename FromArc::Weight;
+  if (mapper->InputSymbolsAction() == MAP_CLEAR_SYMBOLS) {
+    fst->SetInputSymbols(nullptr);
+  }
+  if (mapper->OutputSymbolsAction() == MAP_CLEAR_SYMBOLS) {
+    fst->SetOutputSymbols(nullptr);
+  }
+  if (fst->Start() == kNoStateId) return;
+  const auto props = fst->Properties(kFstProperties, false);
+  const auto final_action = mapper->FinalAction();
+  auto superfinal = kNoStateId;
+  if (final_action == MAP_REQUIRE_SUPERFINAL) {
+    superfinal = fst->AddState();
+    fst->SetFinal(superfinal, Weight::One());
+  }
+  int num_states=fst->NumStates();
+  KALDI_LOG << num_states;
+  kaldi::Timer timer;
+  atomic_int g_state(0);
+#pragma omp parallel 
+  while (1) {
+      StateId state = atomic_fetch_add(&g_state, 1);
+      if (state >= num_states) break;
+    for (MutableArcIterator<MutableFst<FromArc>> aiter(fst, state);
+         !aiter.Done(); aiter.Next()) {
+      const auto &arc = aiter.Value();
+      aiter.SetValue((*mapper)(arc));
+    }
+  }
+  double t1= timer.Elapsed();
+  for (StateId state = 0; state < num_states; state++) {
+    switch (final_action) {
+      case MAP_NO_SUPERFINAL:
+      default: {
+        const FromArc arc(0, 0, fst->Final(state), kNoStateId);
+        const auto final_arc = (*mapper)(arc);
+        if (final_arc.ilabel != 0 || final_arc.olabel != 0) {
+          FSTERROR() << "ArcMap: Non-zero arc labels for superfinal arc";
+          fst->SetProperties(kError, kError);
+        }
+        fst->SetFinal(state, final_arc.weight);
+        break;
+      }
+      case MAP_ALLOW_SUPERFINAL: {
+        if (state != superfinal) {
+          const FromArc arc(0, 0, fst->Final(state), kNoStateId);
+          auto final_arc = (*mapper)(arc);
+          if (final_arc.ilabel != 0 || final_arc.olabel != 0) {
+            // Add a superfinal state if not already done.
+            if (superfinal == kNoStateId) {
+              superfinal = fst->AddState();
+              fst->SetFinal(superfinal, Weight::One());
+            }
+            final_arc.nextstate = superfinal;
+            fst->AddArc(state, final_arc);
+            fst->SetFinal(state, Weight::Zero());
+          } else {
+            fst->SetFinal(state, final_arc.weight);
+          }
+        }
+        break;
+      }
+      case MAP_REQUIRE_SUPERFINAL: {
+        if (state != superfinal) {
+          const FromArc arc(0, 0, fst->Final(state), kNoStateId);
+          const auto final_arc = (*mapper)(arc);
+          if (final_arc.ilabel != 0 || final_arc.olabel != 0 ||
+              final_arc.weight != Weight::Zero()) {
+            fst->AddArc(state, ToArc(final_arc.ilabel, final_arc.olabel,
+                                     final_arc.weight, superfinal));
+          }
+          fst->SetFinal(state, Weight::Zero());
+        }
+        break;
+      }
+    }
+  }
+  double t2= timer.Elapsed();
+  KALDI_LOG << t1 << " " << t2-t1;
+  fst->SetProperties(mapper->Properties(props), kFstProperties);
+}
+
+// Complexity: O(E + V).
+template <class Arc>
+void Encode(VectorFst<Arc> *fst, EncodeMapper<Arc> *mapper) {
+  mapper->SetInputSymbols(fst->InputSymbols());
+  mapper->SetOutputSymbols(fst->OutputSymbols());
+  ArcMapAdv(fst, mapper);
+}
+
+template <class Arc>
+inline void Decode(VectorFst<Arc> *fst, const EncodeMapper<Arc> &mapper) {
+  EncodeMapper<Arc> encoder(mapper, DECODE);
+  ArcMapAdv(fst, &encoder);
+  RmFinalEpsilon(fst);
+  fst->SetInputSymbols(mapper.InputSymbols());
+  fst->SetOutputSymbols(mapper.OutputSymbols());
+}
+
+}
+
+
 namespace internal {
+
 
 // Computes equivalence classes for cyclic unweighted acceptors. For cyclic
 // minimization we use the classic Hopcroft minimization algorithm, which has
@@ -255,6 +367,7 @@ void MergeStatesAdv(const Partition<typename Arc::StateId> &partition,
                  VectorFst<Arc, B> *fst) {
   using StateId = typename Arc::StateId;
   std::vector<StateId> state_map(partition.NumClasses());
+  KALDI_VLOG(1) << partition.NumClasses();
 #pragma omp parallel for
   for (StateId i = 0; i < partition.NumClasses(); ++i) {
     PartitionIterator<StateId> siter(partition, i);

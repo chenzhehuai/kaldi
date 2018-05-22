@@ -36,6 +36,7 @@
 #include "fst/script/print-impl.h"
 #include "base/timer.h"
 
+
 namespace fst {
 
 /// Returns the highest numbered output symbol id of the FST (or zero
@@ -117,12 +118,12 @@ void MinimizeEncoded(VectorFst<Arc> *fst, float delta = kDelta) {
   kaldi::Timer timer;
   double t1=0,t2=0,t3=0;
   Map(fst, QuantizeMapper<Arc>(delta));
-  EncodeMapper<Arc> encoder(kEncodeLabels | kEncodeWeights, ENCODE);
-  Encode(fst, &encoder);
+  internal2::EncodeMapper<Arc> encoder(kEncodeLabels | kEncodeWeights, ENCODE);
+  internal2::Encode(fst, &encoder);
   t1 = timer.Elapsed();
   internal::AcceptorMinimizeAdv(fst);
   t2 = timer.Elapsed();
-  Decode(fst, encoder);
+  internal2::Decode(fst, encoder);
   t3 = timer.Elapsed();
   KALDI_LOG << t1 << " " << t2-t1 << " "<< t3-t2;
 }

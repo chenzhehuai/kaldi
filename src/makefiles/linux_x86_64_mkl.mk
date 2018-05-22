@@ -31,6 +31,9 @@ CXXFLAGS = -std=c++11 -I.. -I$(OPENFSTINC) $(EXTRA_CXXFLAGS) \
            -DHAVE_EXECINFO_H=1 -DHAVE_CXXABI_H -DHAVE_MKL -I$(MKLROOT)/include \
            -m64 -msse -msse2 -pthread \
            -g # -O0 -DKALDI_PARANOID
+CXXFLAGS += -I${OPENFSTINC}/../../tbb2018_20180312oss/include/ 
+CXXFLAGS += -fopenmp
+
 
 ifeq ($(KALDI_FLAVOR), dynamic)
 CXXFLAGS += -fPIC
@@ -64,4 +67,8 @@ MKL_DYN_MUL = -L$(MKLLIB) -lmkl_solver_lp64 -Wl,--start-group -lmkl_intel_lp64 \
 # MKLFLAGS = $(MKL_DYN_MUL)
 
 LDFLAGS = $(EXTRA_LDFLAGS) $(OPENFSTLDFLAGS) -rdynamic
+LDFLAGS += -L${OPENFSTINC}/../../tbb2018_20180312oss/lib/intel64/gcc4.7/ -ltbb
+LDFLAGS += -fopenmp
+
+
 LDLIBS = $(EXTRA_LDLIBS) $(OPENFSTLIBS) $(MKLFLAGS) -lm -lpthread -ldl
