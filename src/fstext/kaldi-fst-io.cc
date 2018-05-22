@@ -113,7 +113,7 @@ void ReadFstKaldi(std::string rxfilename, fst::StdVectorFst *ofst) {
   delete fst;
 }
 
-void WriteFstKaldi(const VectorFst<LogArc, VectorState<LogArc, PoolAllocator<LogArc>>> &fst,
+void WriteFstKaldi(const VectorFst<StdArc, VectorState<StdArc, PoolAllocator<StdArc>>> &fst,
                    std::string wxfilename) {
   if (wxfilename == "") wxfilename = "-"; // interpret "" as stdout,
   // for compatibility with OpenFst conventions.

@@ -242,7 +242,7 @@ template<class F> class DeterminizerStar {
     int iter=0;
     while (Q_proc_ < Q_.size()) {
     g_idx = (cur_down_bd);
-    printf("[%d %d] - %d\n", cur_down_bd, cur_up_bd, iter);
+    //printf("[%d %d] - %d\n", cur_down_bd, cur_up_bd, iter);
 #pragma omp parallel 
     {
       while (1) {

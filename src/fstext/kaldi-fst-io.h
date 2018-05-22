@@ -66,7 +66,7 @@ void ReadFstKaldi(std::string rxfilename, VectorFst<StdArc> *ofst);
 // as it doesn't support the text-mode option.
 void WriteFstKaldi(const VectorFst<StdArc> &fst,
                    std::string wxfilename);
-void WriteFstKaldi(const VectorFst<LogArc, VectorState<LogArc, PoolAllocator<LogArc>>> &fst,
+void WriteFstKaldi(const VectorFst<StdArc, VectorState<StdArc, PoolAllocator<StdArc>>> &fst,
                    std::string wxfilename);
 
 // This is a more general Kaldi-type-IO mechanism of writing FSTs to

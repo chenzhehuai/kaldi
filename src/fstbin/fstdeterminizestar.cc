@@ -102,7 +102,7 @@ int main(int argc, char *argv[]) {
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       // Normal case: just files.
       Timer timer; // TODO
-      using FST = VectorFst<LogArc, VectorState<LogArc, PoolAllocator<LogArc>>>;
+      using FST = VectorFst<StdArc, VectorState<StdArc, PoolAllocator<StdArc>>>; // to make ReadFstKaldi happy
       VectorFst<StdArc> *fst = ReadFstKaldi(fst_in_str);
 
       double t1 = timer.Elapsed();
