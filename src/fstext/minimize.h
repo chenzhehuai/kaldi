@@ -303,7 +303,7 @@ void AcceptorMinimizeAdv(VectorFst<Arc, B> *fst,
   kaldi::Timer timer;
   double t1=0,t2=0,t3=0,t4=0;
   // Connects FST before minimization, handles disconnected states.
-  // Connect(fst);
+  Connect(fst);
   if (fst->NumStates() == 0) return;
   t1=timer.Elapsed();
   if (allow_acyclic_minimization && fst->Properties(kAcyclic, true)) {
@@ -331,6 +331,7 @@ void AcceptorMinimizeAdv(VectorFst<Arc, B> *fst,
   StateMap(fst, mapper);
   t4=timer.Elapsed();
   KALDI_LOG << t1 << " "<< t2-t1 << " " << t3-t2 << " " << t4-t3;
+  KALDI_LOG << "NumStates: "<< fst->NumStates() ;
 }
 
 }  // namespace internal

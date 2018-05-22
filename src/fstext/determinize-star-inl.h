@@ -67,7 +67,7 @@ template<class Label, class StringId> class StringRepository {
     }
   };
 
-  typedef unordered_map<const vector<Label>*, StringId, VectorKey, VectorEqual> MapType;
+  typedef concurrent_unordered_map<const vector<Label>*, StringId, VectorKey, VectorEqual> MapType;
 
   StringId IdOfEmpty() { return no_symbol; }
 
@@ -122,9 +122,9 @@ template<class Label, class StringId> class StringRepository {
     single_symbol_range =  numeric_limits<StringId>::max() - single_symbol_start;
   }
   void Destroy() {
-    for (typename vector<vector<Label>* >::iterator iter = vec_.begin(); iter != vec_.end(); ++iter)
+    for (typename concurrent_vector<vector<Label>* >::iterator iter = vec_.begin(); iter != vec_.end(); ++iter)
       delete *iter;
-    vector<vector<Label>* > tmp_vec;
+    concurrent_vector<vector<Label>* > tmp_vec;
     tmp_vec.swap(vec_);
     MapType tmp_map;
     tmp_map.swap(map_);
@@ -150,7 +150,7 @@ template<class Label, class StringId> class StringRepository {
     }
   }
 
-  vector<vector<Label>* > vec_;
+  concurrent_vector<vector<Label>* > vec_;
   MapType map_;
 
   static const StringId string_start = (StringId) 0;  // This must not change.  It's assumed.
@@ -567,6 +567,7 @@ template<class F> class DeterminizerStar {
   // and output_arcs_.
   void ProcessTransitions(const vector<Element> &closed_subset, OutputStateId state) {
     vector<pair<Label, Element> > all_elems;
+//#pragma omp critical
     {  // Push back into "all_elems", elements corresponding to all non-epsilon-input transitions
       // out of all states in "closed_subset".
       typename vector<Element>::const_iterator iter = closed_subset.begin(),
@@ -627,26 +628,32 @@ template<class F> class DeterminizerStar {
     if (iter == hash_.end()) {  // was not there.
       vector<Element> *new_subset;
       OutputStateId new_state_id;
-      {
       new_subset = new vector<Element>(subset);
+      bool ans;
+#pragma omp critical
+      {
       new_state_id = (OutputStateId) output_arcs_.size();
-      hash_.insert(std::pair<const vector<Element>*,
+      ans = hash_.insert(std::pair<const vector<Element>*,
                                         OutputStateId>(new_subset,
                                                        new_state_id)).second;
       //assert(ans); // may already exist
-      }
-      {
-        output_arcs_.push_back(concurrent_vector<TempArc>());
-      }
-      if (allow_partial_ == false) {
-        // If --allow-partial is not requested, we do the old way.
-        Q_.push_back(pair<vector<Element>*, OutputStateId>(new_subset,  new_state_id));
-      } else {
-          assert(0);
+      if (ans) output_arcs_.push_back(concurrent_vector<TempArc>());
+      } 
+      if (ans) {
+        if (allow_partial_ == false) {
+          // If --allow-partial is not requested, we do the old way.
+          Q_.push_back(pair<vector<Element>*, OutputStateId>(new_subset,  new_state_id));
+        } else {
         // If --allow-partial is requested, we do breadth first search. This
         // ensures that when we return partial results, we return the states
         // that are reachable by the fewest steps from the start state.
-        //Q_.push_back(pair<vector<Element>*, OutputStateId>(new_subset,  new_state_id));
+          assert(0);
+        }
+      }
+      if (!ans) {
+        IterType iter = hash_.find(&subset);
+        new_state_id = iter->second;
+        delete new_subset;
       }
       return new_state_id;
     } else {
@@ -667,9 +674,11 @@ template<class F> class DeterminizerStar {
     OutputStateId state = pair.second;
 
     vector<Element> closed_subset;  // subset after epsilon closure.
+//#pragma omp critical
     epsilon_closure_.GetEpsilonClosure(*subset, &closed_subset);
 
     // Now follow non-epsilon arcs [and also process final states]
+//#pragma omp critical
     ProcessFinal(closed_subset, state);
     //t1+=timer.Elapsed() - t;
 
@@ -1071,6 +1080,7 @@ void DeterminizerStar<F>::Output(MutableFst<Arc> *ofst, bool destroy) {
     temp.swap(output_arcs_);
     repository_.Destroy();
   }
+  KALDI_LOG << "NumStates: "<< ofst->NumStates() ;
   t4+=timer.Elapsed() - t;
 }
 
@@ -1083,6 +1093,7 @@ ProcessTransition(OutputStateId state, Label ilabel, vector<Element> *subset) {
   // exist).
 
   typedef typename vector<Element>::iterator IterType;
+//#pragma omp critical
   {  // This block makes the subset have one unique Element per state, adding the weights.
     IterType cur_in = subset->begin(), cur_out = cur_in, end = subset->end();
     size_t num_out = 0;
@@ -1107,6 +1118,7 @@ ProcessTransition(OutputStateId state, Label ilabel, vector<Element> *subset) {
 
   StringId common_str;
   Weight tot_weight;
+//#pragma omp critical
   {  // This block computes common_str and tot_weight (essentially: the common divisor)
     // and removes them from the elements.
     vector<Label> seq;
@@ -1143,15 +1155,16 @@ ProcessTransition(OutputStateId state, Label ilabel, vector<Element> *subset) {
       iter->string = repository_.RemovePrefix(iter->string, prefix_len);
     }
   }
-
+  {
   // Now add an arc to the state that the subset represents.
   // We may create a new state id for this (in SubsetToStateId).
   TempArc temp_arc;
   temp_arc.ilabel = ilabel;
+//#pragma omp critical
   temp_arc.nextstate = SubsetToStateId(*subset);  // may or may not really add the subset.
   temp_arc.ostring = common_str;
   temp_arc.weight = tot_weight;
-  {
+
   output_arcs_[state].push_back(temp_arc);  // record the arc.
   }
 }
