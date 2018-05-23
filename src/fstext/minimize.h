@@ -62,18 +62,16 @@ void ArcMapAdv(VectorFst<A> *fst, C *mapper) {
   KALDI_LOG << num_states;
   kaldi::Timer timer;
   atomic_int g_state(0);
+  double t1= timer.Elapsed();
 #pragma omp parallel 
   while (1) {
-      StateId state = atomic_fetch_add(&g_state, 1);
-      if (state >= num_states) break;
+    StateId state = atomic_fetch_add(&g_state, 1);
+    if (state >= num_states) break;
     for (MutableArcIterator<MutableFst<FromArc>> aiter(fst, state);
          !aiter.Done(); aiter.Next()) {
       const auto &arc = aiter.Value();
       aiter.SetValue((*mapper)(arc));
     }
-  }
-  double t1= timer.Elapsed();
-  for (StateId state = 0; state < num_states; state++) {
     switch (final_action) {
       case MAP_NO_SUPERFINAL:
       default: {

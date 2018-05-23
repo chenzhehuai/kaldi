@@ -101,6 +101,13 @@ class EncodeTable {
     std::unique_ptr<Tuple> tuple(
         new Tuple(arc.ilabel, flags_ & kEncodeLabels ? arc.olabel : 0,
                   flags_ & kEncodeWeights ? arc.weight : Weight::One()));
+    if (omp_get_num_threads() == 1) {
+        auto insert_result = encode_hash_.insert(
+        std::make_pair(tuple.get(), encode_tuples_.size() + 1));
+        if (insert_result.second) encode_tuples_.push_back(std::move(tuple));
+        ret = insert_result.first->second;
+        return ret;
+    } 
     typedef typename EncodeHash::iterator IterType;
     IterType iter = encode_hash_.find(tuple.get());
     if (iter == encode_hash_.end()) {
