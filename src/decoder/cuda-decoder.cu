@@ -155,7 +155,7 @@ namespace kaldi {
     cudaMemcpy(arc_weights_d,arc_weights_h,arc_count*sizeof(BaseFloat),cudaMemcpyHostToDevice);
     cudaMemcpy(arc_nextstates_d,arc_nextstates_h,arc_count*sizeof(StateId),cudaMemcpyHostToDevice);
     cudaMemcpy(arc_ilabels_d,arc_ilabels_h, arc_count*sizeof(int32),cudaMemcpyHostToDevice);
-
+    
     printf("narcs=%i \n", arc_count);
 
     cudaDeviceSynchronize();
@@ -240,6 +240,10 @@ namespace kaldi {
     
     cudaMalloc(&d_path_size, sizeof(int));
     cudaMalloc(&d_n_CTA_done, sizeof(int));
+
+    cudaMalloc((void**)&d_dbg_tok_num,1*sizeof(int32)); 
+    cudaMemset(d_dbg_tok_num, 0, sizeof(int));
+
 
     cudaCheckError();
   }
@@ -339,7 +343,7 @@ typedef CudaDecoder::StateId StateId;
 // Using the queue to reset only the values needed
 // Also takes care of resetting cutof
 // TODO rename to something like "ResetForNewFrame"
-__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, int *state_cost, float *d_cutoff) {
+__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, int *state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame) {
     int q_offset = *d_q_offset;
     int q_end = *d_q_end; 
 
@@ -353,8 +357,11 @@ __global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end,
     }
 
     // Avoiding a kernel call just to reset the cutoff
-    if(blockIdx.x == 0 && threadIdx.x == 0)
-        *d_cutoff = FLT_MAX; 
+    if(blockIdx.x == 0 && threadIdx.x == 0) {
+        *d_cutoff = FLT_MAX;
+        printf("5 %d %d\n", frame, *d_dbg_tok_num);
+        *d_dbg_tok_num = 0;
+    }
 }
 
 void CudaDecoder::ResetLookup() {
@@ -364,7 +371,7 @@ void CudaDecoder::ResetLookup() {
     block.x = 256;
     grid.x = DIV_ROUND_UP(size, block.x);
 
-    reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff);
+    reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff, d_dbg_tok_num, num_frames_decoded_);
 }
 
 
@@ -498,7 +505,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
 
     if(h_old_q_narcs) {
         if(!params.is_emitting 
-            && h_old_q_narcs < NONEM_LT_MAX_NARCS) { 
+            && (1 || h_old_q_narcs < NONEM_LT_MAX_NARCS)) { 
             NonEmittingLongTail(d_arc_offsets, params); 
 
             cudaCheckError();
@@ -511,7 +518,10 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
         }
 
         cudaStreamSynchronize(compute_st); 
-    }
+    } else if (num_frames_decoded_==0) done = true;
+
+    KALDI_VLOG(2) << num_frames_decoded_ << " " << h_old_q_narcs << " "
+      << *h_q_token_from_size ;
 
     cudaCheckError();
     return done;
@@ -568,7 +578,7 @@ as "d_q_arc_offset"
   __global__ void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
   *d_offsets, int *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
-  int *d_block_sums, int *d_block_sums_scan, int *h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done) {
+  int *d_block_sums, int *d_block_sums_scan, int *h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
 
        typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
        __shared__ typename BlockScan::TempStorage temp_storage;
@@ -582,6 +592,7 @@ as "d_q_arc_offset"
         int queue_size = queue_end - queue_offset;
 
         BaseFloat cutoff = *d_cutoff;
+        if ( threadIdx.x==0 && blockIdx.x==0) printf("1 %d %d %d %f\n", queue_size, queue_offset, queue_end, *d_cutoff);
 
         for(int block_offset = blockDim.x*blockIdx.x;
                 block_offset < queue_size;
@@ -601,6 +612,7 @@ as "d_q_arc_offset"
                         int end = d_offsets[state_idx+1];
                         degree = end - start;
                         d_q_arc_offset[idx-queue_offset] = start;
+                        if (d_dbg_tok_num) atomicAdd(d_dbg_tok_num, 1);
                     }
                 }
             }
@@ -676,7 +688,7 @@ as "d_q_arc_offset"
 
     compute_degrees_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_allTokenInfo, d_q_token_from, d_q_token_to, d_degrees_scan,
     d_offsets, d_state_cost, d_cutoff, d_q_arc_offset, d_block_sums_scan, d_block_sums_scan, h_q_token_from_narcs,
-    d_q_token_from_narcs, d_n_CTA_done);
+    d_q_token_from_narcs, d_n_CTA_done, d_dbg_tok_num);
   }
 
 
@@ -796,6 +808,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
 
     if(threadIdx.x == 0) {
         global_cutoff = *params.d_cutoff;
+        if ( threadIdx.x==0 && blockIdx.x==0) printf("2 %f\n",global_cutoff);
     }
 
     __syncthreads();
@@ -1207,6 +1220,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
     int old_q_size = new_q_offset - old_q_offset;  // move to end
     
     cutoff = *params.d_cutoff;
+    if ( threadIdx.x==0 && blockIdx.x==0) printf("3 %f %d\n",cutoff, old_q_size);
     
     // We'll switch queue at the beg of the loop
     // Cleaner that way - we need the offsets ready for
@@ -1382,6 +1396,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
         *params.d_q_token_to = new_q_end;
         *params.d_q_token_end = new_q_end;
         *params.d_cutoff = cutoff;
+    if ( threadIdx.x==0 && blockIdx.x==0) printf("4 %f %d\n",cutoff, *params.d_q_token_to-*params.d_q_token_from);
 
         *params.h_q_token_from_size = new_q_end - *params.d_q_token_from;
     }

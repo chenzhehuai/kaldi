@@ -319,6 +319,7 @@ class CudaDecoder {
 
   cudaEvent_t event;
   cudaStream_t st1;
+  int *d_dbg_tok_num;
 
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
 
