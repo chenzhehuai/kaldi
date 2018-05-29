@@ -37,6 +37,15 @@
 #include "itf/decodable-itf.h"
 #include "omp.h"
 
+#define __DEBUG__
+#ifdef __DEBUG__
+#define VERBOSE 5
+#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
+#else
+#define VERBOSE 0
+#define CUDA_PRINTF(format,...)
+#endif
+
 namespace kaldi {
   
 /** 

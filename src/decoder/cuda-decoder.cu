@@ -156,8 +156,6 @@ namespace kaldi {
     cudaMemcpy(arc_nextstates_d,arc_nextstates_h,arc_count*sizeof(StateId),cudaMemcpyHostToDevice);
     cudaMemcpy(arc_ilabels_d,arc_ilabels_h, arc_count*sizeof(int32),cudaMemcpyHostToDevice);
     
-    printf("narcs=%i \n", arc_count);
-
     cudaDeviceSynchronize();
     cudaCheckError();
 
@@ -166,7 +164,6 @@ namespace kaldi {
 
   void CudaFst::finalize() {
     nvtxRangePushA("CudaFst destructor");
-    printf("CudaFst::finalize()\n");
     cudaFreeHost(final_h);
     cudaFree(final_d);
     free(e_offsets_h);
@@ -190,8 +187,6 @@ namespace kaldi {
 
   CudaDecoder::CudaDecoder(const CudaFst &fst, const CudaDecoderConfig &config): fst_(fst), beam_(config.beam),
   bytes_cudaMalloc(0), max_tokens(config.max_tokens) {
-    printf("CudaDecoder2 Constructor\n");
-
     int max_token = config.max_tokens; // for CUB
 
     // Comments about variables are in the .h file
@@ -249,12 +244,12 @@ namespace kaldi {
   }
 
   CudaDecoder::~CudaDecoder() {
-        printf("CUDA DECODER DESTRUCTOR\n");
+        printf("CUDA DECODER DESTRUCTOR TODO\n");
       // TODO
   }
 
   void CudaDecoder::InitDecoding() {
-    printf("CUDA DECODER InitDecoding\n");
+    CUDA_PRINTF("CUDA DECODER InitDecoding\n");
 
 
     InitLookup();
@@ -287,15 +282,15 @@ namespace kaldi {
     cudaMemcpy(d_cutoff, &cutoff, sizeof(float), cudaMemcpyHostToDevice);
 
     cudaMemset(d_n_CTA_done, 0, sizeof(int));
+
+    cudaMemset(d_dbg_tok_num, 0, sizeof(int));
     
     cudaCheckError();
 
     debug_max_narcs = 0;
     num_frames_decoded_ = 0;
 
-    printf("CUDA DECODER InitDecoding 1/2\n");
     ProcessNonemitting();
-    printf("CUDA DECODER InitDecoding 2/2\n");
  }
 
 
@@ -359,7 +354,7 @@ __global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end,
     // Avoiding a kernel call just to reset the cutoff
     if(blockIdx.x == 0 && threadIdx.x == 0) {
         *d_cutoff = FLT_MAX;
-        printf("5 %d %d\n", frame, *d_dbg_tok_num);
+        CUDA_PRINTF("5 %d %d\n", frame, *d_dbg_tok_num);
         *d_dbg_tok_num = 0;
     }
 }
@@ -374,11 +369,42 @@ void CudaDecoder::ResetLookup() {
     reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff, d_dbg_tok_num, num_frames_decoded_);
 }
 
+bool CudaDecoder::Decode(DecodableInterface *decodable) {
+    KALDI_ASSERT(num_frames_decoded_ >= 0 &&
+        "You must call InitDecoding() before Decode()");
+    // num_frames_ready must be >= num_frames_decoded, or else
+    // the number of frames ready must have decreased (which doesn't
+    // make sense) or the decodable object changed between calls
+    // (which isn't allowed).
+    ComputeLogLikelihoods(decodable);
 
+    while (!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
+        //KALDI_LOG << "New frame";
+
+        cudaEventSynchronize(loglikelihood_evt);
+        std::swap(next_loglikelihoods_d, loglikelihoods_d);
+        num_frames_decoded_++; 
+        ComputeLogLikelihoods(decodable);
+
+        //KALDI_LOG << "Emitting, frame=" << num_frames_decoded_;
+        ProcessEmitting();
+
+        //KALDI_LOG << "Non Emitting";
+        ProcessNonemitting(); 
+
+
+        if(num_frames_decoded_ > 3) {
+            //KALDI_ASSERT(0); 
+        }
+
+        //computes log likelihoods for the next frame - check order
+    }   
+
+    nvtxRangePop();
+    return true;
+}
 void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
         int32 max_num_frames) {
-    printf("AdvanceDecoding\n");
-
     KALDI_ASSERT(num_frames_decoded_ >= 0 &&
         "You must call InitDecoding() before AdvanceDecoding()");
     int32 num_frames_ready = decodable->NumFramesReady();
@@ -417,8 +443,6 @@ void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
         //computes log likelihoods for the next frame - check order
     }   
 
-
-    printf("AdvanceDecoding Done\n");
     nvtxRangePop();
 }
 
@@ -519,8 +543,12 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
 
         cudaStreamSynchronize(compute_st); 
     } else if (num_frames_decoded_==0) done = true;
+    else {
+      if (!h_old_q_narcs) KALDI_LOG<<h_old_q_narcs << " " << params.is_emitting;
+      assert(h_old_q_narcs);
+    }
 
-    KALDI_VLOG(2) << num_frames_decoded_ << " " << h_old_q_narcs << " "
+    KALDI_VLOG(6) << num_frames_decoded_ << " " << h_old_q_narcs << " "
       << *h_q_token_from_size ;
 
     cudaCheckError();
@@ -592,7 +620,7 @@ as "d_q_arc_offset"
         int queue_size = queue_end - queue_offset;
 
         BaseFloat cutoff = *d_cutoff;
-        if ( threadIdx.x==0 && blockIdx.x==0) printf("1 %d %d %d %f\n", queue_size, queue_offset, queue_end, *d_cutoff);
+        if ( threadIdx.x==0 && blockIdx.x==0) CUDA_PRINTF("1 %d %d %d %f\n", queue_size, queue_offset, queue_end, *d_cutoff);
 
         for(int block_offset = blockDim.x*blockIdx.x;
                 block_offset < queue_size;
@@ -808,7 +836,6 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
 
     if(threadIdx.x == 0) {
         global_cutoff = *params.d_cutoff;
-        if ( threadIdx.x==0 && blockIdx.x==0) printf("2 %f\n",global_cutoff);
     }
 
     __syncthreads();
@@ -883,8 +910,6 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
         //the scan
 
         
-        //printf("thx=%i, next_state=%i, new_arc_idx=%i, arc_idx=%i \n", threadIdx.x, arc_next_state, new_q_idx_block,
-        //arc_idx);
 
         if(threadIdx.x == (EXPAND_ARCS_DIMX - 1)) {
             int total_block = new_q_idx_block + has_successor; // exclusive sum
@@ -906,8 +931,6 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
     
             params.d_q_info[new_q_index] = new_tok_info;
 
-            //printf("Posted one NOT NULL tok=%i to %i, arc_idx=%i, with pred=%i (q=%i), cost=%f\n", new_q_index,
-            //arc_next_state, arc_idx, prev_state, q_idx, total_cost);
         }
     }
 
@@ -998,8 +1021,6 @@ int *d_costs, BaseFloat *d_final, bool final) {
             cost += d_final[state];
         }
         
-        //printf("idx=%i, final=%i, cost=%f \n", idx, final, cost);
-
         d_costs[idx-q_offset] = floatToOrderedInt(cost);
     }
 
@@ -1067,25 +1088,17 @@ void __global__ get_best_path_kernel(int best_token_idx_in_all_tokens, StateId *
     int tok_idx = best_token_idx_in_all_tokens;
     int idx = 0;
 
-    //printf("start from %i \n", tok_idx);
-
-    printf("backtrack = ");
     while(tok_idx != INT_MIN) {
-        //printf("%i -> ", tok_idx);
         int state = d_all_tokens[tok_idx];
         int arc_idx = d_all_tokens_info[tok_idx].arc_idx;
-        //printf("state=%i, tok=%i, arc=%i \n", state, tok_idx, arc_idx);
-        //printf("at %i, arc=%i, state=%s  \n", idx, arc_idx, state);
         d_reversed_path[idx++] = arc_idx;
 
         int old_tok_idx = tok_idx; 
         tok_idx = d_all_tokens_info[tok_idx].prev_token;
         if(old_tok_idx <= tok_idx) 
-            printf("FAIL\n");
+            CUDA_PRINTF("FAIL\n");
     }
     
-    printf("\n");
-
     *path_size = idx;
 }
 
@@ -1109,12 +1122,12 @@ void __global__ get_best_path_kernel(int best_token_idx_in_all_tokens, StateId *
 
       int h_best_token_idx = isfinal ? arg_best_final : arg_best; 
       h_best_token_idx += h_curr_token_offset;
-  
-    printf("is final = %i \n", isfinal);
-    printf("curr token off=%i \n", h_curr_token_offset);
-    printf("best token idx=%i \n", h_best_token_idx);
-    printf("final costs : %f  final = %f \n", best_cost, best_cost_final);
-    printf("final costs idx : %i  final idx = %i \n", arg_best, arg_best_final);
+ 
+    CUDA_PRINTF("is final = %i \n", isfinal);
+    CUDA_PRINTF("curr token off=%i \n", h_curr_token_offset);
+    CUDA_PRINTF("best token idx=%i \n", h_best_token_idx);
+    CUDA_PRINTF("final costs : %f  final = %f \n", best_cost, best_cost_final);
+    CUDA_PRINTF("final costs idx : %i  final idx = %i \n", arg_best, arg_best_final);
 
     cudaMemset(d_path_size, 0, sizeof(int));
 
@@ -1122,7 +1135,7 @@ void __global__ get_best_path_kernel(int best_token_idx_in_all_tokens, StateId *
 
     cudaDeviceSynchronize();
 
-    printf("flush \n");
+    CUDA_PRINTF("flush \n");
     
     int h_path_size;
     cudaMemcpy(&h_path_size, d_path_size, sizeof(int), cudaMemcpyDeviceToHost);
@@ -1220,7 +1233,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
     int old_q_size = new_q_offset - old_q_offset;  // move to end
     
     cutoff = *params.d_cutoff;
-    if ( threadIdx.x==0 && blockIdx.x==0) printf("3 %f %d\n",cutoff, old_q_size);
+    if ( threadIdx.x==0 && blockIdx.x==0) CUDA_PRINTF("3 %f %d\n",cutoff, old_q_size);
     
     // We'll switch queue at the beg of the loop
     // Cleaner that way - we need the offsets ready for
@@ -1300,8 +1313,6 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             first = false;    
         }
 
-        //if(threadIdx.x == 0)
-        //    printf("narcs=%i \n", total_narcs);
 
         // We already sync'ed
 
@@ -1322,8 +1333,6 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             if(valid_input) {
                 //we can do better than that
                 int local_q_idx = binsearch_maxle(params.d_degrees_scan, th_idx, 0, old_q_size-1); 
-
-                //printf("thx=%i, q_idx=%i, oldqsize=%i, oldqoff=%i \n", threadIdx.x, q_idx, old_q_size, old_q_offset);
 
                 int lower_bound = params.d_degrees_scan[local_q_idx];
                 int arc_offset_start = params.d_q_arc_offsets[local_q_idx];
@@ -1385,6 +1394,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
         }
 
         __syncthreads(); // new_q_end
+        if ( threadIdx.x==0 && blockIdx.x==0) CUDA_PRINTF("4.0 %f %d\n",cutoff, *params.d_q_token_to-*params.d_q_token_from);
 
         old_q_size = new_q_end - new_q_offset; 
 
@@ -1396,7 +1406,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
         *params.d_q_token_to = new_q_end;
         *params.d_q_token_end = new_q_end;
         *params.d_cutoff = cutoff;
-    if ( threadIdx.x==0 && blockIdx.x==0) printf("4 %f %d\n",cutoff, *params.d_q_token_to-*params.d_q_token_from);
+    if ( threadIdx.x==0 && blockIdx.x==0) CUDA_PRINTF("4 %f %d\n",cutoff, *params.d_q_token_to-*params.d_q_token_from);
 
         *params.h_q_token_from_size = new_q_end - *params.d_q_token_from;
     }
