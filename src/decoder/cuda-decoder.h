@@ -306,7 +306,7 @@ class CudaDecoder {
   // Descriptions in .cu file
 
   void InitLookup();
-  void ResetLookup();
+  void ResetLookup(bool reset = true);
   void NonEmittingLongTail(unsigned int *d_arc_offsets, const ExpandArcParams &params);
 
   void GetBestCost(BaseFloat *min, int *arg, bool isfinal) const;
