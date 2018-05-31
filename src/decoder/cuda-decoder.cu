@@ -42,6 +42,28 @@
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 namespace kaldi {
 
+// Used to trigger the fire&forget version of atomicMin (only av for int/long)
+HOST DEVICE uint floatToOrderedUInt(float floatVal) {
+    uint i_cost = *(uint*)( &floatVal );
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  else
+    i_cost = i_cost ^ 0x80000000;
+  return i_cost;
+
+}
+
+
+
+__host__ __device__ float orderedUIntToFloat(uint i_cost) {
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0x80000000;
+  else
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  return *(BaseFloat *) & i_cost;
+} 
+
+
   /***************************************CudaFst Implementation*****************************************/
   HOST DEVICE inline float CudaFst::Final(StateId state) const {
     #ifdef __CUDA_ARCH__
@@ -267,7 +289,8 @@ namespace kaldi {
     cudaMemcpy(d_allTokenInfo, &it_init, sizeof(InfoToken), cudaMemcpyHostToDevice);
 
     // We simulate a regular execution for the first iteration
-    cudaMemcpy(&d_state_cost[start_state], &(it_init.cost), sizeof(BaseFloat), cudaMemcpyHostToDevice);
+    uint init_v = floatToOrderedUInt(it_init.cost);
+    cudaMemcpy(&d_state_cost[start_state], &init_v, sizeof(BaseFloat), cudaMemcpyHostToDevice);
 
     cudaMemset(d_curr_token, 0, sizeof(int));
     cudaMemset(d_q_token_from, 0, sizeof(int));
@@ -294,30 +317,12 @@ namespace kaldi {
  }
 
 
-// Used to trigger the fire&forget version of atomicMin (only av for int/long)
-__device__ int floatToOrderedInt(float floatVal) {
-
-    int intVal = __float_as_int( floatVal );
-
-    return intVal; //(intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
-
-}
-
-
-
-__device__ float orderedIntToFloat(int intVal) {
-
-    return __int_as_float(intVal); //__int_as_float( (intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF );
-
-} 
-
-
 // Used before first frame
-__global__ void init_lookup_kernel(int *state_cost, int size) {
+__global__ void init_lookup_kernel(uint *state_cost, int size) {
     for(int idx = blockIdx.x*blockDim.x + threadIdx.x;
             idx < size;
             idx += blockDim.x*gridDim.x) {
-        state_cost[idx]  = floatToOrderedInt(FLT_MAX);
+        state_cost[idx]  = floatToOrderedUInt(FLT_MAX);
     }
 }
 
@@ -338,10 +343,16 @@ typedef CudaDecoder::StateId StateId;
 // Using the queue to reset only the values needed
 // Also takes care of resetting cutof
 // TODO rename to something like "ResetForNewFrame"
-__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, int *state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame, bool reset=true) {
+__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, uint *state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame, int* d_q_token_from_narcs, bool reset=true) {
     int q_offset = *d_q_offset;
     int q_end = *d_q_end; 
 
+    // Avoiding a kernel call just to reset the cutoff
+    if(blockIdx.x == 0 && threadIdx.x == 0) {
+        CUDA_PRINTF("5 %d %d %d %d %f %d\n", frame-reset, q_end- q_offset,*d_dbg_tok_num, !reset, *d_cutoff, *d_q_token_from_narcs); 
+        //reset shows the last iter is emit or not
+        *d_dbg_tok_num = 0;
+    }
     if (reset) {
     for(int idx = q_offset + blockIdx.x*blockDim.x + threadIdx.x;
             idx < q_end;
@@ -349,16 +360,12 @@ __global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end,
 
         StateId state = d_q[idx];
 
-        state_cost[state]  = floatToOrderedInt(FLT_MAX);
+        state_cost[state]  = floatToOrderedUInt(FLT_MAX);
     }
         if(blockIdx.x == 0 && threadIdx.x == 0) *d_cutoff = FLT_MAX;
     }
 
-    // Avoiding a kernel call just to reset the cutoff
-    if(blockIdx.x == 0 && threadIdx.x == 0) {
-        CUDA_PRINTF("5 %d %d %d %d\n", frame-reset, q_end- q_offset,*d_dbg_tok_num, !reset); //reset shows the last iter is emit or not
-        *d_dbg_tok_num = 0;
-    }
+
 }
 
 void CudaDecoder::ResetLookup(bool reset) {
@@ -368,7 +375,7 @@ void CudaDecoder::ResetLookup(bool reset) {
     block.x = 256;
     grid.x = DIV_ROUND_UP(size, block.x);
 
-    reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff, d_dbg_tok_num, num_frames_decoded_, reset);
+    reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff, d_dbg_tok_num, num_frames_decoded_, d_q_token_from_narcs, reset);
 }
 
 bool CudaDecoder::Decode(DecodableInterface *decodable) {
@@ -396,7 +403,7 @@ bool CudaDecoder::Decode(DecodableInterface *decodable) {
 
 
         if(num_frames_decoded_ > 3) {
-          break;
+          //break;
         }
 
         //computes log likelihoods for the next frame - check order
@@ -533,7 +540,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     bool done = false;
 
     if(h_old_q_narcs) {
-        if(!params.is_emitting 
+        if(!params.is_emitting  //TODO
             && (1 || h_old_q_narcs < NONEM_LT_MAX_NARCS)) { 
             NonEmittingLongTail(d_arc_offsets, params); 
 
@@ -610,7 +617,7 @@ as "d_q_arc_offset"
 #define COMPUTE_DEGREES_DIMX 256
   __global__ void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
-  *d_offsets, int *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
+  *d_offsets, uint *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
   int *d_block_sums, int *d_block_sums_scan, int *h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
 
        typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
@@ -639,7 +646,7 @@ as "d_q_arc_offset"
                 BaseFloat cost = d_q_info[idx].cost;
 
                 if(cost < cutoff) {
-                    BaseFloat best_cost = orderedIntToFloat(d_state_cost[state_idx]);
+                    BaseFloat best_cost = orderedUIntToFloat(d_state_cost[state_idx]);
                     if(cost == best_cost) {
                         int start = d_offsets[state_idx];
                         int end = d_offsets[state_idx+1];
@@ -699,13 +706,14 @@ as "d_q_arc_offset"
                         d_block_sums_scan[blk_idx] = blk_scan;
                     }
                     
+                    __syncthreads(); // blk_scan_offset + reuse temp_storage
                     if(threadIdx.x == (COMPUTE_DEGREES_DIMX-1)) {
                         int total = blk_scan + blk_sum;
                         blk_scan_offset = total;
                     }
 
-                    __syncthreads(); // blk_scan_offset + reuse temp_storage
                 }
+                    __syncthreads(); // blk_scan_offset + reuse temp_storage
 
             if(threadIdx.x == 0) {
                 *d_q_token_from_narcs = blk_scan_offset; // pinned memory
@@ -781,24 +789,17 @@ __forceinline__ __device__ int binsearch_maxle(const int *vec, const int val, in
 
 
 // Temporary used for cutoff - will be removed
-__device__ float fatomicMin(float *addr, float value)
+__device__ float fatomicMin(float *addr, float val)
 
 {
-
-    float old = *addr, assumed;
-    if(old <= value) return old;
-
-    do
-    {
-        assumed = old;
-        old = atomicCAS((unsigned int*)addr,
-                __float_as_int(assumed),
-                __float_as_int(value));
-
-    } while(old!=assumed);
-
-    return old;
-
+  uint32 *address_ui = (uint32  *)addr;
+  BaseFloat minval = *addr;
+  while (val < minval) {  // if my value is less than minimum
+    minval = val;         // update the minimum to my value locally
+    // write minimum and read back value
+    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val)));
+  } // if the new value is < the minimum I wrote I need to try again.
+  return minval;
 }
 
 typedef CudaDecoder::ExpandArcParams ExpandArcParams; // TODO
@@ -824,7 +825,7 @@ new end stays new end
 
 */
 
-void __global__ get_cutoff(ExpandArcParams params) {
+void __global__ get_cutoff(ExpandArcParams params, BaseFloat set = 0) {
     typedef cub::BlockScan<int, EXPAND_ARCS_DIMX> BlockScan;
     typedef cub::BlockReduce<BaseFloat, EXPAND_ARCS_DIMX> BlockReduce;
     
@@ -838,6 +839,10 @@ void __global__ get_cutoff(ExpandArcParams params) {
     const int old_q_offset = *params.d_q_token_from;
     const int old_q_size = *params.d_q_token_to - old_q_offset;
 
+    if (set) {
+      if ( threadIdx.x==0 && blockIdx.x==0) *params.d_cutoff = set;
+      return;
+    }
     if(threadIdx.x == 0) {
         global_cutoff = *params.d_cutoff;
     }
@@ -874,16 +879,17 @@ void __global__ get_cutoff(ExpandArcParams params) {
             int arc_ilabel = params.is_emitting ? params.arc_ilabels[arc_idx] : 0;
 
             BaseFloat accoustic_cost = (arc_ilabel != 0) ? -params.d_loglikelihoods[arc_ilabel] : 0.0; 
-            BaseFloat next_state_cost = orderedIntToFloat(params.d_lookup[arc_next_state]);
+            BaseFloat next_state_cost = orderedUIntToFloat(params.d_lookup[arc_next_state]);
 
             BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
 
             total_cost = accoustic_cost + arc_weight + old_tok_cost;
-
+/*
             if(total_cost > next_state_cost) {
                 total_cost = FLT_MAX;
                 valid_input = false; 
             } 
+            */
         }
         
         BaseFloat thread_cutoff = (total_cost < FLT_MAX) ? (total_cost + params.beam) : FLT_MAX;
@@ -952,7 +958,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
             int arc_ilabel = params.is_emitting ? params.arc_ilabels[arc_idx] : 0;
 
             BaseFloat accoustic_cost = (arc_ilabel != 0) ? -params.d_loglikelihoods[arc_ilabel] : 0.0; 
-            BaseFloat next_state_cost = orderedIntToFloat(params.d_lookup[arc_next_state]);
+            BaseFloat next_state_cost = orderedUIntToFloat(params.d_lookup[arc_next_state]);
 
             BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
 
@@ -985,7 +991,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
 
         if(has_successor) {
             // reduce, not atomic (no return)
-            atomicMin(&params.d_lookup[arc_next_state], floatToOrderedInt(total_cost));
+            atomicMin(&params.d_lookup[arc_next_state], floatToOrderedUInt(total_cost));
         }
 
         int new_q_idx_block;
@@ -1046,7 +1052,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
 
 void CudaDecoder::ExpandArcs(int nthreads, const ExpandArcParams &params) {
     dim3 grid,block;
-    block.x = 256;
+    block.x = EXPAND_ARCS_DIMX;
     grid.x = DIV_ROUND_UP(nthreads, block.x);
 
     get_cutoff<<<grid,block,0,compute_st>>>(params);
@@ -1092,7 +1098,7 @@ __global__ void reached_final_kernel(StateId *d_q, const int *d_q_token_from, co
 
 #define FILL_COSTS_DIMX 256
 __global__ void fill_costs_kernel(StateId *d_q, InfoToken *d_q_it, const int *d_q_token_from, const int *d_q_token_to,
-int *d_costs, BaseFloat *d_final, bool final) {
+uint *d_costs, BaseFloat *d_final, bool final) {
     int q_offset = *d_q_token_from;
     int q_end = *d_q_token_to;
 
@@ -1106,7 +1112,7 @@ int *d_costs, BaseFloat *d_final, bool final) {
             cost += d_final[state];
         }
         
-        d_costs[idx-q_offset] = floatToOrderedInt(cost);
+        d_costs[idx-q_offset] = floatToOrderedUInt(cost);
     }
 
 }
@@ -1144,7 +1150,7 @@ void CudaDecoder::GetBestCost(BaseFloat *min, int *arg, bool isfinal) const {
 
     //InitLookup(); // reset lookup
 
-    //*min = orderedIntToFloat(h_argmin.value);
+    //*min = orderedUIntToFloat(h_argmin.value);
     *min = -10; // TODO switch back to real value once new kernel ready
     *arg = h_argmin.key;
 }
@@ -1354,10 +1360,9 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 int degree = 0;
                 if(cost < cutoff) {
-                    BaseFloat best_cost = orderedIntToFloat(params.d_lookup[state]);
-                    int cost_int = floatToOrderedInt(cost);
+                    BaseFloat best_cost = orderedUIntToFloat(params.d_lookup[state]);
 
-                    if(cost_int == params.d_lookup[state]) {
+                    if(cost == best_cost) {
                         int start = d_arc_offsets[state];
                         int end = d_arc_offsets[state+1];
                         degree = end - start;
@@ -1370,7 +1375,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             }
 
             __syncthreads();
-
+/*
             if ( threadIdx.x==0 && blockIdx.x==0) {
             for (int i=0; i<old_q_size ;i++) {
                   printf("%d ",params.d_degrees_scan[i]);
@@ -1378,6 +1383,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                 printf(" : %d\n",total_narcs);
             }
             __syncthreads();
+            */
             // Step 2 : Scan
 
             for(int block_off = 0;
@@ -1451,7 +1457,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 arc_next_state = params.arc_nextstates[arc_idx];
                 BaseFloat arc_weight = params.arc_weights[arc_idx];
-                BaseFloat next_state_cost = orderedIntToFloat(params.d_lookup[arc_next_state]);
+                BaseFloat next_state_cost = orderedUIntToFloat(params.d_lookup[arc_next_state]);
                 BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
 
                 total_cost = arc_weight + old_tok_cost;
@@ -1478,7 +1484,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             int has_successor = (total_cost < cutoff && valid_input) ? 1 : 0;
 
             if(has_successor) 
-                atomicMin(&params.d_lookup[arc_next_state], floatToOrderedInt(total_cost));
+                atomicMin(&params.d_lookup[arc_next_state], floatToOrderedUInt(total_cost));
             
 
             int new_q_idx_block;
