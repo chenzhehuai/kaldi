@@ -40,6 +40,8 @@
     }
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
+#define COMPUTE_DEGREES_DIMX 256
+#define EXPAND_ARCS_DIMX 256
 namespace kaldi {
 
 // Used to trigger the fire&forget version of atomicMin (only av for int/long)
@@ -235,7 +237,7 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     int max_token_frame = 5000000;
     // we could use same pointer
     cudaMalloc(&d_degrees_scan, max_token_frame * sizeof(int));
-    cudaMalloc(&d_block_sums_scan, (max_token_frame / 256 + 2)* sizeof(int)); // TODO remove hardcoded
+    cudaMalloc(&d_block_sums_scan, (max_token_frame / COMPUTE_DEGREES_DIMX + 2)* sizeof(int)); 
     cudaMalloc(&d_q_arc_offset, max_token_frame * sizeof(int));
 
     cudaMalloc(&loglikelihoods_d, sizeof(BaseFloat)*(fst_.max_ilabel+1));  
@@ -540,7 +542,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     bool done = false;
 
     if(h_old_q_narcs) {
-        if(!params.is_emitting  //TODO
+        if(!params.is_emitting  
             && (1 || h_old_q_narcs < NONEM_LT_MAX_NARCS)) { 
             NonEmittingLongTail(d_arc_offsets, params); 
 
@@ -614,7 +616,6 @@ as "d_q_arc_offset"
 
 */
 
-#define COMPUTE_DEGREES_DIMX 256
   __global__ void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
   *d_offsets, uint *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
@@ -802,9 +803,8 @@ __device__ float fatomicMin(float *addr, float val)
   return minval;
 }
 
-typedef CudaDecoder::ExpandArcParams ExpandArcParams; // TODO
+typedef CudaDecoder::ExpandArcParams ExpandArcParams; 
 
-#define EXPAND_ARCS_DIMX 256
 
 /*
 
