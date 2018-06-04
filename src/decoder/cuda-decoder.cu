@@ -42,7 +42,36 @@
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
 #define COMPUTE_DEGREES_DIMX 256
 #define EXPAND_ARCS_DIMX 256
+#define NONEM_LT_DIMX 1024
 namespace kaldi {
+
+// for speedup purpose, make them inline (5% 0.165->0.158)
+inline HOST DEVICE uint64_t pack (float cost, int ptr) {
+  // assert (!isnan(cost));
+  // assert (ptr >= 0 && ptr < 1L<<32);
+  uint32_t i_cost = *(uint32_t *)&cost;
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  else
+    i_cost = i_cost ^ 0x80000000;
+  return (uint64_t)i_cost << 32 | ptr;
+}
+
+// Unpacks a probability.
+inline HOST DEVICE float unpack_cost (uint64_t packed) {
+  uint32_t i_cost = packed >> 32;
+  if (i_cost & 0x80000000)
+    i_cost = i_cost ^ 0x80000000;
+  else
+    i_cost = i_cost ^ 0xFFFFFFFF;
+  return *(float *)&i_cost;
+}
+
+// Unpacks a back-pointer.
+inline HOST DEVICE int unpack_ptr (uint64_t packed) {
+  // assert (!(packed & 0x80000000));
+  return packed & 0x7FFFFFFF;
+}
 
 // Used to trigger the fire&forget version of atomicMin (only av for int/long)
 HOST DEVICE uint floatToOrderedUInt(float floatVal) {
@@ -245,7 +274,7 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     cudaMallocHost(&loglikelihoods_h, sizeof(BaseFloat)*(fst_.max_ilabel+1));  
 
 
-    cudaMalloc(&d_state_cost,sizeof(BaseFloat)*fst_.numStates);
+    cudaMalloc(&d_state_cost,sizeof(uint64)*fst_.numStates);
 
     cudaMallocHost(&h_reached_final, sizeof(int));
     cudaMallocHost(&h_q_token_from_narcs, sizeof(int));
@@ -290,9 +319,9 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     cudaMemcpy(d_allToken, &start_state, sizeof(StateId), cudaMemcpyHostToDevice);
     cudaMemcpy(d_allTokenInfo, &it_init, sizeof(InfoToken), cudaMemcpyHostToDevice);
 
+    uint64 packv = pack(it_init.cost, 0);
     // We simulate a regular execution for the first iteration
-    uint init_v = floatToOrderedUInt(it_init.cost);
-    cudaMemcpy(&d_state_cost[start_state], &init_v, sizeof(BaseFloat), cudaMemcpyHostToDevice);
+    cudaMemcpy(&d_state_cost[start_state], &packv, sizeof(uint64), cudaMemcpyHostToDevice);
 
     cudaMemset(d_curr_token, 0, sizeof(int));
     cudaMemset(d_q_token_from, 0, sizeof(int));
@@ -320,11 +349,11 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
 
 
 // Used before first frame
-__global__ void init_lookup_kernel(uint *state_cost, int size) {
+__global__ void init_lookup_kernel(uint64 *d_state_cost, int size) {
     for(int idx = blockIdx.x*blockDim.x + threadIdx.x;
             idx < size;
             idx += blockDim.x*gridDim.x) {
-        state_cost[idx]  = floatToOrderedUInt(FLT_MAX);
+        d_state_cost[idx]  = pack(FLT_MAX,-1);
     }
 }
 
@@ -345,7 +374,7 @@ typedef CudaDecoder::StateId StateId;
 // Using the queue to reset only the values needed
 // Also takes care of resetting cutof
 // TODO rename to something like "ResetForNewFrame"
-__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, uint *state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame, int* d_q_token_from_narcs, bool reset=true) {
+__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, uint64 *d_state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame, int* d_q_token_from_narcs, bool reset=true) {
     int q_offset = *d_q_offset;
     int q_end = *d_q_end; 
 
@@ -362,7 +391,7 @@ __global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end,
 
         StateId state = d_q[idx];
 
-        state_cost[state]  = floatToOrderedUInt(FLT_MAX);
+        d_state_cost[state]  = pack(FLT_MAX, -1);
     }
         if(blockIdx.x == 0 && threadIdx.x == 0) *d_cutoff = FLT_MAX;
     }
@@ -497,9 +526,11 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     cudaStreamSynchronize(compute_st);
     // last time we use the lookup for old_q is in compute degrees
     ResetLookup(is_emitting); //TODO
+    /*
     if(is_emitting) {
         InitLookup();
     }
+    */
 
     // Finalize the scan 
     // partial scans + block offsets -> global scan
@@ -556,10 +587,15 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
         }
 
         cudaStreamSynchronize(compute_st); 
-    } else if (num_frames_decoded_==0) done = true;
+    } else if (!params.is_emitting) done = true;
     else {
-      if (!h_old_q_narcs) KALDI_LOG<<h_old_q_narcs << " " << params.is_emitting;
-      assert(h_old_q_narcs);
+      if (!h_old_q_narcs) {
+        BaseFloat cutoff;
+        cudaMemcpy(&cutoff, d_cutoff, sizeof(float), cudaMemcpyDeviceToHost);
+        KALDI_LOG<<h_old_q_narcs << " " << num_frames_decoded_ 
+        << " " << params.is_emitting << " " << cutoff;
+        assert(h_old_q_narcs);
+      }
     }
 
     KALDI_VLOG(6) << num_frames_decoded_ << " " << h_old_q_narcs << " "
@@ -618,7 +654,7 @@ as "d_q_arc_offset"
 
   __global__ void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
-  *d_offsets, uint *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
+  *d_offsets, uint64 *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
   int *d_block_sums, int *d_block_sums_scan, int *h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
 
        typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
@@ -647,8 +683,8 @@ as "d_q_arc_offset"
                 BaseFloat cost = d_q_info[idx].cost;
 
                 if(cost < cutoff) {
-                    BaseFloat best_cost = orderedUIntToFloat(d_state_cost[state_idx]);
-                    if(cost == best_cost) {
+                    int ptr= unpack_ptr(d_state_cost[state_idx]);
+                    if(ptr == idx) {
                         int start = d_offsets[state_idx];
                         int end = d_offsets[state_idx+1];
                         degree = end - start;
@@ -793,12 +829,11 @@ __forceinline__ __device__ int binsearch_maxle(const int *vec, const int val, in
 __device__ float fatomicMin(float *addr, float val)
 
 {
-  uint32 *address_ui = (uint32  *)addr;
   BaseFloat minval = *addr;
   while (val < minval) {  // if my value is less than minimum
     minval = val;         // update the minimum to my value locally
     // write minimum and read back value
-    val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val)));
+    val = atomicExch(addr, val);
   } // if the new value is < the minimum I wrote I need to try again.
   return minval;
 }
@@ -879,7 +914,6 @@ void __global__ get_cutoff(ExpandArcParams params, BaseFloat set = 0) {
             int arc_ilabel = params.is_emitting ? params.arc_ilabels[arc_idx] : 0;
 
             BaseFloat accoustic_cost = (arc_ilabel != 0) ? -params.d_loglikelihoods[arc_ilabel] : 0.0; 
-            BaseFloat next_state_cost = orderedUIntToFloat(params.d_lookup[arc_next_state]);
 
             BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
 
@@ -958,7 +992,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
             int arc_ilabel = params.is_emitting ? params.arc_ilabels[arc_idx] : 0;
 
             BaseFloat accoustic_cost = (arc_ilabel != 0) ? -params.d_loglikelihoods[arc_ilabel] : 0.0; 
-            BaseFloat next_state_cost = orderedUIntToFloat(params.d_lookup[arc_next_state]);
+            BaseFloat next_state_cost = unpack_cost(params.d_lookup[arc_next_state]);
 
             BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
 
@@ -989,11 +1023,6 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
 
         int has_successor = (total_cost < cutoff && valid_input) ? 1 : 0;
 
-        if(has_successor) {
-            // reduce, not atomic (no return)
-            atomicMin(&params.d_lookup[arc_next_state], floatToOrderedUInt(total_cost));
-        }
-
         int new_q_idx_block;
 
         BlockScan(temp_storage_scan).ExclusiveSum(has_successor, new_q_idx_block); // we could merge the reduce and
@@ -1022,6 +1051,12 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
             params.d_q_info[new_q_index] = new_tok_info;
 
         }
+        if(has_successor) {
+            // reduce, not atomic (no return)
+            atomicMin((unsigned long long *)&params.d_lookup[arc_next_state], (unsigned long long)pack(total_cost, new_q_index));
+        }
+
+
     }
 
 
@@ -1098,7 +1133,7 @@ __global__ void reached_final_kernel(StateId *d_q, const int *d_q_token_from, co
 
 #define FILL_COSTS_DIMX 256
 __global__ void fill_costs_kernel(StateId *d_q, InfoToken *d_q_it, const int *d_q_token_from, const int *d_q_token_to,
-uint *d_costs, BaseFloat *d_final, bool final) {
+uint64 *d_state_cost, BaseFloat *d_final, bool final) {
     int q_offset = *d_q_token_from;
     int q_end = *d_q_token_to;
 
@@ -1112,7 +1147,7 @@ uint *d_costs, BaseFloat *d_final, bool final) {
             cost += d_final[state];
         }
         
-        d_costs[idx-q_offset] = floatToOrderedUInt(cost);
+        d_state_cost[idx-q_offset] = pack(cost,idx);
     }
 
 }
@@ -1128,7 +1163,7 @@ void CudaDecoder::GetBestCost(BaseFloat *min, int *arg, bool isfinal) const {
     fill_costs_kernel<<<grid,block>>>(d_allToken, d_allTokenInfo,
     d_q_token_from, d_q_token_to, d_state_cost, fst_.final_d, isfinal);
 
-    cub::KeyValuePair<int, int> *d_argmin;
+    cub::KeyValuePair<int, uint64> *d_argmin;
     cudaMalloc(&d_argmin, sizeof(cub::KeyValuePair<int, int>));
     
     void *d_temp_storage_amin = NULL;
@@ -1140,7 +1175,7 @@ void CudaDecoder::GetBestCost(BaseFloat *min, int *arg, bool isfinal) const {
 
     cub::DeviceReduce::ArgMin(d_temp_storage_amin, temp_storage_amin_bytes, d_state_cost, d_argmin, *h_q_token_from_size);
 
-    cub::KeyValuePair<int, int> h_argmin;
+    cub::KeyValuePair<int, uint64> h_argmin;
 
     cudaMemcpy(&h_argmin, d_argmin, sizeof(cub::KeyValuePair<int, int>), cudaMemcpyDeviceToHost);
    
@@ -1294,7 +1329,6 @@ This kernel only uses one block, and is a free rider on the GPU
 */
 
 
-#define NONEM_LT_DIMX 1024
 __launch_bounds__(NONEM_LT_DIMX, 1)
 __global__ void process_nonem_longtail(unsigned int *d_arc_offsets, 
                                 ExpandArcParams params, int* d_dbg_tok_num) {
@@ -1339,7 +1373,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
         old_q_offset = new_q_offset;
         new_q_offset = new_q_end;
 
-        if(!first) {
+        if(1 || !first) {
 
             if(threadIdx.x == 0)  {
                 total_narcs = 0;
@@ -1360,9 +1394,9 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 int degree = 0;
                 if(cost < cutoff) {
-                    BaseFloat best_cost = orderedUIntToFloat(params.d_lookup[state]);
+                    int ptr = unpack_ptr(params.d_lookup[state]);
 
-                    if(cost == best_cost) {
+                    if(ptr == global_q_idx) {
                         int start = d_arc_offsets[state];
                         int end = d_arc_offsets[state+1];
                         degree = end - start;
@@ -1408,6 +1442,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                     int total_in_block = lscan + degree;
                     total_narcs += total_in_block;
                 }
+                __syncthreads();
 
             }
 
@@ -1457,7 +1492,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 arc_next_state = params.arc_nextstates[arc_idx];
                 BaseFloat arc_weight = params.arc_weights[arc_idx];
-                BaseFloat next_state_cost = orderedUIntToFloat(params.d_lookup[arc_next_state]);
+                BaseFloat next_state_cost = unpack_cost(params.d_lookup[arc_next_state]);
                 BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
 
                 total_cost = arc_weight + old_tok_cost;
@@ -1483,16 +1518,14 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
             int has_successor = (total_cost < cutoff && valid_input) ? 1 : 0;
 
-            if(has_successor) 
-                atomicMin(&params.d_lookup[arc_next_state], floatToOrderedUInt(total_cost));
-            
+           
 
-            int new_q_idx_block;
+            int new_q_idx_block, new_q_index;
 
             BlockScan(temp_storage_scan).ExclusiveSum(has_successor, new_q_idx_block);
 
             if(has_successor) {
-                int new_q_index = new_q_end + new_q_idx_block;
+                new_q_index = new_q_end + new_q_idx_block;
                 params.d_q[new_q_index] = arc_next_state;
 
                 InfoToken new_tok_info;
@@ -1502,6 +1535,9 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 params.d_q_info[new_q_index] = new_tok_info;
             }
+            if(has_successor) 
+                atomicMin((unsigned long long *)&params.d_lookup[arc_next_state], (unsigned long long )pack(total_cost, new_q_index));
+ 
             //if (has_successor || arc_idx == 8299288 || arc_idx == 8508243|| local_q_idx ==6 || local_q_idx ==7)
             //    printf("%d:%d:%f ", arc_idx, local_q_idx, total_cost);
 

@@ -200,7 +200,7 @@ class CudaDecoder {
       BaseFloat *d_loglikelihoods;
       BaseFloat beam; 
 
-      uint *d_lookup;
+      uint64 *d_lookup;
         
       bool is_emitting;
 
@@ -283,7 +283,7 @@ class CudaDecoder {
   // d_state_cost[state] -> best cost for that state
   // Resetted between frames
   // Costs is stored as an ordered int representing a float
-  uint *d_state_cost;
+  uint64 *d_state_cost;
 
   // Current cutoff for current frame
   BaseFloat *d_cutoff;
