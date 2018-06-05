@@ -39,11 +39,11 @@
 
 #define __DEBUG__
 #ifdef __DEBUG__
-#define VERBOSE 5
-#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
+#define VERBOSE 1
+#define CUDA_PRINTF(VB, format,...) if (VERBOSE > VB) printf( format, ##__VA_ARGS__)
 #else
 #define VERBOSE 0
-#define CUDA_PRINTF(format,...)
+#define CUDA_PRINTF(VB, format,...)
 #endif
 
 namespace kaldi {
