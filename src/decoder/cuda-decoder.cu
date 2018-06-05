@@ -286,7 +286,8 @@ DEVICE inline void grid_sync(int *barrier) {
     cudaMalloc(&d_q_token_to, sizeof(int));
     cudaMalloc(&d_q_token_end, sizeof(int));
 
-    cudaMallocManaged(&d_q_token_from_narcs, sizeof(int));
+    cudaMalloc(&d_q_token_from_narcs, sizeof(int));
+    cudaMallocHost(&h_q_token_from_narcs, sizeof(int));
   
     cudaMalloc(&d_allToken, config.max_tokens * sizeof(StateId));
     cudaMalloc(&d_allTokenInfo, config.max_tokens * sizeof(InfoToken));
@@ -553,6 +554,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     params.d_q_arc_offset = d_q_arc_offset;
     params.arc_ilabels = fst_.arc_ilabels_d;
     params.d_q_token_from_narcs = d_q_token_from_narcs;
+    params.h_q_token_from_narcs = h_q_token_from_narcs;
  
     params.arc_weights = fst_.arc_weights_d; 
     params.arc_nextstates = fst_.arc_nextstates_d; 
@@ -603,7 +605,8 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     //cudaEventSynchronize(q_token_from_narcs_evt);
             // TODO
     cudaStreamSynchronize(compute_st);
-    int h_old_q_narcs = *d_q_token_from_narcs;
+    int h_old_q_narcs = *h_q_token_from_narcs;
+    //cudaMemcpy(&h_old_q_narcs , d_q_token_from_narcs, sizeof(int), cudaMemcpyDeviceToHost); //TODO
 
 
     bool done = false;
@@ -691,7 +694,7 @@ as "d_q_arc_offset"
 DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
   *d_offsets, uint64 *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
-  int *d_block_sums, int *d_block_sums_scan,  int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
+  int *d_block_sums, int *d_block_sums_scan,  int * h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
 
        typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
        __shared__ typename BlockScan::TempStorage temp_storage;
@@ -789,6 +792,7 @@ DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int 
 
             if(threadIdx.x == 0) {
                 *d_q_token_from_narcs = blk_scan_offset; // TODO
+                *h_q_token_from_narcs = blk_scan_offset; // TODO
             }
         }
   }
@@ -827,7 +831,7 @@ void __global__ compute_degrees_with_reset_kernel(ExpandArcParams params, bool r
   compute_degrees_kernel(params.d_q, params.d_q_info,params.d_q_token_from, 
       params.d_q_token_to, params.d_degrees_scan, params.d_arc_offsets, 
       params.d_lookup, params.d_cutoff, params.d_q_arc_offset, 
-      params.d_block_sums_scan, params.d_block_sums_scan,  params.d_q_token_from_narcs, 
+      params.d_block_sums_scan, params.d_block_sums_scan,  params.h_q_token_from_narcs, params.d_q_token_from_narcs, 
       params.d_n_CTA_done, params.d_dbg_tok_num);
   grid_sync(params.barrier);
   reset_lookup_kernel(params.d_q, params.d_q_token_from, params.d_q_token_to, params.d_lookup, params.d_cutoff, params.d_dbg_tok_num, params.frame, params.d_q_token_from_narcs, reset);

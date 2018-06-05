@@ -212,6 +212,7 @@ class CudaDecoder {
       int *d_q_token_end;
 
       int *d_q_token_from_narcs; 
+      int *h_q_token_from_narcs;
 
       int *d_degrees_scan; 
 
@@ -278,7 +279,7 @@ class CudaDecoder {
   // Total number of arcs contained in the [from,to[ queue
   // ie total # of arcs from tok.next_state, where tok is in [from,to[
   // (actually one "valid arcs" are counted, cf ComputeDegrees)
-  int *d_q_token_from_narcs;
+  int *d_q_token_from_narcs, *h_q_token_from_narcs; // TODO
  
   // Host Pinned memory
   // size = to - from, total # of tokens in [from,to[
