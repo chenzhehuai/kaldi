@@ -40,9 +40,11 @@
     }
 
 #define DIV_ROUND_UP(a,b) ((a+b-1)/b)
-#define COMPUTE_DEGREES_DIMX 256
-#define EXPAND_ARCS_DIMX 256
+#define COMPUTE_DEGREES_DIMX 64
+#define EXPAND_ARCS_DIMX 64
 #define NONEM_LT_DIMX 1024
+// Below that value, we launch the persistent kernel for NonEmitting
+#define NONEM_LT_MAX_NARCS (4*NONEM_LT_DIMX) //4096
 namespace kaldi {
 
 // for speedup purpose, make them inline (5% 0.165->0.158)
@@ -503,8 +505,7 @@ void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
   }
 
 
-// Below that value, we launch the persistent kernel for NonEmitting
-#define NONEM_LT_MAX_NARCS 4096
+
 bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
                         bool is_emitting) {
 
@@ -522,7 +523,6 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     cudaEventRecord(q_token_from_narcs_evt, compute_st);
             cudaCheckError();
 
-    cudaStreamSynchronize(compute_st);
     // last time we use the lookup for old_q is in compute degrees
     ResetLookup(is_emitting); 
     /*
@@ -585,7 +585,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
             ExpandArcs(h_old_q_narcs, params);
         }
 
-        cudaStreamSynchronize(compute_st); 
+        //cudaStreamSynchronize(compute_st); 
     } else if (!params.is_emitting) done = true;
     else {
       if (!h_old_q_narcs) {
