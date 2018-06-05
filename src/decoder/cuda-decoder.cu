@@ -604,40 +604,22 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     // We need d_q_token_from_narcs to be ready
     //cudaEventSynchronize(q_token_from_narcs_evt);
             // TODO
-    cudaStreamSynchronize(compute_st);
-    int h_old_q_narcs = *h_q_token_from_narcs;
     //cudaMemcpy(&h_old_q_narcs , d_q_token_from_narcs, sizeof(int), cudaMemcpyDeviceToHost); //TODO
 
 
     bool done = false;
+    if(!params.is_emitting) {
+        NonEmittingLongTail(d_arc_offsets, params); 
 
-    if(h_old_q_narcs) {
-        if(!params.is_emitting  
-            && (h_old_q_narcs < NONEM_LT_MAX_NARCS)) { 
-            NonEmittingLongTail(d_arc_offsets, params); 
+        cudaCheckError();
 
-            cudaCheckError();
-
-            // Persistent kernel finishes the job
-            done = true;
-        }
-        else {
-            ExpandArcs(h_old_q_narcs, params);
-        }
-        if (params.is_emitting) cudaEventRecord(loglikelihood_processed_evt, compute_st);
-    } else if (!params.is_emitting) done = true;
-    else {
-      if (!h_old_q_narcs) {
-        BaseFloat cutoff;
-        cudaMemcpy(&cutoff, d_cutoff, sizeof(float), cudaMemcpyDeviceToHost);
-        KALDI_LOG<<h_old_q_narcs << " " << num_frames_decoded_ 
-        << " " << params.is_emitting << " " << cutoff;
-        assert(h_old_q_narcs);
-      }
+        // Persistent kernel finishes the job
+        done = true;
     }
-
-    KALDI_VLOG(6) << num_frames_decoded_ << " " << h_old_q_narcs << " "
-      << *h_q_token_from_size ;
+    else {
+        ExpandArcs(1e5, params); // TODO
+    }
+    if (params.is_emitting) cudaEventRecord(loglikelihood_processed_evt, compute_st);
 
     cudaCheckError();
     return done;
