@@ -97,6 +97,34 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
 } 
 
 
+// Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
+// No stream priorities
+static DEVICE inline void _grid_sync(volatile int *fast_epoch) {
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    // gridDim.x-1 blocks are adding 1
+    // and one block is adding 0x80000000 - (gridDim.x-1)
+    // so the whole sum is 0x80000000
+    int nb = 1;
+    if (blockIdx.x == 0) {
+      nb = 0x80000000 - (gridDim.x - 1);
+    }
+    int old_epoch = *fast_epoch;
+    __threadfence();
+    atomicAdd((int*)fast_epoch, nb);
+    // wait for the sign bit to commute
+    int cnt = 0;
+    while (((*fast_epoch) ^ old_epoch) >= 0) ;
+  }
+  __syncthreads();
+}
+
+DEVICE inline void grid_sync(int *barrier) {
+  _grid_sync((volatile int*)barrier);
+}
+
+
+
   /***************************************CudaFst Implementation*****************************************/
   HOST DEVICE inline float CudaFst::Final(StateId state) const {
     #ifdef __CUDA_ARCH__
@@ -251,14 +279,14 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
 
     cudaEventCreate(&loglikelihood_evt);
     cudaEventCreate(&loglikelihood_processed_evt);
-    cudaEventCreate(&q_token_from_narcs_evt);
+    //cudaEventCreate(&q_token_from_narcs_evt);
 
     cudaMalloc(&d_curr_token, sizeof(int));
     cudaMalloc(&d_q_token_from, sizeof(int));
     cudaMalloc(&d_q_token_to, sizeof(int));
     cudaMalloc(&d_q_token_end, sizeof(int));
 
-    cudaMalloc(&d_q_token_from_narcs, sizeof(int));
+    cudaMallocManaged(&d_q_token_from_narcs, sizeof(int));
   
     cudaMalloc(&d_allToken, config.max_tokens * sizeof(StateId));
     cudaMalloc(&d_allTokenInfo, config.max_tokens * sizeof(InfoToken));
@@ -280,7 +308,6 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     cudaMalloc(&d_state_cost,sizeof(uint64)*fst_.numStates);
 
     cudaMallocHost(&h_reached_final, sizeof(int));
-    cudaMallocHost(&h_q_token_from_narcs, sizeof(int));
 
     // TODO use directly pinned, no device mem
     // TODO hardcoded params
@@ -293,7 +320,9 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     cudaMalloc(&d_n_CTA_done, sizeof(int));
 
     cudaMalloc((void**)&d_dbg_tok_num,1*sizeof(int32)); 
+    cudaMalloc((void**)&d_barrier,1*sizeof(int32)); 
     cudaMemset(d_dbg_tok_num, 0, sizeof(int));
+    cudaMemset(d_barrier, 0, sizeof(int));
 
 
     cudaCheckError();
@@ -341,6 +370,7 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     cudaMemset(d_n_CTA_done, 0, sizeof(int));
 
     cudaMemset(d_dbg_tok_num, 0, sizeof(int));
+    cudaMemset(d_barrier, 0, sizeof(int));
     
     cudaCheckError();
 
@@ -376,7 +406,7 @@ typedef CudaDecoder::StateId StateId;
 // Used to reset lookup table between frames
 // Using the queue to reset only the values needed
 // Also takes care of resetting cutof
-__global__ void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, uint64 *d_state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame, int* d_q_token_from_narcs, bool reset=true) {
+DEVICE void reset_lookup_kernel(StateId *d_q, int *d_q_offset, int *d_q_end, uint64 *d_state_cost, float *d_cutoff, int *d_dbg_tok_num, int frame, int* d_q_token_from_narcs, bool reset=true) {
     int q_offset = *d_q_offset;
     int q_end = *d_q_end; 
 
@@ -408,7 +438,8 @@ void CudaDecoder::ResetLookup(bool reset) {
     block.x = 256;
     grid.x = DIV_ROUND_UP(size, block.x);
 
-    reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff, d_dbg_tok_num, num_frames_decoded_, d_q_token_from_narcs, reset);
+    assert(0);
+    //reset_lookup_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_q_token_from, d_q_token_to, d_state_cost, d_cutoff, d_dbg_tok_num, num_frames_decoded_, d_q_token_from_narcs, reset);
 }
 
 bool CudaDecoder::Decode(DecodableInterface *decodable) {
@@ -424,6 +455,7 @@ bool CudaDecoder::Decode(DecodableInterface *decodable) {
     while (!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
         //KALDI_LOG << "New frame";
 
+        //computes log likelihoods for the next frame - check order
         cudaEventSynchronize(loglikelihood_processed_evt);
         cudaEventSynchronize(loglikelihood_evt);
         std::swap(next_loglikelihoods_d, loglikelihoods_d);
@@ -435,13 +467,6 @@ bool CudaDecoder::Decode(DecodableInterface *decodable) {
 
         //KALDI_LOG << "Non Emitting";
         ProcessNonemitting(); 
-
-
-        if(num_frames_decoded_ > 3) {
-          //break;
-        }
-
-        //computes log likelihoods for the next frame - check order
     }   
 
     cudaStreamSynchronize(compute_st);
@@ -514,39 +539,6 @@ void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
 bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
                         bool is_emitting) {
 
-
-    // Compute degrees, reduce by key, apply cutoff
-    // Compute first part of the prefix sums of the degrees
-    // At the end of that step, the kernel
-    // set the value of h_q_token_from_narcs
-    // (the number of arcs in the current queue processed)
-    // TODO rename to something more explicit
-    ComputeDegrees(d_arc_offsets);
-    
-    // Recording an event to signal h_q_token_from_narcs 
-    // as ready to use 
-    cudaEventRecord(q_token_from_narcs_evt, compute_st);
-            cudaCheckError();
-
-    // last time we use the lookup for old_q is in compute degrees
-    ResetLookup(is_emitting); 
-    /*
-    if(is_emitting) {
-        InitLookup();
-    }
-    */
-
-    // Finalize the scan 
-    // partial scans + block offsets -> global scan
-    // If we want to speed up the binary search in expand
-    // This is where we can compute lower and upper bound 
-    // on the fly
-    FinalizeDegreesScan();
-    
-    // We need h_q_token_from_narcs to be ready
-    cudaEventSynchronize(q_token_from_narcs_evt);
-    int h_old_q_narcs = *h_q_token_from_narcs;
-
     ExpandArcParams params;
 
     params.d_q = d_allToken; 
@@ -558,7 +550,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
 
     params.d_degrees_scan = d_degrees_scan; 
 
-    params.d_q_arc_offsets = d_q_arc_offset;
+    params.d_q_arc_offset = d_q_arc_offset;
     params.arc_ilabels = fst_.arc_ilabels_d;
     params.d_q_token_from_narcs = d_q_token_from_narcs;
  
@@ -573,6 +565,46 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     params.d_curr_token = d_curr_token;
     params.h_q_token_from_size = h_q_token_from_size;
     params.d_n_CTA_done = d_n_CTA_done;
+    params.d_dbg_tok_num = d_dbg_tok_num;
+    params.barrier=d_barrier;
+    params.frame = num_frames_decoded_;
+    params.d_arc_offsets = d_arc_offsets;
+    params.d_block_sums_scan = d_block_sums_scan;
+
+    // Compute degrees, reduce by key, apply cutoff
+    // Compute first part of the prefix sums of the degrees
+    // At the end of that step, the kernel
+    // set the value of h_q_token_from_narcs
+    // (the number of arcs in the current queue processed)
+    // TODO rename to something more explicit
+    ComputeDegrees(params);
+    
+    
+    // Recording an event to signal h_q_token_from_narcs 
+    // as ready to use 
+    //cudaEventRecord(q_token_from_narcs_evt, compute_st);
+
+    // last time we use the lookup for old_q is in compute degrees
+    //ResetLookup(is_emitting); 
+    /*
+    if(is_emitting) {
+        InitLookup();
+    }
+    */
+
+    // Finalize the scan 
+    // partial scans + block offsets -> global scan
+    // If we want to speed up the binary search in expand
+    // This is where we can compute lower and upper bound 
+    // on the fly
+    //FinalizeDegreesScan();
+    
+    // We need d_q_token_from_narcs to be ready
+    //cudaEventSynchronize(q_token_from_narcs_evt);
+            // TODO
+    cudaStreamSynchronize(compute_st);
+    int h_old_q_narcs = *d_q_token_from_narcs;
+
 
     bool done = false;
 
@@ -655,10 +687,11 @@ as "d_q_arc_offset"
 
 */
 
-  __global__ void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
+
+DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
   *d_offsets, uint64 *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
-  int *d_block_sums, int *d_block_sums_scan, int *h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
+  int *d_block_sums, int *d_block_sums_scan,  int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
 
        typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
        __shared__ typename BlockScan::TempStorage temp_storage;
@@ -755,22 +788,10 @@ as "d_q_arc_offset"
                 }
 
             if(threadIdx.x == 0) {
-                *d_q_token_from_narcs = blk_scan_offset; // pinned memory
-                *h_q_token_from_narcs = blk_scan_offset; // pinned memory
+                *d_q_token_from_narcs = blk_scan_offset; // TODO
             }
         }
   }
-
-  void CudaDecoder::ComputeDegrees(unsigned int *d_offsets) {
-    dim3 grid,block;
-    block.x = COMPUTE_DEGREES_DIMX;
-    grid.x = DIV_ROUND_UP(*h_q_token_from_size, block.x);
-
-    compute_degrees_kernel<<<grid,block,0,compute_st>>>(d_allToken, d_allTokenInfo, d_q_token_from, d_q_token_to, d_degrees_scan,
-    d_offsets, d_state_cost, d_cutoff, d_q_arc_offset, d_block_sums_scan, d_block_sums_scan, h_q_token_from_narcs,
-    d_q_token_from_narcs, d_n_CTA_done, d_dbg_tok_num);
-  }
-
 
 /*
 
@@ -782,7 +803,7 @@ This can be done on the fly here, and removes main bottleneck of expand
 Not done for now, because expand is fast enough
 
 */
- __global__ void finalize_degrees_scan_kernel(int *d_scan, int *d_blk_scan, const int *d_q_token_from, const int
+DEVICE void finalize_degrees_scan_kernel(int *d_scan, int *d_blk_scan, const int *d_q_token_from, const int
   *d_q_token_to) {
 
         int q_off = *d_q_token_from;
@@ -801,14 +822,37 @@ Not done for now, because expand is fast enough
 
  }
 
+typedef CudaDecoder::ExpandArcParams ExpandArcParams; 
+void __global__ compute_degrees_with_reset_kernel(ExpandArcParams params, bool reset=true) {
+  compute_degrees_kernel(params.d_q, params.d_q_info,params.d_q_token_from, 
+      params.d_q_token_to, params.d_degrees_scan, params.d_arc_offsets, 
+      params.d_lookup, params.d_cutoff, params.d_q_arc_offset, 
+      params.d_block_sums_scan, params.d_block_sums_scan,  params.d_q_token_from_narcs, 
+      params.d_n_CTA_done, params.d_dbg_tok_num);
+  grid_sync(params.barrier);
+  reset_lookup_kernel(params.d_q, params.d_q_token_from, params.d_q_token_to, params.d_lookup, params.d_cutoff, params.d_dbg_tok_num, params.frame, params.d_q_token_from_narcs, reset);
+  finalize_degrees_scan_kernel(params.d_degrees_scan, params.d_block_sums_scan, params.d_q_token_from, params.d_q_token_to);
+
+}
   void CudaDecoder::FinalizeDegreesScan() {
       dim3 grid,block;
       block.x = COMPUTE_DEGREES_DIMX;
       grid.x = DIV_ROUND_UP(*h_q_token_from_size, block.x);
 
-      finalize_degrees_scan_kernel<<<grid,block,0,compute_st>>>(d_degrees_scan, d_block_sums_scan, d_q_token_from, d_q_token_to); 
+      assert(0);
+      //finalize_degrees_scan_kernel<<<grid,block,0,compute_st>>>(d_degrees_scan, d_block_sums_scan, d_q_token_from, d_q_token_to); 
   }
-    
+ 
+  void CudaDecoder::ComputeDegrees(const ExpandArcParams &params) {
+    dim3 grid,block;
+    block.x = COMPUTE_DEGREES_DIMX;
+    grid.x = DIV_ROUND_UP(*h_q_token_from_size, block.x);
+
+    compute_degrees_with_reset_kernel<<<grid,block,0,compute_st>>>(params, params.is_emitting);
+    cudaCheckError();
+  }
+
+   
 
 __forceinline__ __device__ int binsearch_maxle(const int *vec, const int val, int low, int high) {
     while(true) {
@@ -839,8 +883,6 @@ __device__ float fatomicMin(float *addr, float val)
   } // if the new value is < the minimum I wrote I need to try again.
   return minval;
 }
-
-typedef CudaDecoder::ExpandArcParams ExpandArcParams; 
 
 
 /*
@@ -905,7 +947,7 @@ void __global__ get_cutoff(ExpandArcParams params, BaseFloat set = 0) {
             int lower_bound = params.d_degrees_scan[q_idx - old_q_offset];
             prev_state = params.d_q[q_idx];
 
-            int arc_offset_start = params.d_q_arc_offsets[q_idx - old_q_offset];
+            int arc_offset_start = params.d_q_arc_offset[q_idx - old_q_offset];
             arc_idx = arc_offset_start + (block_offset + threadIdx.x - lower_bound);
 
             arc_next_state = params.arc_nextstates[arc_idx];
@@ -977,7 +1019,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
             int lower_bound = params.d_degrees_scan[q_idx - old_q_offset];
             prev_state = params.d_q[q_idx];
 
-            int arc_offset_start = params.d_q_arc_offsets[q_idx - old_q_offset];
+            int arc_offset_start = params.d_q_arc_offset[q_idx - old_q_offset];
             arc_idx = arc_offset_start + (block_offset + threadIdx.x - lower_bound);
 
             arc_next_state = params.arc_nextstates[arc_idx];
@@ -1371,7 +1413,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                         int start = d_arc_offsets[state];
                         int end = d_arc_offsets[state+1];
                         degree = end - start;
-                        params.d_q_arc_offsets[local_q_idx] = start;
+                        params.d_q_arc_offset[local_q_idx] = start;
                         if (d_dbg_tok_num) atomicAdd(d_dbg_tok_num, 1);
                     }
                 }
@@ -1453,7 +1495,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                 local_q_idx = binsearch_maxle(params.d_degrees_scan, th_idx, 0, old_q_size-1); // get from token idx
 
                 int lower_bound = params.d_degrees_scan[local_q_idx];
-                int arc_offset_start = params.d_q_arc_offsets[local_q_idx];
+                int arc_offset_start = params.d_q_arc_offset[local_q_idx];
                 q_idx = old_q_offset + local_q_idx;
 
                 arc_idx = arc_offset_start + (th_idx - lower_bound);

@@ -215,7 +215,7 @@ class CudaDecoder {
 
       int *d_degrees_scan; 
 
-      int *d_q_arc_offsets; 
+      int *d_q_arc_offset; 
       int *arc_ilabels; 
 
       BaseFloat *arc_weights; 
@@ -233,6 +233,11 @@ class CudaDecoder {
       int *h_q_token_from_size; // to be set at the end
 
       int *d_curr_token;
+      int *d_dbg_tok_num;
+      int *barrier;
+      int frame;
+      uint *d_arc_offsets;
+      int* d_block_sums_scan;
 };
 
     int debug_max_narcs;
@@ -241,7 +246,7 @@ class CudaDecoder {
 
   void DeviceScan(int *d_degrees, int h_prevTok_size, int *d_degrees_scan);
 
-  void ComputeDegrees(unsigned int *d_offsets);
+  void ComputeDegrees(const ExpandArcParams &params);
   void FinalizeDegreesScan();
 
   /// This will decode until there are no more frames ready in the decodable
@@ -284,7 +289,6 @@ class CudaDecoder {
   // ie total # of arcs from tok.next_state, where tok is in [from,to[
   // (actually one "valid arcs" are counted, cf ComputeDegrees)
 
-  int *h_q_token_from_narcs;
  
   // Scan of the outgoing arc degrees of tokens in [from,to[
   int *d_degrees_scan;
@@ -318,7 +322,7 @@ class CudaDecoder {
 
   // Streams, overlap likelihoods copies with compute
   cudaStream_t compute_st, copy_st;
-  cudaEvent_t loglikelihood_evt, loglikelihood_processed_evt, q_token_from_narcs_evt;
+  cudaEvent_t loglikelihood_evt, loglikelihood_processed_evt;
 
   //pre-computes log likelihoods for the current frame
   void ComputeLogLikelihoods(DecodableInterface *decodable);
@@ -353,6 +357,7 @@ class CudaDecoder {
   cudaEvent_t event;
   cudaStream_t st1;
   int *d_dbg_tok_num;
+  int *d_barrier;
 
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
 
