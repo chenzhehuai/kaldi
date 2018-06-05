@@ -37,6 +37,7 @@ ADDLIBS = ../decoder/kaldi-decoder.a ../lat/kaldi-lat.a ../lm/kaldi-lm.a \
           ../tree/kaldi-tree.a ../util/kaldi-util.a \
           ../matrix/kaldi-matrix.a ../base/kaldi-base.a
 
+ADDLIBS += ../cudamatrix/kaldi-cudamatrix.a
 
 TESTFILES =
 
