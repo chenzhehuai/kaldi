@@ -250,6 +250,7 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     cudaStreamCreate(&copy_st);
 
     cudaEventCreate(&loglikelihood_evt);
+    cudaEventCreate(&loglikelihood_processed_evt);
     cudaEventCreate(&q_token_from_narcs_evt);
 
     cudaMalloc(&d_curr_token, sizeof(int));
@@ -417,11 +418,13 @@ bool CudaDecoder::Decode(DecodableInterface *decodable) {
     // the number of frames ready must have decreased (which doesn't
     // make sense) or the decodable object changed between calls
     // (which isn't allowed).
+    PUSH_RANGE("CudaDecoder::Decode",1)
     ComputeLogLikelihoods(decodable);
 
     while (!decodable->IsLastFrame(num_frames_decoded_ - 1)) {
         //KALDI_LOG << "New frame";
 
+        cudaEventSynchronize(loglikelihood_processed_evt);
         cudaEventSynchronize(loglikelihood_evt);
         std::swap(next_loglikelihoods_d, loglikelihoods_d);
         num_frames_decoded_++; 
@@ -441,7 +444,9 @@ bool CudaDecoder::Decode(DecodableInterface *decodable) {
         //computes log likelihoods for the next frame - check order
     }   
 
+    cudaStreamSynchronize(compute_st);
     nvtxRangePop();
+    POP_RANGE
     return true;
 }
 void CudaDecoder::AdvanceDecoding(DecodableInterface *decodable,
@@ -584,8 +589,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
         else {
             ExpandArcs(h_old_q_narcs, params);
         }
-
-        //cudaStreamSynchronize(compute_st); 
+        if (params.is_emitting) cudaEventRecord(loglikelihood_processed_evt, compute_st);
     } else if (!params.is_emitting) done = true;
     else {
       if (!h_old_q_narcs) {

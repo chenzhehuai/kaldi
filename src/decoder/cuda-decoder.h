@@ -46,6 +46,30 @@
 #define CUDA_PRINTF(VB, format,...)
 #endif
 
+#define USE_NVTX
+#ifdef USE_NVTX
+#include "nvToolsExt.h"
+const uint32 colors[] = {0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff,
+                           0x0000ffff, 0x00ff0000, 0x00ffffff};
+const int32 num_colors = sizeof(colors) / sizeof(uint32);
+
+#define PUSH_RANGE(name,cid) do { \
+      int32 color_id = cid; \
+      color_id = color_id%num_colors;\
+      nvtxEventAttributes_t eventAttrib = {0}; \
+      eventAttrib.version = NVTX_VERSION; \
+      eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+      eventAttrib.colorType = NVTX_COLOR_ARGB; \
+      eventAttrib.color = colors[color_id]; \
+      eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+      eventAttrib.message.ascii = name; \
+      nvtxRangePushEx(&eventAttrib); \
+} while (0);
+#define POP_RANGE nvtxRangePop();
+#else
+#define PUSH_RANGE(name,cid)
+#define POP_RANGE
+#endif
 namespace kaldi {
   
 /** 
@@ -294,7 +318,7 @@ class CudaDecoder {
 
   // Streams, overlap likelihoods copies with compute
   cudaStream_t compute_st, copy_st;
-  cudaEvent_t loglikelihood_evt, q_token_from_narcs_evt;
+  cudaEvent_t loglikelihood_evt, loglikelihood_processed_evt, q_token_from_narcs_evt;
 
   //pre-computes log likelihoods for the current frame
   void ComputeLogLikelihoods(DecodableInterface *decodable);
