@@ -171,6 +171,23 @@ bool DecodeUtteranceLatticeFasterCuda(
   double *like_ptr,
   Lattice* olat);
 
+bool DecodeUtteranceLatticeFasterCuda(
+  FasterLatticeFasterDecoderCuda &decoder, // not const but is really an input.
+  DecodableInterface &decodable, // not const but is really an input.
+  const TransitionModel &trans_model,
+  const fst::SymbolTable *word_syms,
+  std::string utt,
+  double acoustic_scale,
+  bool determinize,
+  bool allow_partial,
+  Int32VectorWriter *alignment_writer,
+  Int32VectorWriter *words_writer,
+  CompactLatticeWriter *compact_lattice_writer,
+  LatticeWriter *lattice_writer,
+  double *like_ptr,
+  Lattice* olat);
+
+
 // GPU decoding interface of outputting lattice
 // use a separate interface is to do the output in a critical section
 // e.g. using #pragma omp critical { }

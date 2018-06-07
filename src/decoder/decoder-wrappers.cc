@@ -388,6 +388,59 @@ bool DecodeUtteranceLatticeFasterCuda(
   return true;
 }
 
+bool DecodeUtteranceLatticeFasterCuda(
+  FasterLatticeFasterDecoderCuda &decoder, // not const but is really an input.
+  DecodableInterface &decodable, // not const but is really an input.
+  const TransitionModel &trans_model,
+  const fst::SymbolTable *word_syms,
+  std::string utt,
+  double acoustic_scale,
+  bool determinize,
+  bool allow_partial,
+  Int32VectorWriter *alignment_writer,
+  Int32VectorWriter *words_writer,
+  CompactLatticeWriter *compact_lattice_writer,
+  LatticeWriter *lattice_writer,
+  double *like_ptr,
+  Lattice* olat) { // puts utterance's like in like_ptr on success.
+  using fst::VectorFst;
+
+  if (!decoder.Decode(&decodable)) {
+    KALDI_WARN << "Failed to decode file " << utt;
+    return false;
+  }
+  if (!decoder.ReachedFinal()) {
+    if (allow_partial) {
+      KALDI_WARN << "Outputting partial output for utterance " << utt
+                 << " since no final-state reached\n";
+    } else {
+      KALDI_WARN << "Not producing output for utterance " << utt
+                 << " since no final-state reached and "
+                 << "--allow-partial=false.\n";
+      return false;
+    }
+  }
+
+  PUSH_RANGE("post_decoding", 0);
+  Timer timer;
+
+  // Get lattice, and do determinization if requested.
+  PUSH_RANGE("get_lattice", 1);
+  Lattice& lat = *olat;
+  decoder.GetRawLattice(&lat);
+  if (lat.NumStates() == 0)
+    KALDI_WARN << "Unexpected problem getting lattice for utterance " << utt;
+  else fst::Connect(&lat);
+  POP_RANGE
+
+  double t4 = timer.Elapsed();
+  KALDI_VLOG(1) << "post_decoding: " << t4;
+
+
+  POP_RANGE
+
+  return true;
+}
 // GPU decoding interface of outputting lattice
 // use a separate interface is to do the output in a critical section
 // e.g. using #pragma omp critical { }
