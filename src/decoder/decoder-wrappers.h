@@ -29,6 +29,7 @@
 
 #if HAVE_CUDA == 1
 #include "decoder/lattice-faster-decoder-cuda.h"
+#include "decoder/faster-lattice-faster-decoder-cuda.h"
 #endif
 
 // This header contains declarations from various convenience functions that are called
@@ -171,7 +172,7 @@ bool DecodeUtteranceLatticeFasterCuda(
   double *like_ptr,
   Lattice* olat);
 
-bool DecodeUtteranceLatticeFasterCuda(
+bool DecodeUtteranceFasterLatticeFasterCuda(
   FasterLatticeFasterDecoderCuda &decoder, // not const but is really an input.
   DecodableInterface &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
@@ -207,6 +208,27 @@ bool DecodeUtteranceLatticeFasterCudaOutput(
   double *like_ptr,
   Lattice& lat,
   Mutex *examples_mutex_ = NULL);
+
+// GPU decoding interface of outputting lattice
+// use a separate interface is to do the output in a critical section
+// e.g. using #pragma omp critical { }
+bool DecodeUtteranceFasterLatticeFasterCudaOutput(
+  FasterLatticeFasterDecoderCuda &decoder, // not const but is really an input.
+  DecodableInterface &decodable, // not const but is really an input.
+  const TransitionModel &trans_model,
+  const fst::SymbolTable *word_syms,
+  std::string utt,
+  double acoustic_scale,
+  bool determinize,
+  bool allow_partial,
+  Int32VectorWriter *alignment_writer,
+  Int32VectorWriter *words_writer,
+  CompactLatticeWriter *compact_lattice_writer,
+  LatticeWriter *lattice_writer,
+  double *like_ptr,
+  Lattice& lat,
+  Mutex *examples_mutex_ = NULL);
+
 #endif
 
 /// This function DecodeUtteranceLatticeFaster is used in several decoders, and

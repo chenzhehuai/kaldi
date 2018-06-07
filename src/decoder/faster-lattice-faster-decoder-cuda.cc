@@ -23,7 +23,7 @@
 #include "lat/lattice-functions.h"
 
 #include "cuda-decoder-utils.h"
-#include "decoder/lattice-faster-decoder-cuda.h"
+#include "decoder/faster-lattice-faster-decoder-cuda.h"
 
 namespace kaldi {
 
@@ -92,7 +92,7 @@ bool FasterLatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
       //KALDI_LOG << "Non Emitting";
       decoder_.ProcessNonemitting(); 
   }   
-  assert(decoder_.NumFramesDecoded == num_frames_decoded_);
+  assert(decoder_.NumFramesDecoded() == num_frames_decoded_);
 
   cuToken* toks_buf;
   int* toks_sidx;
@@ -222,6 +222,10 @@ void FasterLatticeFasterDecoderCuda::FinalProcessLattice(
     int32 cur_toks_size = toks_sidx[j + 1] - toks_sidx[j];
     Token* newtoks = active_toks_perframe_[j];
     int32 survive = 0;
+    if (j == num_frames_decoded_) {
+      last_tokv_ = toks_buf +toks_sidx[j];
+    }
+
     for (int32 i = 0; i < cur_toks_size;
          i++) { // always add into active_toks_map_, the newer key will replace the older
       cuToken& cur_tok = toks_buf[toks_sidx[j] + i];
@@ -613,7 +617,7 @@ void FasterLatticeFasterDecoderCuda::ComputeFinalCosts(
 
   // TODO
   assert(0);
-  cuToken *cur_toks = active_toks_perframe_[NumFramesDecoded()];
+  cuToken *cur_toks = last_tokv_;
   for (int32 i = 0; i < active_toks_size_perframe_[NumFramesDecoded()]; i++) {
     StateId state = cur_toks[i].GetStateId(decoder_.fst_.arc_nextstates_h);
     Token* tok = ActiveToksMap(NumFramesDecoded(), i);

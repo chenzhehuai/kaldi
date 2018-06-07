@@ -39,9 +39,8 @@ class FasterLatticeFasterDecoderCuda {
   typedef Arc::Label Label;
   typedef Arc::StateId StateId;
   typedef Arc::Weight Weight;
-  typedef CudaLatticeDecoder::Token cuToken;
-  typedef CudaLatticeDecoder::TokenState TokenState;
-  typedef CudaLatticeDecoder::LatLink LatLink;
+  typedef CudaLatticeFasterDecoder::Token cuToken;
+  typedef CudaLatticeFasterDecoder::LatLink LatLink;
 
   // instantiate this class once for each thing you have to decode.
   FasterLatticeFasterDecoderCuda(const CudaFst &fst,
@@ -53,10 +52,10 @@ class FasterLatticeFasterDecoderCuda {
 
   void InitDecoding(); // CPU decoding init
 
-  const CudaLatticeDecoderConfig& GetOptions() const {
+  const CudaLatticeFasterDecoderConfig& GetOptions() const {
     return config_;
   }
-  const CudaLatticeDecoder &Decoder() const { return decoder_; }
+  const CudaLatticeFasterDecoder &Decoder() const { return decoder_; }
 
   // Decodes until there are no more frames left in the "decodable" object..
   // note, this may block waiting for input if the "decodable" object blocks.
@@ -200,7 +199,7 @@ class FasterLatticeFasterDecoderCuda {
   int32 AddLatticeArcs(int32 proc_frame);
 
   // final process lattice in CPU
-  void FinalProcessLattice(cuTokenVector* last_toks, cuToken* toks_buf,
+  void FinalProcessLattice(cuToken* toks_buf,
                            int* toks_sidx, LatLink* arcs_buf, int* arcs_size, 
                            int32 proc_frame);
 
@@ -285,13 +284,13 @@ class FasterLatticeFasterDecoderCuda {
 
 
  private:
-  const CudaLatticeDecoderConfig &config_;
+  const CudaLatticeFasterDecoderConfig &config_;
   const CudaFst& fst_;
   bool delete_fst_;
 
   int32 num_toks_; // current total number of toks allocated
   int32 num_frames_decoded_;
-  CudaLatticeDecoder decoder_; // GPU decoder
+  CudaLatticeFasterDecoder decoder_; // GPU decoder
 
   // used to index tokens by (frame, index), see ActiveToksMap() for details
   std::vector<Token*> active_toks_perframe_;
@@ -301,6 +300,7 @@ class FasterLatticeFasterDecoderCuda {
   std::vector<int> active_arcs_size_perframe_; // size of arcs in each frame
   Token* toks_buf_; // as GPU is so fast, we need to pre-allocate toks
   int32 toks_buf_used_;
+  cuToken* last_tokv_;
 
   // below definitions are the same to lattice-faster-decoder.h
 

@@ -20,54 +20,8 @@
 #ifndef KALDI_CUDA_LATTICE_FASTER_DECODER_H_
 #define KALDI_CUDA_LATTICE_FASTER_DECODER_H_
 
-#ifdef __CUDACC__
-  #define HOST __host__
-  #define DEVICE __device__
+#include "cuda-decoder-utils.h"
 
-#else
-  #define HOST
-  #define DEVICE
-#endif
-
-#include "util/stl-utils.h"
-#include "fst/fstlib.h"
-#include "lat/kaldi-lattice.h"
-#include "itf/decodable-itf.h"
-#include "omp.h"
-
-#define __DEBUG__
-#ifdef __DEBUG__
-#define VERBOSE 1
-#define CUDA_PRINTF(VB, format,...) if (VERBOSE > VB) printf( format, ##__VA_ARGS__)
-#else
-#define VERBOSE 0
-#define CUDA_PRINTF(VB, format,...)
-#endif
-
-#define USE_NVTX
-#ifdef USE_NVTX
-#include "nvToolsExt.h"
-const uint32 colors[] = {0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff,
-                           0x0000ffff, 0x00ff0000, 0x00ffffff};
-const int32 num_colors = sizeof(colors) / sizeof(uint32);
-
-#define PUSH_RANGE(name,cid) do { \
-      int32 color_id = cid; \
-      color_id = color_id%num_colors;\
-      nvtxEventAttributes_t eventAttrib = {0}; \
-      eventAttrib.version = NVTX_VERSION; \
-      eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
-      eventAttrib.colorType = NVTX_COLOR_ARGB; \
-      eventAttrib.color = colors[color_id]; \
-      eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
-      eventAttrib.message.ascii = name; \
-      nvtxRangePushEx(&eventAttrib); \
-} while (0);
-#define POP_RANGE nvtxRangePop();
-#else
-#define PUSH_RANGE(name,cid)
-#define POP_RANGE
-#endif
 namespace kaldi {
 
 #define LAT_BUF_SIZE 2
@@ -77,7 +31,7 @@ namespace kaldi {
  * Simple Cuda Decoder
  */
 class CudaLatticeFasterDecoder;
-
+/*
 class CudaFst {
   public:
     typedef fst::StdArc StdArc;
@@ -123,6 +77,7 @@ class CudaFst {
     //allocation size
     size_t bytes_cudaMalloc;
 };
+*/
 
 struct CudaLatticeFasterDecoderConfig {
   BaseFloat gpu_fraction;
@@ -141,7 +96,7 @@ struct CudaLatticeFasterDecoderConfig {
   int32 mem_print_freq;
   int32 verbose;
   
-  CudaLatticeDecoderConfig(): 
+  CudaLatticeFasterDecoderConfig(): 
                        gpu_fraction(1.0/8.0),
                        lat_fraction(1.0/2.0),
                        max_tokens_per_frame(800000),
@@ -196,10 +151,10 @@ struct CudaLatticeFasterDecoderConfig {
   }
 };
 
-
-#define Token InfoToken
+class CudaLatticeFasterDecoder {
+ public:
 // align to 16 bits so as to fast memcpy, see store16()
-class __align__(16) InfoToken {
+class __align__(16) Token {
  public:
   BaseFloat cost_; // used in total_cost = acoustic_cost + arc_weight + old_tok_cost; in expand_arcs_kernel()
   BaseFloat extra_cost_acoustic_cost_; // acoustic_cost used in lat in compute_degrees_kernel(); extra_cost used in lattice pruning
@@ -213,10 +168,8 @@ class __align__(16) InfoToken {
                           cost_(cost), extra_cost_acoustic_cost_(acoustic_cost), 
                           prev_token_(prev_token), arc_idx_(arc_idx) {
     assert(sizeof(Token)==16); 
-    if(prev) {
-      cost_ += prev->cost_;
-    }
-  }
+}  
+
   HOST DEVICE Token() { } 
 
   HOST DEVICE bool operator < (const Token &other) {
@@ -225,7 +178,11 @@ class __align__(16) InfoToken {
   HOST DEVICE bool operator < (const Token &other) volatile{
     return cost_ > other.cost_;
   }
-  DEVICE Copy(const InfoToken &tok) {
+  HOST DEVICE int GetStateId(int *arc_nextstates) {
+    return arc_nextstates[arc_idx_];
+  }
+#ifdef __CUDACC__
+  DEVICE void Copy(const Token &tok) {
     fast_store16(this, &tok);
   }
   DEVICE BaseFloat GetAcousticAndInitExtraCost() {
@@ -233,10 +190,7 @@ class __align__(16) InfoToken {
     extra_cost_acoustic_cost_ = 0;
     return acoustic_cost;
   }
-  HOST DEVICE int GetStateId(int *arc_nextstates) {
-    return arc_nextstates[arc_idx_];
-  }
-
+#endif
 };
 
 
@@ -295,10 +249,11 @@ class __align__(16) LatLinkCompact {
   HOST DEVICE uint32 GetPrevTokId() {
     return is_emit_pack_prev_tok_id & (((uint32)1<<31) - 1);
   }
-  DEVICE Copy(const LatLinkCompact &arc) {
+#ifdef __CUDACC__
+  DEVICE void Copy(const LatLinkCompact &arc) {
     fast_store16(this, &arc);
   }
-
+#endif
  private:
   // a hack to contain both id & whether it is emit arc
   uint32 is_emit_pack_prev_tok_id;  
@@ -383,7 +338,7 @@ int32 id_exact, bool check) const;
   int* toks_bpr_fr_sidx_h;
   int* toks_num_used;
   // the GPU memory of lattice arcs is shared with LatLinkVector
-  // see CudaLatticeDecoder::CudaLatticeDecoder()
+  // see CudaLatticeFasterDecoder::CudaLatticeFasterDecoder()
   LatLinkCompact* arcs_bpr_d;
   // we keep start idx per-frame to fast index a arc by (frame, idx) pair
   int* arcs_bpr_fr_sidx_d; 
@@ -417,7 +372,6 @@ int32 id_exact, bool check) const;
   const BaseFloat *arc_weights;
 };
 
-class CudaLatticeFasterDecoder {
 
  public:
   typedef fst::StdArc StdArc;
@@ -468,7 +422,7 @@ class CudaLatticeFasterDecoder {
 
   struct ExpandArcParams {
       StateId *d_q; 
-      InfoToken *d_q_info; 
+      Token *d_q_info; 
 
       int *d_q_token_from; 
       int *d_q_token_to;
@@ -505,7 +459,9 @@ class CudaLatticeFasterDecoder {
 
       // lattice
       int *d_q_lat_end;
+      LatLinkCompact* lat_arcs_buf_;
       LatticeProcessor lattice_processor;
+      BaseFloat lattice_beam;
 };
 
     int debug_max_narcs;
@@ -529,7 +485,7 @@ class CudaLatticeFasterDecoder {
 
 
   StateId *d_allToken; 
-  InfoToken *d_allTokenInfo;
+  Token *d_allTokenInfo;
 
   // Used to detect last CTA alive in some kernels
   int *d_n_CTA_done;
@@ -632,7 +588,7 @@ class CudaLatticeFasterDecoder {
   // for lattice
   
  public:
-  void InitParams(ExpandArcParams &params);
+  void InitParams(ExpandArcParams &params, uint* d_arc_offsets, bool is_emitting);
   void FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx,
     LatLink** arcs_buf, int** arcs_fr_size);
 
@@ -644,6 +600,10 @@ class CudaLatticeFasterDecoder {
   int *d_q_lat_end; 
   LatticeProcessor lattice_processor_; 
   cudaStream_t stream_lat[LAT_BUF_SIZE]; // lattice processing and copying 
+  int total_threads;
+  BaseFloat lattice_beam_;
+
+  const CudaLatticeFasterDecoderConfig &config_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeFasterDecoder);
 };

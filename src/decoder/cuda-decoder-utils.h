@@ -33,6 +33,9 @@
 #include "math_constants.h"
 #include "omp.h"
 
+#include "lat/determinize-lattice-pruned.h"
+#include "lat/kaldi-lattice.h"
+#include "itf/decodable-itf.h"
 #include "util/stl-utils.h"
 #include "cudamatrix/cu-common.h"
 #include "cudamatrix/cu-device.h"
@@ -78,14 +81,13 @@ const int32 num_colors = sizeof(colors) / sizeof(uint32);
 #endif
 
 // decoder macro
-
 #define __DEBUG__
 #ifdef __DEBUG__
-#define VERBOSE 5
-#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
+#define VERBOSE 1
+#define CUDA_PRINTF(VB, format,...) if (VERBOSE > VB) printf( format, ##__VA_ARGS__)
 #else
 #define VERBOSE 0
-#define CUDA_PRINTF(format,...)
+#define CUDA_PRINTF(VB, format,...)
 #endif
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 600
@@ -114,13 +116,23 @@ void cuda_malloc_managed_preferred_device(void** devPtr, size_t size);
 
 // inline host device function definition
 
+union float_uint {
+  float f;
+  uint32 u;
+};
+inline HOST DEVICE uint32 float_as_uint(BaseFloat val) {
+  return ((float_uint*)&val)->u;
+}
+inline HOST DEVICE BaseFloat uint_as_float(uint32 val) {
+  return ((float_uint*)&val)->f;
+}
 // In atomic based token recombination, we pack the
 // cost and the arc index into an uint64 to represent the token
 // before recombination, with the former one in the higher bits
 // for comparison purpose.
 // for speedup purpose, make them inline (5% 0.165->0.158)
 inline HOST DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
-  uint32 i_cost = *(uint32 *) & cost;
+  uint32 i_cost = float_as_uint(cost);
   if (i_cost & 0x80000000)
     i_cost = i_cost ^ 0xFFFFFFFF;
   else
@@ -135,7 +147,7 @@ inline HOST DEVICE BaseFloat unpack_cost_from_uint64(uint64 packed) {
     i_cost = i_cost ^ 0x80000000;
   else
     i_cost = i_cost ^ 0xFFFFFFFF;
-  return *(BaseFloat *) & i_cost;
+  return uint_as_float(i_cost);
 }
 
 // Unpacks a idx for tracing the data
@@ -263,7 +275,7 @@ class CudaHistogram {
         BaseFloat ret_beam = i + beam_lowest_;
         *cutoff_from_hist = *best_cost_ + ret_beam;
         if (verbose > 2) {
-            CUDA_PRINTF("hist_LF %f %i\n", *cutoff_from_hist, acc);
+            CUDA_PRINTF(0, "hist_LF %f %i\n", *cutoff_from_hist, acc);
         }
         memset(hist_global_, 0, Size());
     }

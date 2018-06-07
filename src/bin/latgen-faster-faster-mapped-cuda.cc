@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
 
           double like;
           Lattice lat;
-          if (DecodeUtteranceLatticeFasterCuda(
+          if (DecodeUtteranceFasterLatticeFasterCuda(
                 decoder, decodable, trans_model, word_syms, utt,
                 acoustic_scale, determinize, allow_partial, &alignment_writer,
                 &words_writer, &compact_lattice_writer, &lattice_writer,
@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
           elapsed += timer.Elapsed();
           if (num_success % config.mem_print_freq == 0)
             get_free_memory_stat("");
-          DecodeUtteranceLatticeFasterCudaOutput(
+          DecodeUtteranceFasterLatticeFasterCudaOutput(
             decoder, decodable, trans_model, word_syms, utt,
             acoustic_scale, determinize, allow_partial, &alignment_writer,
             &words_writer, &compact_lattice_writer, &lattice_writer,

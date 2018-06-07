@@ -388,7 +388,7 @@ bool DecodeUtteranceLatticeFasterCuda(
   return true;
 }
 
-bool DecodeUtteranceLatticeFasterCuda(
+bool DecodeUtteranceFasterLatticeFasterCuda(
   FasterLatticeFasterDecoderCuda &decoder, // not const but is really an input.
   DecodableInterface &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
@@ -446,6 +446,96 @@ bool DecodeUtteranceLatticeFasterCuda(
 // e.g. using #pragma omp critical { }
 bool DecodeUtteranceLatticeFasterCudaOutput(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
+  DecodableInterface &decodable, // not const but is really an input.
+  const TransitionModel &trans_model,
+  const fst::SymbolTable *word_syms,
+  std::string utt,
+  double acoustic_scale,
+  bool determinize,
+  bool allow_partial,
+  Int32VectorWriter *alignment_writer,
+  Int32VectorWriter *words_writer,
+  CompactLatticeWriter *compact_lattice_writer,
+  LatticeWriter *lattice_writer,
+  double *like_ptr,
+  Lattice& lat,
+  Mutex *examples_mutex_) {
+  using fst::VectorFst;
+  // First do some stuff with word-level traceback...
+  VectorFst<LatticeArc> decoded;
+  double likelihood;
+  LatticeWeight weight;
+  int32 num_frames;
+  {
+    likelihood = -(weight.Value1() + weight.Value2());
+  }
+
+  PUSH_RANGE("get_lattice_shortest", 5);
+  if (!decoder.GetBestPath(&decoded))
+    // Shouldn't really reach this point as already checked success.
+    KALDI_WARN << "Failed to get traceback for utterance " << utt;
+  POP_RANGE
+  std::vector<int32> alignment;
+  std::vector<int32> words;
+  GetLinearSymbolSequence(decoded, &alignment, &words, &weight);
+  num_frames = alignment.size();
+  if (examples_mutex_) examples_mutex_->Lock();
+  if (words_writer->IsOpen())
+    words_writer->Write(utt, words);
+  if (alignment_writer->IsOpen())
+    alignment_writer->Write(utt, alignment);
+  if (examples_mutex_) examples_mutex_->Unlock();
+  if (word_syms != NULL) {
+    std::cerr << utt << ' ';
+    for (size_t i = 0; i < words.size(); i++) {
+      std::string s = word_syms->Find(words[i]);
+      if (s == "")
+        KALDI_ERR << "Word-id " << words[i] << " not in symbol table.";
+      std::cerr << s << ' ';
+    }
+    std::cerr << '\n';
+  }
+  KALDI_LOG << "Log-like per frame for utterance " << utt << " is "
+            << (likelihood / num_frames) << " over "
+            << num_frames << " frames.";
+  KALDI_VLOG(2) << "Cost for utterance " << utt << " is "
+                << weight.Value1() << " + " << weight.Value2();
+  *like_ptr = likelihood;
+  if (determinize) {
+    CompactLattice clat;
+    if (!DeterminizeLatticePhonePrunedWrapper(
+          trans_model,
+          &lat,
+          decoder.GetOptions().lattice_beam,
+          &clat,
+          decoder.GetOptions().det_opts))
+      KALDI_WARN << "Determinization finished earlier than the beam for "
+                 << "utterance " << utt;
+    // We'll write the lattice without acoustic scaling.
+    if (acoustic_scale != 0.0)
+      fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &clat);
+    if (examples_mutex_) examples_mutex_->Lock();
+    compact_lattice_writer->Write(utt, clat);
+    if (examples_mutex_) examples_mutex_->Unlock();
+
+  } else {
+    PUSH_RANGE("write_lat", 0);
+    // We'll write the lattice without acoustic scaling.
+    if (acoustic_scale != 0.0)
+      fst::ScaleLattice(fst::AcousticLatticeScale(1.0 / acoustic_scale), &lat);
+    if (examples_mutex_) examples_mutex_->Lock();
+    lattice_writer->Write(utt, lat);
+    if (examples_mutex_) examples_mutex_->Unlock();
+    POP_RANGE
+  }
+  return true;
+}
+
+// GPU decoding interface of outputting lattice
+// use a separate interface is to do the output in a critical section
+// e.g. using #pragma omp critical { }
+bool DecodeUtteranceFasterLatticeFasterCudaOutput(
+  FasterLatticeFasterDecoderCuda &decoder, // not const but is really an input.
   DecodableInterface &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,

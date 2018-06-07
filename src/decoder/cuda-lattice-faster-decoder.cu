@@ -17,15 +17,15 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#include "decoder/cuda-decoder.h"
 #include "fstext/remove-eps-local.h"
 #include <algorithm>
 #include <nvToolsExt.h>
 #include <cuda_runtime_api.h>
 #include <float.h>
 #include <math.h>
-
 #include <cub/cub.cuh>
+
+#include "decoder/cuda-lattice-faster-decoder.h"
 
 #define MEMADVISE
 
@@ -45,6 +45,11 @@
 // Below that value, we launch the persistent kernel for NonEmitting
 #define NONEM_LT_MAX_NARCS (4*NONEM_LT_DIMX) //4096
 namespace kaldi {
+
+typedef CudaLatticeFasterDecoder::LatticeProcessor LatticeProcessor;
+typedef CudaLatticeFasterDecoder::LatLinkCompact LatLinkCompact;
+typedef CudaLatticeFasterDecoder::Token Token;
+typedef CudaLatticeFasterDecoder::ExpandArcParams ExpandArcParams;
 
 // for speedup purpose, make them inline (5% 0.165->0.158)
 inline HOST DEVICE uint64_t pack (float cost, int ptr) {
@@ -94,179 +99,6 @@ __host__ __device__ float orderedUIntToFloat(uint i_cost) {
     i_cost = i_cost ^ 0xFFFFFFFF;
   return *(BaseFloat *) & i_cost;
 } 
-
-
-// Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.
-// No stream priorities
-static DEVICE inline void _grid_sync(volatile int *fast_epoch) {
-  __syncthreads();
-  if (threadIdx.x == 0) {
-    // gridDim.x-1 blocks are adding 1
-    // and one block is adding 0x80000000 - (gridDim.x-1)
-    // so the whole sum is 0x80000000
-    int nb = 1;
-    if (blockIdx.x == 0) {
-      nb = 0x80000000 - (gridDim.x - 1);
-    }
-    int old_epoch = *fast_epoch;
-    __threadfence();
-    atomicAdd((int*)fast_epoch, nb);
-    // wait for the sign bit to commute
-    int cnt = 0;
-    while (((*fast_epoch) ^ old_epoch) >= 0) ;
-  }
-  __syncthreads();
-}
-
-DEVICE inline void grid_sync(int *barrier) {
-  _grid_sync((volatile int*)barrier);
-}
-
-
-
-  /***************************************CudaFst Implementation*****************************************/
-  HOST DEVICE inline float CudaFst::Final(StateId state) const {
-    #ifdef __CUDA_ARCH__
-    return final_d[state];
-    #else
-    return final_h[state];
-    #endif
-
-  }
-  void CudaFst::initialize(const fst::Fst<StdArc> &fst) {
-    nvtxRangePushA("CudaFst constructor");
-    bytes_cudaMalloc=0;
-    //count states since Fst doesn't provide this functionality
-    numStates=0;
-    for( fst::StateIterator<fst::Fst<StdArc> > iter(fst); !iter.Done(); iter.Next()) {
-      numStates++;
-    }
-    start=fst.Start();
-    cudaMallocHost(&final_h,sizeof(float)*numStates);
-    cudaMalloc(&final_d,sizeof(float)*numStates);
-
-    //allocate and initialize offset arrays
-    e_offsets_h=(unsigned int *)malloc(sizeof(unsigned int)*(numStates+1));
-    ne_offsets_h=(unsigned int *)malloc(sizeof(unsigned int)*(numStates+1));
-
-    cudaMalloc((void**)&e_offsets_d,sizeof(unsigned int)*(numStates+1)); bytes_cudaMalloc+=sizeof(unsigned int)*(numStates+1);
-    cudaMalloc((void**)&ne_offsets_d,sizeof(unsigned int)*(numStates+1)); bytes_cudaMalloc+=sizeof(unsigned int)*(numStates+1);
-
-    memset(e_offsets_h,0,sizeof(unsigned int)*(numStates+1));
-    memset(ne_offsets_h,0,sizeof(unsigned int)*(numStates+1));
-
-    //iterate through states and arcs and count number of arcs per state
-    e_count=0;
-    ne_count=0;
-    max_ilabel=0;
-
-    for(int i=0;i<numStates;i++) {
-      final_h[i]=fst.Final(i).Value();
-      //count emmiting and non_emitting arcs
-      for (fst::ArcIterator<fst::Fst<StdArc> > aiter(fst, i); !aiter.Done(); aiter.Next()) {
-        StdArc arc = aiter.Value();
-        int32 ilabel = arc.ilabel;
-        int32 olabel = arc.olabel;
-
-        if(ilabel>max_ilabel) {
-          max_ilabel=ilabel;
-        }
-
-        if(ilabel!=0) { //emitting
-          e_count++;
-        } else { //non-emitting
-          ne_count++;
-        }
-      }
-      ne_offsets_h[i+1]=ne_count;
-      e_offsets_h[i+1]=e_count;
-    }
-
-    //offset ne_offsets by the number of emitting arcs
-    for(int i=0;i<numStates+1;i++) {
-      e_offsets_h[i]+=1;          //add dummy arc at the beginingg.
-      ne_offsets_h[i]+=e_count+1;   //add dummy arc and put e_arcs before
-    }
-
-    arc_count=e_count+ne_count+1;
-
-    cudaMemcpy(final_d,final_h,sizeof(float)*numStates,cudaMemcpyHostToDevice);
-    
-    cudaMemcpy(e_offsets_d,e_offsets_h,sizeof(unsigned int)*(numStates+1),cudaMemcpyHostToDevice);
-    cudaMemcpy(ne_offsets_d,ne_offsets_h,sizeof(unsigned int)*(numStates+1),cudaMemcpyHostToDevice);
-
-
-    //Allocate non-zero arrays
-    cudaMallocHost(&arc_weights_h,arc_count*sizeof(BaseFloat));
-    cudaMallocHost(&arc_nextstates_h,arc_count*sizeof(StateId));
-    cudaMallocHost(&arc_ilabels_h,arc_count*sizeof(int32));
-    cudaMallocHost(&arc_olabels_h,arc_count*sizeof(int32));
-
-    cudaMalloc((void**)&arc_weights_d,arc_count*sizeof(BaseFloat));
-    cudaMalloc((void**)&arc_nextstates_d,arc_count*sizeof(StateId));
-    cudaMalloc((void**)&arc_ilabels_d,arc_count*sizeof(int32)); 
-
-        //now populate arc data
-    int e_idx=1;          //save room for dummy arc (so start at 1)
-    int ne_idx=e_count+1; //starts where e_offsets ends
-
-    //create dummy arc
-    arc_weights_h[0]=StdWeight::One().Value();
-    arc_nextstates_h[0]=fst.Start();
-    arc_ilabels_h[0]=0;
-    arc_olabels_h[0]=0;
-
-    for(int i=0;i<numStates;i++) {
-      //count emiting and non_emitting arcs
-
-      for (fst::ArcIterator<fst::Fst<StdArc> > aiter(fst, i); !aiter.Done(); aiter.Next()) {
-        StdArc arc = aiter.Value();
-        int idx;
-        if(arc.ilabel!=0) { //emitting
-          idx=e_idx++;
-        } else {
-          idx=ne_idx++;
-        }
-        arc_weights_h[idx]=arc.weight.Value();
-        arc_nextstates_h[idx]=arc.nextstate;
-        arc_ilabels_h[idx]=arc.ilabel;
-        arc_olabels_h[idx]=arc.olabel;
-      }
-    }
-
-    cudaMemcpy(arc_weights_d,arc_weights_h,arc_count*sizeof(BaseFloat),cudaMemcpyHostToDevice);
-    cudaMemcpy(arc_nextstates_d,arc_nextstates_h,arc_count*sizeof(StateId),cudaMemcpyHostToDevice);
-    cudaMemcpy(arc_ilabels_d,arc_ilabels_h, arc_count*sizeof(int32),cudaMemcpyHostToDevice);
-    
-    cudaDeviceSynchronize();
-    cudaCheckError();
-
-    nvtxRangePop();
-  }
-
-  void CudaFst::finalize() {
-    nvtxRangePushA("CudaFst destructor");
-    cudaFreeHost(final_h);
-    cudaFree(final_d);
-    free(e_offsets_h);
-    free(ne_offsets_h);
-
-    cudaFree(e_offsets_d);
-    cudaFree(ne_offsets_d);
-
-    cudaFreeHost(arc_weights_h);
-    cudaFreeHost(arc_nextstates_h);
-    cudaFreeHost(arc_ilabels_h);
-    cudaFreeHost(arc_olabels_h);
-
-    cudaFree(arc_weights_d);
-    cudaFree(arc_nextstates_d);
-    cudaFree(arc_ilabels_d);
-    nvtxRangePop();
-  }
-
-  /***************************************End CudaFst****************************************************/
-
 
 // LatticeProcessor Implementation
 // Initialize in InitDecoding()
@@ -405,7 +237,7 @@ DEVICE void LatticeProcessor::PruneActiveTokens(int32 frame,
   // by ESTIMATED_PRUNE_RATIO to reduce memory allocation and D2H data transfer
   assert(*arcs_apr_used_d < arcs_buf_before_pr_size * ESTIMATED_PRUNE_RATIO);
   if (verbose > 2 && rank0)
-    CUDA_PRINTF("PRt: %i %i\n", arcs_bpr_fr_sidx_d[frame + 1],
+    CUDA_PRINTF(0, "PRt: %i %i\n", arcs_bpr_fr_sidx_d[frame + 1],
                 *arcs_apr_used_d);
 }
 
@@ -505,9 +337,9 @@ DEVICE Token* LatticeProcessor::GetActiveTokenByExactId(int32 frame,
   Token* tok = toks_bpr_d + id_exact;
 
   if (check) {
-    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF("h %i %i\n", id_exact,
+    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF(0, "h %i %i\n", id_exact,
           toks_bpr_fr_sidx_d[frame]);
-    if (id_exact >= toks_bpr_fr_sidx_d[frame + 1]) CUDA_PRINTF("t %i %i\n", id_exact,
+    if (id_exact >= toks_bpr_fr_sidx_d[frame + 1]) CUDA_PRINTF(0, "t %i %i\n", id_exact,
           toks_bpr_fr_sidx_d[frame + 1]);
     assert(toks_bpr_fr_sidx_d[frame] <= id_exact &&
            id_exact < toks_bpr_fr_sidx_d[frame + 1]);
@@ -571,7 +403,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
   volatile int32 *modified2;
   int32 cnt = 0;
   UpdateModifiedFlags(&modified0, &modified1, &modified2, cnt, modified_d);
-  if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, GetSize(toks_bpr_fr_sidx_d,
+  if (rank0 && verbose > 3) CUDA_PRINTF(0, "%i %i\n", c++, GetSize(toks_bpr_fr_sidx_d,
                                           frame - 1)); // size before pruning
   {
     // initialize
@@ -579,7 +411,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
     int32 size = GetSize(toks_bpr_fr_sidx_d, frame - 1);
     for (; tid < size; tid += gridDim.x * blockDim.x) {
       Token* tok = GetActiveToken(frame - 1, tid, true);
-      tok->extra_cost = FLT_MAX;
+      tok->extra_cost_acoustic_cost_ = FLT_MAX;
     }
     if (rank0) {
       *modified0 = 1;
@@ -610,24 +442,24 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
       Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
-      BaseFloat link_extra_cost = next_tok->extra_cost +
+      BaseFloat link_extra_cost = next_tok->extra_cost_acoustic_cost_ +
                                   ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
         // not prune out
         if (link_extra_cost < -1) {// debug
-          CUDA_PRINTF("%i %f %f %f %f %f\n", frame, next_tok->extra_cost, tok->cost_,
+          CUDA_PRINTF(0, "%i %f %f %f %f %f\n", frame, next_tok->extra_cost_acoustic_cost_, tok->cost_,
                       link->acoustic_cost, arc_weights[link->arc_id], next_tok->cost_);
           link_extra_cost = lattice_beam / 2;
         }
-        if (link_extra_cost < tok->extra_cost) {
-          atomic_min(&tok->extra_cost, link_extra_cost);
+        if (link_extra_cost < tok->extra_cost_acoustic_cost_) {
+          atomic_min(&tok->extra_cost_acoustic_cost_, link_extra_cost);
           if (*modified0 == 0) atomicAdd((int32 *)modified0, 1);
         }
       }
     }
     grid_sync(barrier_);
-    if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, cnt);
+    if (rank0 && verbose > 3) CUDA_PRINTF(0, "%i %i\n", c++, cnt);
   }
 
   // final aggregate remaining arcs
@@ -639,7 +471,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
       int32 frame_tok = link->IsEmitArc() ? frame - 1 : frame;
       Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
       Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
-      BaseFloat link_extra_cost = next_tok->extra_cost +
+      BaseFloat link_extra_cost = next_tok->extra_cost_acoustic_cost_ +
                                   ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
                                    - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
@@ -672,7 +504,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
     int& size_arc_of_frame = arcs_apr_fr_size_d[frame];
     size_arc_of_frame = *arcs_apr_used_d - prev_cidx;
     if (verbose > 3 || (size_arc_of_frame == 0
-                        && frame != 0)) CUDA_PRINTF("PR %i %i %i\n", frame,
+                        && frame != 0)) CUDA_PRINTF(0, "PR %i %i %i\n", frame,
                               GetSize(arcs_bpr_fr_sidx_d, frame), size_arc_of_frame);
   }
   // grid_sync(barrier_);
@@ -723,7 +555,18 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
 }
 
   CudaLatticeFasterDecoder::CudaLatticeFasterDecoder(const CudaFst &fst, const CudaLatticeFasterDecoderConfig &config): fst_(fst), beam_(config.beam),
-  bytes_cudaMalloc(0), max_tokens(config.max_tokens) {
+  bytes_cudaMalloc(0), max_tokens(config.max_tokens), config_(config) {
+  int32 device;
+  cudaGetDevice(&device);
+  CU_SAFE_CALL(cudaGetLastError());
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, device);
+
+  // GPU utilization
+  total_threads = prop.maxThreadsPerMultiProcessor * prop.multiProcessorCount *
+                  config.gpu_fraction;
+  lattice_beam_ = config.lattice_beam;
+
     int max_token = config.max_tokens; // for CUB
 
     // Comments about variables are in the .h file
@@ -745,7 +588,7 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
     cudaMallocHost(&h_q_token_from_narcs, sizeof(int));
   
     cudaMalloc(&d_allToken, config.max_tokens * sizeof(StateId));
-    cudaMalloc(&d_allTokenInfo, config.max_tokens * sizeof(InfoToken));
+    cudaMalloc(&d_allTokenInfo, config.max_tokens * sizeof(Token));
 
     cudaMallocHost(&h_q_token_from_size, sizeof(int));  
 
@@ -781,8 +624,9 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
     cudaMemset(d_barrier, 0, sizeof(int));
 
     // for lattice
-    int bytes_cuda_malloc += lattice_processor_.Allocate(config.max_tokens_per_frame,
-                       config.max_lat_arc_per_frame, config.prune_interval,
+    lattice_processor_.Allocate(config.max_tokens_per_frame,
+                       config.max_lat_arc_per_frame, 
+                       config.prune_interval,
                        config.max_tokens, config.max_arcs, fst_);
     lat_arcs_buf_ = lattice_processor_.GetDeviceArcsBpr();
     for (int32 i = 0; i < LAT_BUF_SIZE; i++)
@@ -806,15 +650,12 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
     KALDI_ASSERT(start_state != fst::kNoStateId);
 
     cudaCheckError();
-    InfoToken it_init;
-    it_init.cost = StdWeight::One().Value();
-    it_init.prev_token = INT_MIN;
-    it_init.arc_idx = -1;
+    Token it_init(StdWeight::One().Value(), 0, INT_MIN, -1);
 
     cudaMemcpy(d_allToken, &start_state, sizeof(StateId), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_allTokenInfo, &it_init, sizeof(InfoToken), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_allTokenInfo, &it_init, sizeof(Token), cudaMemcpyHostToDevice);
 
-    uint64 packv = pack(it_init.cost, 0);
+    uint64 packv = pack(it_init.cost_, 0);
     // We simulate a regular execution for the first iteration
     cudaMemcpy(&d_state_cost[start_state], &packv, sizeof(uint64), cudaMemcpyHostToDevice);
 
@@ -975,6 +816,8 @@ void CudaLatticeFasterDecoder::InitParams(ExpandArcParams &params, uint* d_arc_o
     params.d_block_sums_scan = d_block_sums_scan;
     params.d_q_lat_end = d_q_lat_end;
     params.lattice_processor = lattice_processor_;
+    params.lat_arcs_buf_ = lat_arcs_buf_;
+    params.lattice_beam = lattice_beam_;
 }
 
 bool CudaLatticeFasterDecoder::ProcessToken(unsigned int *d_arc_offsets,
@@ -992,11 +835,6 @@ bool CudaLatticeFasterDecoder::ProcessToken(unsigned int *d_arc_offsets,
     // TODO rename to something more explicit
     ComputeDegrees(params);
    
-    if (params.is_emitting) {
-        // finalize lattice processing of the last frame
-        LatticeProcessingPerFrame(num_frames_decoded_-1);
-    }
-    
     // Recording an event to signal h_q_token_from_narcs 
     // as ready to use 
     //cudaEventRecord(q_token_from_narcs_evt, compute_st);
@@ -1088,7 +926,7 @@ as "d_q_arc_offset"
 */
 
 
-DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
+DEVICE void compute_degrees_kernel(ExpandArcParams & params, StateId *d_q, Token *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
   *d_offsets, uint64 *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
   int *d_block_sums, int *d_block_sums_scan,  int * h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
@@ -1117,12 +955,12 @@ DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int 
             int has_successor=0, new_q_idx_block;
 
 
-            InfoToken &tok = params.d_q_info[idx];
+            Token &tok = params.d_q_info[idx];
             StateId state_idx;
             BaseFloat cost;
 
             if(idx < queue_end) {
-                state_idx = tok.GetStateId(params.arc_nextstates_d);
+                state_idx = tok.GetStateId(params.arc_nextstates);
                 cost = tok.cost_;
                 if(cost < cutoff) {
                     int ptr= unpack_ptr(d_state_cost[state_idx]);
@@ -1256,13 +1094,13 @@ typedef CudaLatticeFasterDecoder::ExpandArcParams ExpandArcParams;
 DEVICE void lattice_process_per_frame(ExpandArcParams &params) {
   // TODO call from __global__
   // process lattice before allocate new toks to TokenState
-  params.lattice_processor.CollectToksPerFrame(d_q_token_end, params.frame-1);
+  params.lattice_processor.CollectToksPerFrame(params.d_q_token_end, params.frame-1);
   // accumulatively store lattice arcs
-  params.lattice_processor.CollectArcsPerFrame(d_q_lat_end, params.frame-1);
+  params.lattice_processor.CollectArcsPerFrame(params.d_q_lat_end, params.frame-1);
 }
 
 void __global__ compute_degrees_with_reset_kernel(ExpandArcParams params, bool reset=true) {
-  compute_degrees_kernel(params.d_q, params.d_q_info,params.d_q_token_from, 
+  compute_degrees_kernel(params, params.d_q, params.d_q_info,params.d_q_token_from, 
       params.d_q_token_to, params.d_degrees_scan, params.d_arc_offsets, 
       params.d_lookup, params.d_cutoff, params.d_q_arc_offset, 
       params.d_block_sums_scan, params.d_block_sums_scan,  params.h_q_token_from_narcs, params.d_q_token_from_narcs, 
@@ -1395,7 +1233,7 @@ void __global__ get_cutoff(ExpandArcParams params, BaseFloat set = 0) {
 
             BaseFloat acoustic_cost = (arc_ilabel != 0) ? -params.d_loglikelihoods[arc_ilabel] : 0.0; 
 
-            BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
+            BaseFloat old_tok_cost = params.d_q_info[q_idx].cost_;
 
             total_cost = acoustic_cost + arc_weight + old_tok_cost;
 
@@ -1469,7 +1307,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
             acoustic_cost = (arc_ilabel != 0) ? -params.d_loglikelihoods[arc_ilabel] : 0.0; 
             BaseFloat next_state_cost = unpack_cost(params.d_lookup[arc_next_state]);
 
-            BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
+            BaseFloat old_tok_cost = params.d_q_info[q_idx].cost_;
 
             total_cost = acoustic_cost + arc_weight + old_tok_cost;
 
@@ -1499,7 +1337,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
 
         if(has_successor) {
             //params.d_q[new_q_index] = arc_next_state;
-            params.d_q_info[new_q_index].Copy(InfoToken(total_cost, acoustic_cost, q_idx, arc_idx));
+            params.d_q_info[new_q_index].Copy(Token(total_cost, acoustic_cost, q_idx, arc_idx));
         }
         if(has_successor) {
             // reduce, not atomic (no return)
@@ -1580,7 +1418,7 @@ __global__ void reached_final_kernel(StateId *d_q, const int *d_q_token_from, co
 // TODO Needs to be rewritten
 
 #define FILL_COSTS_DIMX 256
-__global__ void fill_costs_kernel(StateId *d_q, InfoToken *d_q_it, const int *d_q_token_from, const int *d_q_token_to,
+__global__ void fill_costs_kernel(StateId *d_q, Token *d_q_it, const int *d_q_token_from, const int *d_q_token_to,
 uint64 *d_state_cost, BaseFloat *d_final, bool final) {
     int q_offset = *d_q_token_from;
     int q_end = *d_q_token_to;
@@ -1588,7 +1426,7 @@ uint64 *d_state_cost, BaseFloat *d_final, bool final) {
     for(int idx = q_offset + blockIdx.x*blockDim.x + threadIdx.x;
             idx < q_end;
             idx += blockDim.x*gridDim.x) {
-        BaseFloat cost = d_q_it[idx].cost;
+        BaseFloat cost = d_q_it[idx].cost_;
         
         if(final) {
             StateId state = d_q[idx];
@@ -1656,7 +1494,7 @@ void CudaLatticeFasterDecoder::GetBestCost(BaseFloat *min, int *arg, bool isfina
 
 // brutal - one thread, multiple global memory load. But avoids a massive memcpy D2H
 // Will disappear with better memory management 
-void __global__ get_best_path_kernel(int best_token_idx_in_all_tokens, StateId *d_all_tokens, InfoToken
+void __global__ get_best_path_kernel(int best_token_idx_in_all_tokens, StateId *d_all_tokens, Token
 *d_all_tokens_info, int *d_reversed_path, int *path_size) {
 
     int tok_idx = best_token_idx_in_all_tokens;
@@ -1664,11 +1502,11 @@ void __global__ get_best_path_kernel(int best_token_idx_in_all_tokens, StateId *
 
     while(tok_idx != INT_MIN) {
         int state = d_all_tokens[tok_idx];
-        int arc_idx = d_all_tokens_info[tok_idx].arc_idx;
+        int arc_idx = d_all_tokens_info[tok_idx].arc_idx_;
         d_reversed_path[idx++] = arc_idx;
 
         int old_tok_idx = tok_idx; 
-        tok_idx = d_all_tokens_info[tok_idx].prev_token;
+        tok_idx = d_all_tokens_info[tok_idx].prev_token_;
         assert(old_tok_idx > tok_idx);
             
     }
@@ -1835,9 +1673,9 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 int global_q_idx = old_q_offset + local_q_idx;
 
-                InfoToken &tok = params.d_q_info[global_q_idx];
-                StateId state = tok.GetStateId(params.arc_nextstates_d);
-                BaseFloat cost = tok.cost;
+                Token &tok = params.d_q_info[global_q_idx];
+                StateId state = tok.GetStateId(params.arc_nextstates);
+                BaseFloat cost = tok.cost_;
 
                 int degree = 0;
                 int has_successor = 0, new_q_idx_block;
@@ -1955,7 +1793,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                 arc_next_state = params.arc_nextstates[arc_idx];
                 BaseFloat arc_weight = params.arc_weights[arc_idx];
                 BaseFloat next_state_cost = unpack_cost(params.d_lookup[arc_next_state]);
-                BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
+                BaseFloat old_tok_cost = params.d_q_info[q_idx].cost_;
 
                 total_cost = arc_weight + old_tok_cost;
 
@@ -1986,7 +1824,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                 new_q_index = new_q_end + new_q_idx_block;
                 
                 //params.d_q[new_q_index] = arc_next_state;
-                params.d_q_info[new_q_index].Copy(InfoToken(total_cost, 0, q_idx, arc_idx));
+                params.d_q_info[new_q_index].Copy(Token(total_cost, 0, q_idx, arc_idx));
             }
             if(has_successor) 
                 atomicMin((unsigned long long *)&params.d_lookup[arc_next_state], (unsigned long long )pack(total_cost, new_q_index));
@@ -2035,7 +1873,7 @@ void CudaLatticeFasterDecoder::NonEmittingLongTail(unsigned int *d_arc_offsets,
 
 // for lattice
 // GPU lattice prune and copy the processed lattice nodes and arcs to host
-void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx,
+void CudaLatticeFasterDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx,
     LatLink** arcs_buf, int** arcs_fr_size) {
   PUSH_RANGE("FinalProcessLattice", 3)
 
@@ -2073,7 +1911,12 @@ void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sid
   POP_RANGE
 }
 
-void CudaLatticeDecoder::PruneActiveTokens(cudaStream_t wait_st,
+__launch_bounds__(64, 64)
+__global__
+static void _prune_active_tokens(ExpandArcParams params) {
+  params.lattice_processor.PruneActiveTokens(params.frame, params.lattice_beam, VERBOSE);
+}
+void CudaLatticeFasterDecoder::PruneActiveTokens(cudaStream_t wait_st,
     cudaStream_t run_st, BaseFloat gpu_ratio) {
   // we launch 64 threads as a block, i.e. 2 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
@@ -2083,8 +1926,8 @@ void CudaLatticeDecoder::PruneActiveTokens(cudaStream_t wait_st,
   cudaStreamSynchronize(wait_st);
   if (config_.verbose > 1) KALDI_LOG << "PruneActiveTokens, # of blocks: " <<
                                        blocks.x << std::endl;
-  processTokens_params params;
-  InitParams(&params);
+  ExpandArcParams params;
+  InitParams(params, fst_.e_offsets_d, true);
   _prune_active_tokens <<< blocks, threads, 0, run_st>>>(params);
 }
 } // end namespace kaldi.
