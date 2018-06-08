@@ -345,7 +345,7 @@ DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emittin
   }
 
 
-DEVICE static inline void _process_emitting_tokens(processTokens_params* params, bool is_emitting = true, volatile int32 *modified = NULL, int isize = 0) {
+DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* params, bool is_emitting = true, volatile int32 *modified = NULL, int isize = 0) {
   // blockDim threads per token to process out-arcs in parallel
   CostType cutoff = *params->cutoff;
   //for lattice
@@ -458,7 +458,7 @@ DEVICE static inline void _process_nonemitting_tokens(processTokens_params
   // an aggregation of the Tokens updated in last iteration. After that,
   // processing non-emitting tokens is only conducted on these aggregated
   // tokens. For the first time to run into this iteration, all tokens are
-  // updated by _process_emitting_tokens(), so we don't need to do aggregation
+  // updated by _process_emit_or_nemit_tokens(), so we don't need to do aggregation
   // TODO: reduce number of iterations in processing non-emitting tokens
   int* agg_tok_idx = params->agg_idx; // need to make it 0 before enter this func
   int* cur_tok_idx = params->ne_idx; // need to make it 0 before enter this func
@@ -481,7 +481,7 @@ DEVICE static inline void _process_nonemitting_tokens(processTokens_params
   while (true) {
     int32 i, j;
     // uses dynamically load balanced loop trips.
-    // details are described in _process_emitting_tokens()
+    // details are described in _process_emit_or_nemit_tokens()
     if (group.thread_rank() == 0) { // thread 0 nominated to get new token
       if (aggregate) {
         j = atomicAdd(cur_tok_idx, 1); // allocate new token index
@@ -506,7 +506,7 @@ DEVICE static inline void _process_nonemitting_tokens(processTokens_params
       CostType total_cost = tok->cost_ + weight;
 
       // 2-pass atomic based token recombination
-      // details described in _process_emitting_tokens()
+      // details described in _process_emit_or_nemit_tokens()
       if (next_tok.cost_ <= cutoff) {
         TokenState *next_ts = NULL;
         uint64* token_pack;
@@ -611,7 +611,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     *modified1 = false;
   }
   if (!is_init) { // only do _process_nonemitting_tokens() at frame 0
-    _process_emitting_tokens(&params);
+    _process_emit_or_nemit_tokens(&params);
     grid_sync(params.barrier);  // ensure cur_toks size is final
   }
 
@@ -643,9 +643,13 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     cnt++;
     // details of aggregation described in _process_nonemitting_tokens()
     bool aggregate = (!is_init) && cnt > 1 ? 1 : 0;
-    compute_degrees_kernel(&params, false); //for emit
-    grid_sync(params.barrier);
-    _process_emitting_tokens(&params, false, modified0, size);
+    if (!aggregate) {
+      compute_degrees_kernel(&params, false); //for non-emit
+      grid_sync(params.barrier);
+      _process_emit_or_nemit_tokens(&params, false, modified0, size);
+    } else {
+      _process_nonemitting_tokens<32, 2>(&params, cutoff, size, modified0, aggregate);
+    }
 
     // we have sync in the end of _process_nonemitting_tokens
     // grid_sync(params.barrier);
