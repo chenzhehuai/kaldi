@@ -83,7 +83,7 @@ const int32 num_colors = sizeof(colors) / sizeof(uint32);
 // decoder macro
 #define __DEBUG__
 #ifdef __DEBUG__
-#define VERBOSE 1
+#define VERBOSE 3
 #define CUDA_PRINTF(VB, format,...) if (VERBOSE > VB) printf( format, ##__VA_ARGS__)
 #else
 #define VERBOSE 0

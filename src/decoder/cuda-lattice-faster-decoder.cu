@@ -970,7 +970,7 @@ DEVICE void compute_degrees_kernel(ExpandArcParams & params, StateId *d_q, Token
                         degree = end - start;
                         d_q_arc_offset[idx-queue_offset] = start;
                         if (d_dbg_tok_num) atomicAdd(d_dbg_tok_num, 1);
-                        has_successor++;
+                        if (tok.prev_token_>=0) has_successor++;
                     }
                 }
             }
@@ -1108,7 +1108,7 @@ void __global__ compute_degrees_with_reset_kernel(ExpandArcParams params, bool r
   grid_sync(params.barrier);
   reset_lookup_kernel(params.d_q, params.d_q_token_from, params.d_q_token_to, params.d_lookup, params.d_cutoff, params.d_dbg_tok_num, params.frame, params.d_q_token_from_narcs, reset);
   finalize_degrees_scan_kernel(params.d_degrees_scan, params.d_block_sums_scan, params.d_q_token_from, params.d_q_token_to);
-  if (params.is_emitting) lattice_process_per_frame(params);
+  if (params.is_emitting && params.frame>0) lattice_process_per_frame(params);
 }
   void CudaLatticeFasterDecoder::FinalizeDegreesScan() {
       dim3 grid,block;
@@ -1667,10 +1667,10 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             }
 
             // Step 1 : compute_degrees
-            for(int local_q_idx = threadIdx.x;
-                    local_q_idx < old_q_size;
-                    local_q_idx += blockDim.x) {
-
+            for(int block_q_off = 0;
+                    block_q_off < old_q_size;
+                    block_q_off += blockDim.x) {
+                int local_q_idx = threadIdx.x+block_q_off;
                 int global_q_idx = old_q_offset + local_q_idx;
 
                 Token &tok = params.d_q_info[global_q_idx];
@@ -1679,7 +1679,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
 
                 int degree = 0;
                 int has_successor = 0, new_q_idx_block;
-                if(cost < cutoff) {
+                if(local_q_idx < old_q_size && cost < cutoff) {
                     int ptr = unpack_ptr(params.d_lookup[state]);
 
                     if(ptr == global_q_idx) {
@@ -1688,7 +1688,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                         degree = end - start;
                         params.d_q_arc_offset[local_q_idx] = start;
                         if (d_dbg_tok_num) atomicAdd(d_dbg_tok_num, 1);
-                        has_successor++;
+                        if (tok.prev_token_>=0) has_successor++;
                     }
                 }
 

@@ -179,7 +179,8 @@ class __align__(16) Token {
     return cost_ > other.cost_;
   }
   HOST DEVICE int GetStateId(int *arc_nextstates) {
-    return arc_nextstates[arc_idx_];
+    if (arc_idx_<0) return 0;
+    else return arc_nextstates[arc_idx_];
   }
 #ifdef __CUDACC__
   DEVICE void Copy(const Token &tok) {
