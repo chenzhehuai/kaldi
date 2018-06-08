@@ -463,6 +463,14 @@ class CudaLatticeDecoder {
     uint32 frame;   
     int32 max_lat_arc_per_frame;
     int max_active;
+
+    // scan & expand
+    int *d_q_token_from_narcs;
+    int *d_block_sums_scan;
+    int *d_n_CTA_done;
+    int *d_block_sums;
+    int *d_degrees_scan;
+    int *d_q_arc_offset;
   };
 
 
@@ -545,6 +553,14 @@ class CudaLatticeDecoder {
   cudaStream_t stream_comp; // decoding
   cudaStream_t stream_lat[LAT_BUF_SIZE]; // lattice processing and copying
   cudaStream_t stream_ll; // log likelihoods calculation
+
+  // scan & expand
+  int *d_q_token_from_narcs;
+  int *d_block_sums_scan;
+  int *d_n_CTA_done;
+  int *d_block_sums;
+  int *d_degrees_scan;
+  int *d_q_arc_offset;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

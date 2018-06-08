@@ -114,13 +114,24 @@ void cuda_malloc_managed_preferred_device(void** devPtr, size_t size);
 
 // inline host device function definition
 
+union float_uint {
+    float f;
+      uint32 u;
+};
+inline HOST DEVICE uint32 float_as_uint(BaseFloat val) {
+    return ((float_uint*)&val)->u;
+}
+inline HOST DEVICE BaseFloat uint_as_float(uint32 val) {
+    return ((float_uint*)&val)->f;
+}
+
 // In atomic based token recombination, we pack the
 // cost and the arc index into an uint64 to represent the token
 // before recombination, with the former one in the higher bits
 // for comparison purpose.
 // for speedup purpose, make them inline (5% 0.165->0.158)
 inline HOST DEVICE uint64 pack_cost_idx_into_uint64(BaseFloat cost, int32 idx) {
-  uint32 i_cost = *(uint32 *) & cost;
+  uint32 i_cost = float_as_uint(cost);
   if (i_cost & 0x80000000)
     i_cost = i_cost ^ 0xFFFFFFFF;
   else
@@ -135,7 +146,7 @@ inline HOST DEVICE BaseFloat unpack_cost_from_uint64(uint64 packed) {
     i_cost = i_cost ^ 0x80000000;
   else
     i_cost = i_cost ^ 0xFFFFFFFF;
-  return *(BaseFloat *) & i_cost;
+  return uint_as_float(i_cost);
 }
 
 // Unpacks a idx for tracing the data
@@ -146,6 +157,23 @@ inline HOST DEVICE int32 unpack_idx_from_uint64(uint64 packed) {
 
 // inline device function definition
 #ifdef __CUDACC__
+
+inline DEVICE int binsearch_maxle(const int *vec, const int val, int low, int high) {
+    while(true) {
+        if(low == high)
+            return low; //we know it exists
+        if((low + 1) == high)
+            return (vec[high] <= val) ? high : low;
+
+        int mid = low + (high- low) / 2;
+
+        if(vec[mid] > val)
+            high = mid-1;
+        else
+            low = mid;
+    }
+}
+
 
 // fast load 16 bits using CUDA ASM
 inline  DEVICE void fast_load16(void *a, const void *b) {
