@@ -243,8 +243,8 @@ DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emittin
 
         TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
         const uint32 *d_offsets = is_emitting?params->e_offsets:params->ne_offsets;
-        int queue_offset = 0; // TODO
-        int queue_end = tok_vec.Size(); //TODO
+        int queue_offset = 0; 
+        int queue_end = tok_vec.Size(); 
         int queue_size = queue_end-queue_offset;
 
         for(int block_offset = blockDim.x*blockIdx.x;
@@ -257,10 +257,14 @@ DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emittin
 
     TokenState& ts = tok_vec[idx];
     StateId state_idx = ts.state;
+    if (!is_emitting && !tok_vec.IsUpdated(idx)) {
+      degree = 0;
+    } else {
                         int start = d_offsets[state_idx];
                         int end = d_offsets[state_idx+1];
                         degree = end - start;
                         params->d_q_arc_offset[idx-queue_offset] = start; 
+    }
             }
 
             int scan;
@@ -341,17 +345,15 @@ DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emittin
   }
 
 
-template<int32 blockDimx, int32 blockDimy>
-DEVICE static inline void _process_emitting_tokens(processTokens_params* params) {
+DEVICE static inline void _process_emitting_tokens(processTokens_params* params, bool is_emitting = true, volatile int32 *modified = NULL, int isize = 0) {
   // blockDim threads per token to process out-arcs in parallel
   CostType cutoff = *params->cutoff;
-  int32 size = params->prev_toks.Size();
   //for lattice
   typedef cub::BlockScan<int, PROC_DIMX> BlockScan;
   __shared__ typename BlockScan::TempStorage temp_storage;
 
-  bool is_emitting = true;
     TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
+    int32 size = is_emitting?tok_vec.Size():isize; // same vec, so we have to use in-parameter
     const int total_narcs = *params->d_q_token_from_narcs;
     const int old_q_offset = 0; //TODO
     const int old_q_size = tok_vec.Size(); //TODO
@@ -417,7 +419,7 @@ DEVICE static inline void _process_emitting_tokens(processTokens_params* params)
         // get cur_tok&token_pack addr
         _find_or_add_token_arc(params, nextstate, total_cost,
                               acoustic_cost, ts, arc_idx, true, &next_ts, &token_pack,
-                              &update_idx, true);
+                              &update_idx, is_emitting);
         // 1st stage of 2-pass atomic token recombination
         // get cur_te&new_token_pack here
         // details in the definition of pack_cost_idx_into_uint64()
@@ -425,9 +427,11 @@ DEVICE static inline void _process_emitting_tokens(processTokens_params* params)
         uint64 ret = atomicMax((unsigned long long *)token_pack,
                                (unsigned long long)new_token_pack);
         if (ret < new_token_pack) {
+          assert(update_idx < params->max_lat_arc_per_frame);
           Token* cur_te = params->token_per_arc + update_idx;
           fast_store8(cur_te, &(Token(acoustic_cost + weight, tok)));
           params->token_per_arc_update[update_idx] = 1;
+          if (!is_emitting) (*modified) = true; // show that we need another iteration
         }
       } // end valid_input
 
@@ -607,7 +611,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     *modified1 = false;
   }
   if (!is_init) { // only do _process_nonemitting_tokens() at frame 0
-    _process_emitting_tokens<32, 2>(&params);
+    _process_emitting_tokens(&params);
     grid_sync(params.barrier);  // ensure cur_toks size is final
   }
 
@@ -639,7 +643,9 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     cnt++;
     // details of aggregation described in _process_nonemitting_tokens()
     bool aggregate = (!is_init) && cnt > 1 ? 1 : 0;
-    _process_nonemitting_tokens<32, 2>(&params, cutoff, size, modified0, aggregate);
+    compute_degrees_kernel(&params, false); //for emit
+    grid_sync(params.barrier);
+    _process_emitting_tokens(&params, false, modified0, size);
 
     // we have sync in the end of _process_nonemitting_tokens
     // grid_sync(params.barrier);
