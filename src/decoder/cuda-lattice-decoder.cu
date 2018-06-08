@@ -17,6 +17,8 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cub/cub.cuh>
+
 #include "lat/determinize-lattice-pruned.h"
 #include "lat/kaldi-lattice.h"
 #include "itf/decodable-itf.h"
@@ -41,7 +43,7 @@ typedef CudaLatticeDecoder::processTokens_params processTokens_params;
 typedef CudaLatticeDecoder::LatticeProcessor LatticeProcessor;
 #define CudaVector CudaLatticeDecoder::CudaVector
 #define CudaMergeVector CudaLatticeDecoder::CudaMergeVector
-
+#define PROC_DIMX 256
 // instantiation of templates
 template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32 idx);
 template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32 idx);
@@ -236,6 +238,8 @@ DEVICE static inline void _process_emitting_tokens(processTokens_params* params)
                (cooperative_groups::this_thread_block());
   CostType cutoff = *params->cutoff;
   int32 size = params->prev_toks.Size();
+  typedef cub::BlockScan<int, PROC_DIMX> BlockScan;
+  __shared__ typename BlockScan::TempStorage temp_storage;
 
   while (true) {
     int32 i;
@@ -265,7 +269,7 @@ DEVICE static inline void _process_emitting_tokens(processTokens_params* params)
     }
     int32 nextj;
 
-    for (j; j < finish; j = nextj) { // thread parallelism
+    for (j; j < finish; j = nextj) { // thread parallelism //TODO
       nextj = j + blockDimx;
       ilabel = ilabel_next;
 
@@ -279,9 +283,14 @@ DEVICE static inline void _process_emitting_tokens(processTokens_params* params)
       CostType total_cost = tok->cost_ + weight + acoustic_cost;
 
       if (total_cost <= cutoff) { // not prune out
+        //has_suc
+      }
+      // TODO: do block scan & atomic here and get arc_idx, fed it to the latter _find_or_add_token_arc
+
+      if (total_cost <= cutoff) { // not prune out
         uint64* token_pack;
         TokenState *next_ts = NULL;
-        int32 update_idx;
+        int32 update_idx; 
         // get cur_tok&token_pack addr
         _find_or_add_token_arc(params, nextstate, total_cost,
                               acoustic_cost, &ts, j, true, &next_ts, &token_pack,
@@ -443,7 +452,7 @@ static void _add_initial_token(processTokens_params params, StateId state) {
 
 // providing additional information of (maxThreadsPerBlock, minBlocksPerMultiprocessor)
 // to the compiler to make more threads and blocks reside on GPU
-__launch_bounds__(64, 64)
+__launch_bounds__(PROC_DIMX, 64)
 __global__
 static void _process_tokens(processTokens_params params, bool is_init = false) {
   bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
@@ -535,7 +544,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
 
 // providing additional information of (maxThreadsPerBlock, minBlocksPerMultiprocessor)
 // to the compiler to make more threads and blocks reside on GPU
-__launch_bounds__(64, 64)
+__launch_bounds__(PROC_DIMX, 64)
 __global__
 static void _prune_active_tokens(processTokens_params params) {
   params.lattice_processor.PruneActiveTokens(params.frame, params.lattice_beam,
@@ -1342,7 +1351,8 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
 
   lat_arcs_buf_.Allocate(config.max_arcs, NULL, NULL, NULL,
                          lattice_processor_.GetDeviceArcsBpr());
-  bytes_cuda_malloc += lat_arcs_buf_.GetCudaMallocBytes();
+  cudaMalloc((void**)&lat_arcs_buf_end_, sizeof(int));
+  bytes_cuda_malloc += lat_arcs_buf_.GetCudaMallocBytes() + sizeof(int);
 
   for (int32 j = 0; j < LAT_BUF_SIZE; j++) {
     lat_toks_bufs_[j].Allocate(config.max_tokens_per_frame);
@@ -1382,6 +1392,7 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
 
   for (int32 j = 0; j < LAT_BUF_SIZE; j++) lat_toks_bufs_[j].Free();
   lat_arcs_buf_.Free(true);
+  cudaFree(lat_arcs_buf_end_);
   lattice_processor_.Free();
   histogram_prev_toks_.Free();
 
@@ -1448,6 +1459,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->cutoff = cutoff_d;
   params->cutoff_prev = cutoff_prev_d;
   params->lat_arcs_sub_vec = lat_arcs_buf_;
+  params->lat_arcs_buf_end = lat_arcs_buf_end_;
   params->token_per_arc = token_per_arc_d;
   params->token_per_arc_update = token_per_arc_update_d;
 
@@ -1553,8 +1565,8 @@ void CudaLatticeDecoder::ProcessTokens() {
   // we launch 64 threads as a block, i.e. 2 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
-  dim3 threads(64, 1);
-  dim3 blocks(DIV_ROUND_UP(total_threads, (threads.x * threads.y)));
+  dim3 threads(PROC_DIMX, 1);
+  dim3 blocks(max(1, DIV_ROUND_UP(total_threads, (threads.x * threads.y))));
   if (num_frames_decoded_ == 1) KALDI_VLOG(2) << "# of blocks: " << blocks.x <<
         std::endl;
 
@@ -1577,8 +1589,8 @@ void CudaLatticeDecoder::ProcessNonemitting() {
   // we launch 64 threads as a block, i.e. 2 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
-  dim3 threads(64, 1);
-  dim3 blocks(DIV_ROUND_UP(total_threads, (threads.x * threads.y)));
+  dim3 threads(PROC_DIMX, 1);
+  dim3 blocks(max(1, DIV_ROUND_UP(total_threads, (threads.x * threads.y))));
 
   processTokens_params params;
   InitParams(&params);
@@ -1624,8 +1636,8 @@ void CudaLatticeDecoder::PruneActiveTokens(cudaStream_t wait_st,
   // we launch 64 threads as a block, i.e. 2 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
-  dim3 threads(64, 1);
-  dim3 blocks(DIV_ROUND_UP(total_threads * gpu_ratio, (threads.x * threads.y)));
+  dim3 threads(PROC_DIMX, 1);
+  dim3 blocks(max(1,(int)DIV_ROUND_UP(total_threads * gpu_ratio, (threads.x * threads.y))));
   cudaStreamSynchronize(wait_st);
   if (config_.verbose > 1) KALDI_LOG << "PruneActiveTokens, # of blocks: " <<
                                        blocks.x << std::endl;

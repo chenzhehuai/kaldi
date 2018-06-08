@@ -427,6 +427,7 @@ class CudaLatticeDecoder {
     CostType *cutoff;
     CostType *cutoff_prev;
     LatLinkVector lat_arcs_sub_vec;
+    int *lat_arcs_buf_end;
     Token* token_per_arc;
     int* token_per_arc_update;
 
@@ -532,6 +533,7 @@ class CudaLatticeDecoder {
   // lattice
   TokenMergeVector lat_toks_bufs_[LAT_BUF_SIZE];
   LatLinkVector lat_arcs_buf_;
+  int* lat_arcs_buf_end_;
   LatticeProcessor lattice_processor_;
 
   // GPU usage
