@@ -123,7 +123,18 @@ class CudaLatticeDecoder {
     HOST DEVICE T& operator[](uint32 idx); 
     HOST DEVICE const T& operator[](uint32 idx) const; 
     HOST DEVICE uint32 Size() const; 
-    HOST DEVICE uint32 PushBack(const T &val); 
+    HOST DEVICE uint32 PushBack(const T &val);
+
+DEVICE void SetVal(const T &val, int idx) {
+  mem_d[idx] = val;
+}
+HOST DEVICE void SetSize(int idx) {
+#ifdef __CUDA_ARCH__
+  *count_d = idx;
+#else
+  *count_h = idx;
+#endif
+}
     HOST DEVICE void Clear(cudaStream_t stream=0); 
     bool Empty() const { return Size() == 0; }
     HOST DEVICE int32 GetIdxFromAddr(T* addr); 
@@ -471,6 +482,7 @@ class CudaLatticeDecoder {
     int *d_block_sums;
     int *d_degrees_scan;
     int *d_q_arc_offset;
+    int *d_q_lat_end;
   };
 
 
@@ -561,6 +573,7 @@ class CudaLatticeDecoder {
   int *d_block_sums;
   int *d_degrees_scan;
   int *d_q_arc_offset;
+  int *d_q_lat_end;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

@@ -44,7 +44,7 @@ typedef CudaLatticeDecoder::LatticeProcessor LatticeProcessor;
 #define CudaVector CudaLatticeDecoder::CudaVector
 #define CudaMergeVector CudaLatticeDecoder::CudaMergeVector
 #define PROC_DIMX 256
-#define COMPUTE_DEGREES_DIMX 256
+#define COMPUTE_DEGREES_DIMX PROC_DIMX
 // instantiation of templates
 template HOST DEVICE LatLink& CudaVector<LatLink>::operator[](uint32 idx);
 template HOST DEVICE TokenState& CudaVector<TokenState>::operator[](uint32 idx);
@@ -91,7 +91,7 @@ DEVICE static inline void _initialize_cutoff(CostType *cutoff) { *cutoff = 1e2; 
 DEVICE static inline void _find_or_add_token_arc(processTokens_params* params,
     StateId nextstate, CostType total_cost, CostType acoustic_cost,
     TokenState* ts, uint32 j, bool add_arc, TokenState** next_ts,
-    uint64 **token_pack, int32* update_idx, bool is_emit) {
+    uint64 **token_pack, int32* update_idx, bool is_emit, int lat_idx=-1) {
   TokenLookupElem& lookup_elem = params->current_tokens_lookup[nextstate];
   // check if token is active or not.  if not, activate it
   if (lookup_elem.tokenstate_idx == LOOKUP_DEACTIVE
@@ -134,8 +134,14 @@ DEVICE static inline void _find_or_add_token_arc(processTokens_params* params,
     // as update item index because it is unique in each frame obtained from
     // atomicAdd in pushBack function (lat_arcs_sub_vec
     // is recorded accumulatively and cleared only at end of decoding)
-    int32 ret = params->lat_arcs_sub_vec.PushBack(arc) -
+    int32 ret;
+    if (lat_idx == -1) {
+    ret = params->lat_arcs_sub_vec.PushBack(arc) -
                   *params->num_arcs_till_last;
+    } else {
+    ret = lat_idx;
+    params->lat_arcs_sub_vec.SetVal(arc, lat_idx + *params->num_arcs_till_last);
+    }
     assert(ret < params->max_lat_arc_per_frame);
     *update_idx = ret;
   }
@@ -179,8 +185,8 @@ DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
   bool is_emitting = true;
     TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
     const int total_narcs = *params->d_q_token_from_narcs;
-    const int old_q_offset = 0; //TODO
-    const int old_q_size = tok_vec.Size(); //TODO
+    const int old_q_offset = 0; 
+    const int old_q_size = tok_vec.Size(); 
 
 
     // Keeping the whole CTA alive, we'll have syncs
@@ -226,8 +232,8 @@ DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
 
     } // for block
  
+    // reduce inside block first
     BaseFloat new_block_cutoff = BlockReduce(temp_storage_reduce).Reduce(local_cutoff, cub::Min());
-  // TODO: reduce inside block first
   if (threadIdx.x == 0 && new_block_cutoff != INFINITY) {
     atomic_min(params->cutoff, new_block_cutoff);
   }
@@ -351,12 +357,15 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
   //for lattice
   typedef cub::BlockScan<int, PROC_DIMX> BlockScan;
   __shared__ typename BlockScan::TempStorage temp_storage;
+    
+  __shared__ int new_q_block_off; // for lat
+        __shared__ int is_last_CTA;
 
     TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
     int32 size = is_emitting?tok_vec.Size():isize; // same vec, so we have to use in-parameter
     const int total_narcs = *params->d_q_token_from_narcs;
-    const int old_q_offset = 0; //TODO
-    const int old_q_size = tok_vec.Size(); //TODO
+    const int old_q_offset = 0; 
+    const int old_q_size = tok_vec.Size(); 
 
 
     // Keeping the whole CTA alive, we'll have syncs
@@ -405,11 +414,15 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
             } 
         }
 
-      if (valid_input) { // not prune out
-        //has_suc
+      // do block scan & atomic here and get arc_idx, fed it to the latter _find_or_add_token_arc
+      int new_q_idx_block, has_successor = valid_input;
+      BlockScan(temp_storage).ExclusiveSum(has_successor, new_q_idx_block); // we could merge the reduce and
+      if(threadIdx.x == (PROC_DIMX- 1)) {
+          int total_block = new_q_idx_block + has_successor; // exclusive sum
+          new_q_block_off = atomicAdd(params->d_q_lat_end, total_block); 
       }
-
-      // TODO: do block scan & atomic here and get arc_idx, fed it to the latter _find_or_add_token_arc
+      __syncthreads(); //new_q_block_off & temp_storage
+      int new_q_index = new_q_block_off + new_q_idx_block;
 
       if (valid_input) { // not prune out
         assert(tok);
@@ -419,7 +432,7 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
         // get cur_tok&token_pack addr
         _find_or_add_token_arc(params, nextstate, total_cost,
                               acoustic_cost, ts, arc_idx, true, &next_ts, &token_pack,
-                              &update_idx, is_emitting);
+                              &update_idx, is_emitting, new_q_index);
         // 1st stage of 2-pass atomic token recombination
         // get cur_te&new_token_pack here
         // details in the definition of pack_cost_idx_into_uint64()
@@ -436,7 +449,29 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
       } // end valid_input
 
     } // for block
- 
+
+    __syncthreads(); // is_last_CTA + temp_storage reuse if last CTA
+    if(threadIdx.x == 0) {
+        int old = atomicAdd(params->d_n_CTA_done, 1);
+        is_last_CTA = (old == (gridDim.x -1));
+    }
+
+
+    if(is_last_CTA) {
+            // The last block alive takes care of scan of block sums 
+            __threadfence();
+            if(threadIdx.x == 0) {
+                *params->d_n_CTA_done = 0;
+  params->lat_arcs_sub_vec.SetSize(*params->num_arcs_till_last + *params->d_q_lat_end);
+  /*
+                if(params->lat_arcs_sub_vec.Size() != *params->num_arcs_till_last + *params->d_q_lat_end) { 
+                  printf ("NMC %i %i\n", params->lat_arcs_sub_vec.Size(), *params->num_arcs_till_last + *params->d_q_lat_end);
+                  //assert(params->lat_arcs_sub_vec.Size() == *params->num_arcs_till_last + *params->d_q_lat_end);
+                }
+                */
+            }
+    }
+
   grid_sync(params->barrier); // after finishing all tokens
   // 2nd stage of 2-pass atomic token recombination
   params->cur_toks.StoreDataByPackIdx(params->token_per_arc,
@@ -597,6 +632,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
       params.histogram_prev_toks.Initialize(*params.cutoff - params.beam);
   } else if (rank0) {
     *params.num_arcs_till_last = 0;
+    *params.d_q_lat_end = 0;
   }
 
   // modified flag for current iteration used in _process_nonemitting_tokens()
@@ -666,6 +702,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
       params.frame);
   if (rank0) {
     *params.num_arcs_till_last = params.lat_arcs_sub_vec.Size();
+    *params.d_q_lat_end = 0;
   }
 
   grid_sync(params.barrier); // after process lattice
@@ -759,6 +796,7 @@ HOST DEVICE uint32 CudaVector<T>::Size() const {
   return *count_h;
 #endif
 }
+
 
 // push back function implemented
 // by an atomic operation, where the memory is pre-allocated
@@ -1516,7 +1554,8 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   cudaMalloc((void**)&d_block_sums, sizeof(int)*config.max_tokens_per_frame);
   cudaMalloc((void**)&d_degrees_scan, sizeof(int)*config.max_tokens_per_frame);
   cudaMalloc((void**)&d_q_arc_offset, sizeof(int)*config.max_tokens_per_frame);
-  bytes_cuda_malloc += sizeof(int32) * (2 + 4*config.max_tokens_per_frame);
+  cudaMalloc((void**)&d_q_lat_end, sizeof(int));
+  bytes_cuda_malloc += sizeof(int32) * (3 + 4*config.max_tokens_per_frame);
 
   num_frames_decoded_ = 0;
   UpdateTokPointersByFrame(num_frames_decoded_);
@@ -1563,6 +1602,14 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
 
   cudaFree(token_per_arc_d);
   cudaFree(token_per_arc_update_d);
+
+  cudaFree(d_q_token_from_narcs);
+  cudaFree(d_block_sums_scan);
+  cudaFree(d_n_CTA_done);
+  cudaFree(d_block_sums);
+  cudaFree(d_degrees_scan);
+  cudaFree(d_q_arc_offset);
+  cudaFree(d_q_lat_end);
 
   cudaEventDestroy(event_pt);
   cudaEventDestroy(event_ll);
@@ -1645,6 +1692,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->d_block_sums = d_block_sums;
   params->d_degrees_scan = d_degrees_scan;
   params->d_q_arc_offset = d_q_arc_offset;
+  params->d_q_lat_end = d_q_lat_end;
 }
 
 // call InitDecoding if you have already decoded an
