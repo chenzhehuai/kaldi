@@ -158,6 +158,11 @@ inline HOST DEVICE int32 unpack_idx_from_uint64(uint64 packed) {
 // inline device function definition
 #ifdef __CUDACC__
 
+// another choice is pre-store the result of this binsearch, e.g. do something like:
+// for (int j=0; j < params->d_degrees[idx]; j++)
+//  params->d_lowerbound[j + params->d_degrees_scan[idx]] = idx;
+// however this for loop costs 9% more time, while the binsearch costs 6% time
+// thus the fastest way is doing binsearch without pre-store
 inline DEVICE int binsearch_maxle(const int *vec, const int val, int low, int high) {
     while(true) {
         if(low == high)

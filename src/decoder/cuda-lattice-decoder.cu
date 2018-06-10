@@ -133,7 +133,11 @@ DEVICE static inline void _find_or_add_token_arc(processTokens_params* params,
     // use pushBack (idx - start index of this frame)
     // as update item index because it is unique in each frame obtained from
     // atomicAdd in pushBack function (lat_arcs_sub_vec
-    // is recorded accumulatively and cleared only at end of decoding)
+    // is recorded accumulatively and cleared only at end of decoding). 
+    // another choice is doing block scan & atomic before and get arc_idx,
+    // fed it to _find_or_add_token_arc here; 
+    // however block scan costs 5% more time, while atomic here doesn't result
+    // in explicit burdens. 
     int32 ret = params->lat_arcs_sub_vec.PushBack(arc) -
                   *params->num_arcs_till_last;
     assert(ret < params->max_lat_arc_per_frame);
@@ -179,8 +183,8 @@ DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
   bool is_emitting = true;
     TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
     const int total_narcs = *params->d_q_token_from_narcs;
-    const int old_q_offset = 0; //TODO
-    const int old_q_size = tok_vec.Size(); //TODO
+    const int old_q_offset = 0; 
+    const int old_q_size = tok_vec.Size(); 
 
 
     // Keeping the whole CTA alive, we'll have syncs
@@ -201,7 +205,6 @@ DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
         Token *tok = NULL;
 
         if(valid_input) {
-            //we can do better than that
             q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
             
             int lower_bound = params->d_degrees_scan[q_idx - old_q_offset];
@@ -227,7 +230,7 @@ DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
     } // for block
  
     BaseFloat new_block_cutoff = BlockReduce(temp_storage_reduce).Reduce(local_cutoff, cub::Min());
-  // TODO: reduce inside block first
+  // reduce inside block first
   if (threadIdx.x == 0 && new_block_cutoff != INFINITY) {
     atomic_min(params->cutoff, new_block_cutoff);
   }
@@ -355,8 +358,8 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
     TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
     int32 size = is_emitting?tok_vec.Size():isize; // same vec, so we have to use in-parameter
     const int total_narcs = *params->d_q_token_from_narcs;
-    const int old_q_offset = 0; //TODO
-    const int old_q_size = tok_vec.Size(); //TODO
+    const int old_q_offset = 0; 
+    const int old_q_size = tok_vec.Size(); 
 
 
     // Keeping the whole CTA alive, we'll have syncs
@@ -377,7 +380,6 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
         Token *tok = NULL;
 
         if(valid_input) {
-            //we can do better than that
             q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
             
             int lower_bound = params->d_degrees_scan[q_idx - old_q_offset];
@@ -409,7 +411,6 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
         //has_suc
       }
 
-      // TODO: do block scan & atomic here and get arc_idx, fed it to the latter _find_or_add_token_arc
 
       if (valid_input) { // not prune out
         assert(tok);
