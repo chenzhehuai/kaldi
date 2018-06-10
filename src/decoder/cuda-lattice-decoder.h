@@ -470,6 +470,8 @@ class CudaLatticeDecoder {
     int *d_n_CTA_done;
     int *d_block_sums;
     int *d_degrees_scan;
+    int *d_degrees;
+    int *d_lowerbound;
     int *d_q_arc_offset;
   };
 
@@ -560,6 +562,8 @@ class CudaLatticeDecoder {
   int *d_n_CTA_done;
   int *d_block_sums;
   int *d_degrees_scan;
+  int *d_degrees;
+  int *d_lowerbound;
   int *d_q_arc_offset;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);

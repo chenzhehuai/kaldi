@@ -202,7 +202,8 @@ DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
 
         if(valid_input) {
             //we can do better than that
-            q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
+            q_idx = old_q_offset + params->d_lowerbound[th_idx]; 
+            //q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
             
             int lower_bound = params->d_degrees_scan[q_idx - old_q_offset];
             ts  = &tok_vec[q_idx];
@@ -270,8 +271,10 @@ DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emittin
             int scan;
             BlockScan(temp_storage).ExclusiveSum(degree, scan);
 
-            if(idx < queue_end)
+            if(idx < queue_end) {
                 params->d_degrees_scan[idx-queue_offset] = scan; 
+                params->d_degrees[idx-queue_offset] = degree;
+            }
 
             if(threadIdx.x == (COMPUTE_DEGREES_DIMX-1)) {
                 params->d_block_sums[block_offset/COMPUTE_DEGREES_DIMX] = (scan + degree); //  scan is exclusive
@@ -341,6 +344,11 @@ DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emittin
             int blk_scan_offset = params->d_block_sums_scan[blk_idx]; // we rely on L1 for this one, avoiding syncs
 
             params->d_degrees_scan[idx] += blk_scan_offset;
+            
+            for (int j = 0; j < params->d_degrees[idx] ; j++) {
+              params->d_lowerbound[j + params->d_degrees_scan[idx]] = idx;
+            }
+            
         }
   }
 
@@ -378,7 +386,8 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* pa
 
         if(valid_input) {
             //we can do better than that
-            q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
+            q_idx = old_q_offset + params->d_lowerbound[th_idx]; 
+            //q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
             
             int lower_bound = params->d_degrees_scan[q_idx - old_q_offset];
             ts  = &tok_vec[q_idx];
@@ -1515,8 +1524,10 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   cudaMalloc((void**)&d_n_CTA_done, sizeof(int));
   cudaMalloc((void**)&d_block_sums, sizeof(int)*config.max_tokens_per_frame);
   cudaMalloc((void**)&d_degrees_scan, sizeof(int)*config.max_tokens_per_frame);
+  cudaMalloc((void**)&d_degrees, sizeof(int)*config.max_tokens_per_frame);
+  cudaMalloc((void**)&d_lowerbound, sizeof(int)*config.max_lat_arc_per_frame);
   cudaMalloc((void**)&d_q_arc_offset, sizeof(int)*config.max_tokens_per_frame);
-  bytes_cuda_malloc += sizeof(int32) * (2 + 4*config.max_tokens_per_frame);
+  bytes_cuda_malloc += sizeof(int32) * (2 + 5*config.max_tokens_per_frame + 1*config.max_lat_arc_per_frame);
 
   num_frames_decoded_ = 0;
   UpdateTokPointersByFrame(num_frames_decoded_);
@@ -1563,6 +1574,15 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
 
   cudaFree(token_per_arc_d);
   cudaFree(token_per_arc_update_d);
+
+  cudaFree(d_q_token_from_narcs);
+  cudaFree(d_block_sums_scan);
+  cudaFree(d_n_CTA_done);
+  cudaFree(d_block_sums);
+  cudaFree(d_degrees_scan);
+  cudaFree(d_degrees);
+  cudaFree(d_lowerbound);
+  cudaFree(d_q_arc_offset);
 
   cudaEventDestroy(event_pt);
   cudaEventDestroy(event_ll);
@@ -1644,6 +1664,8 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->d_n_CTA_done = d_n_CTA_done;
   params->d_block_sums = d_block_sums;
   params->d_degrees_scan = d_degrees_scan;
+  params->d_degrees = d_degrees;
+  params->d_lowerbound= d_lowerbound;
   params->d_q_arc_offset = d_q_arc_offset;
 }
 
