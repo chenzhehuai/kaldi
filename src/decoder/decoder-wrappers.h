@@ -1,6 +1,7 @@
 // decoder/decoder-wrappers.h
 
 // Copyright   2014  Johns Hopkins University (author: Daniel Povey)
+//             2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //

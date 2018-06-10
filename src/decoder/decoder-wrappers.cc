@@ -1,6 +1,7 @@
+// decoder/decoder-wrappers.cc
 
-
-// Copyrigha 2014  Johns Hopkins University (author: Daniel Povey)
+// Copyright   2014  Johns Hopkins University (author: Daniel Povey)
+//             2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -33,10 +34,6 @@
 
 
 namespace kaldi {
-
-
-
-
 
 DecodeUtteranceLatticeFasterClass::DecodeUtteranceLatticeFasterClass(
   LatticeFasterDecoder *decoder,

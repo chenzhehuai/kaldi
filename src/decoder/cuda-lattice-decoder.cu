@@ -134,6 +134,7 @@ DEVICE static inline void _find_or_add_token_arc(processTokens_params* params,
     // as update item index because it is unique in each frame obtained from
     // atomicAdd in pushBack function (lat_arcs_sub_vec
     // is recorded accumulatively and cleared only at end of decoding). 
+    //
     // another choice is doing block scan & atomic before and get arc_idx,
     // fed it to _find_or_add_token_arc here; 
     // however block scan costs 5% more time, while atomic here doesn't result
@@ -172,272 +173,226 @@ DEVICE static inline void _find_prev_cutoff_by_histogram(
                                           params->max_active, params->verbose);
 }
 
-template<int32 blockDimx, int32 blockDimy>
-DEVICE static inline void _find_best_cutoff(processTokens_params* params) {
-  // blockDim threads per token to process out-arcs in parallel
-    typedef cub::BlockReduce<BaseFloat, COMPUTE_DEGREES_DIMX> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage_reduce;
+DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
+  typedef cub::BlockReduce<BaseFloat, COMPUTE_DEGREES_DIMX> BlockReduce;
+  __shared__ typename BlockReduce::TempStorage temp_storage_reduce;
 
   CostType local_cutoff = INFINITY;
   int32 size = params->prev_toks.Size();
   bool is_emitting = true;
-    TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
-    const int total_narcs = *params->d_q_token_from_narcs;
-    const int old_q_offset = 0; 
-    const int old_q_size = tok_vec.Size(); 
+  TokenMergeVector &tok_vec = is_emitting ? params->prev_toks : params->cur_toks;
+  const int total_narcs = *params->d_q_token_from_narcs;
+  const int old_q_offset = 0;
+  const int old_q_size = tok_vec.Size();
 
+  // as we'll have syncs, use block_offset < total_narcs to keep the whole CTA alive
+  for (int block_offset = blockDim.x * blockIdx.x; block_offset < total_narcs;
+  block_offset += gridDim.x * blockDim.x) {
+    int th_idx = block_offset + threadIdx.x;
+    bool valid_input = (th_idx < total_narcs);
 
-    // Keeping the whole CTA alive, we'll have syncs
-    for(int block_offset = blockDim.x*blockIdx.x;
-            block_offset < total_narcs;
-            block_offset += gridDim.x*blockDim.x) {
+    StateId prev_state, nextstate;
+    BaseFloat total_cost = FLT_MAX, acoustic_cost, weight;
+    int arc_idx, q_idx;
+    TokenState* ts;
+    Token *tok = NULL;
 
-        int th_idx = block_offset + threadIdx.x;
-        bool valid_input = (th_idx < total_narcs);
-
-        StateId prev_state;
-        BaseFloat total_cost = FLT_MAX;
-        int arc_idx;
-        StateId nextstate;
-        int q_idx;
-        BaseFloat acoustic_cost, weight;
-        TokenState* ts;
-        Token *tok = NULL;
-
-        if(valid_input) {
-            q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
-            
-            int lower_bound = params->d_degrees_scan[q_idx - old_q_offset];
-            ts  = &tok_vec[q_idx];
-    tok = params->lattice_processor.GetTokenByExactIdx(ts->tok_idx_allocated);
-     prev_state= ts->state;
-
-            int arc_offset_start = params->d_q_arc_offset[q_idx - old_q_offset];
-            arc_idx = arc_offset_start + (block_offset + threadIdx.x - lower_bound);
-
-            weight = params->arc_weights[arc_idx];
-            
-            int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
-
-            acoustic_cost = (arc_ilabel != 0) ? -params->loglikelihoods[arc_ilabel] : 0.0; 
-
+    if (valid_input) {
+      // q_idx of the previous token
+      // we do not keep q_idx but obtain it on-the-fly, details in binsearch_maxle()
+      q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0,
+              old_q_size - 1);
+      // arc number lower bound of this previous token
+      int arc_number_offset = params->d_degrees_scan[q_idx - old_q_offset];
+      ts  = &tok_vec[q_idx];
+      tok = params->lattice_processor.GetTokenByExactIdx(ts->tok_idx_allocated);
+            prev_state = ts->state;
+      // arc id lower bound of this previous token
+      int arc_id_offset = params->d_q_arc_offset[q_idx - old_q_offset];
+      arc_idx = arc_id_offset + (block_offset + threadIdx.x - arc_number_offset);
+      int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
+      acoustic_cost = (arc_ilabel != 0) ? -params->loglikelihoods[arc_ilabel] : 0.0;
+      weight = params->arc_weights[arc_idx];
       total_cost = tok->cost_ + weight + acoustic_cost + params->beam;
 
       if (total_cost < local_cutoff)
         local_cutoff = total_cost;
-        }
+    }
+  } // for block
 
-    } // for block
- 
-    BaseFloat new_block_cutoff = BlockReduce(temp_storage_reduce).Reduce(local_cutoff, cub::Min());
   // reduce inside block first
+  BaseFloat new_block_cutoff = BlockReduce(temp_storage_reduce).Reduce(local_cutoff,
+                               cub::Min());
   if (threadIdx.x == 0 && new_block_cutoff != INFINITY) {
     atomic_min(params->cutoff, new_block_cutoff);
   }
-  
- }
+}
 
-DEVICE void compute_degrees_kernel(processTokens_params* params, bool is_emitting) {
-       typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
-       __shared__ typename BlockScan::TempStorage temp_storage;
+DEVICE static inline void _compute_degrees_scan(processTokens_params * params, 
+  bool is_emitting) {
+  typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
+  __shared__ typename BlockScan::TempStorage temp_storage;
+  __shared__ int blk_scan_offset;
+  __shared__ int is_last_CTA;
 
-       __shared__ int blk_scan_offset;
-       __shared__ int is_last_CTA;
-
-        TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
-        const uint32 *d_offsets = is_emitting?params->e_offsets:params->ne_offsets;
-        int queue_offset = 0; 
-        int queue_end = tok_vec.Size(); 
-        int queue_size = queue_end-queue_offset;
-
-        for(int block_offset = blockDim.x*blockIdx.x;
-                block_offset < queue_size;
-                block_offset += gridDim.x*blockDim.x) {
-            int idx = queue_offset + block_offset + threadIdx.x;
-            int degree = 0;
-
-            if(idx < queue_end) {
-
-    TokenState& ts = tok_vec[idx];
-    StateId state_idx = ts.state;
-    if (!is_emitting && !tok_vec.IsUpdated(idx)) {
-      degree = 0;
-    } else {
-                        int start = d_offsets[state_idx];
-                        int end = d_offsets[state_idx+1];
-                        degree = end - start;
-                        params->d_q_arc_offset[idx-queue_offset] = start; 
+  TokenMergeVector &tok_vec = is_emitting ? params->prev_toks : params->cur_toks;
+  const uint32 *d_offsets = is_emitting ? params->e_offsets : params->ne_offsets;
+  int queue_offset = 0;
+  int queue_end = tok_vec.Size();
+  int queue_size = queue_end - queue_offset;
+  // as we'll have syncs, use block_offset < total_narcs to keep the whole CTA alive
+  for (int block_offset = blockDim.x * blockIdx.x;
+       block_offset < queue_size;
+       block_offset += gridDim.x * blockDim.x) {
+    int idx = queue_offset + block_offset + threadIdx.x;
+    int degree = 0;
+    if (idx < queue_end) { // compute degrees
+      TokenState& ts = tok_vec[idx];
+      StateId state_idx = ts.state;
+      if (is_emitting || tok_vec.IsUpdated(idx)) {
+        int start = d_offsets[state_idx];
+        int end = d_offsets[state_idx + 1];
+        degree = end - start;
+        params->d_q_arc_offset[idx - queue_offset] = start;
+      }
     }
-            }
+    int scan;
+    BlockScan(temp_storage).ExclusiveSum(degree, scan); // do scanning
+    if (idx < queue_end)
+      params->d_degrees_scan[idx - queue_offset] = scan;
+    if (threadIdx.x == (COMPUTE_DEGREES_DIMX - 1)) {
+      params->d_block_sums[block_offset / COMPUTE_DEGREES_DIMX] =
+        (scan + degree); //  scan is exclusive
+    }
 
-            int scan;
-            BlockScan(temp_storage).ExclusiveSum(degree, scan);
-
-            if(idx < queue_end)
-                params->d_degrees_scan[idx-queue_offset] = scan; 
-
-            if(threadIdx.x == (COMPUTE_DEGREES_DIMX-1)) {
-                params->d_block_sums[block_offset/COMPUTE_DEGREES_DIMX] = (scan + degree); //  scan is exclusive
-            }
-
-            if((block_offset + gridDim.x*blockDim.x) < queue_end) {
-                // if there's another iteration, we'll reuse temp_storage
-                __syncthreads();
-            }
-        }
-
-        if(threadIdx.x == 0) {
-            int old = atomicAdd(params->d_n_CTA_done, 1); 
-            blk_scan_offset = 0; // will be used if last CTA, avoiding a second sync
-            is_last_CTA = (old == (gridDim.x -1));
-        }
-
-        __syncthreads(); // is_last_CTA + temp_storage reuse if last CTA
-
-        if(is_last_CTA) {
-                // The last block alive takes care of scan of block sums 
-                __threadfence();
-                if(threadIdx.x == 0) {
-                    *params->d_n_CTA_done = 0;
-                }
-
-                // following value can be different than gridDim.x
-                int total_blk_val = (queue_size + COMPUTE_DEGREES_DIMX -1) / COMPUTE_DEGREES_DIMX;
-
-                for(int blk_idx_off = 0;
-                    blk_idx_off < total_blk_val;
-                    blk_idx_off += blockDim.x) {
-                    int blk_idx = blk_idx_off + threadIdx.x;
-
-                    int blk_sum = (blk_idx < total_blk_val) ? params->d_block_sums[blk_idx] : 0;
-
-                    int blk_scan;
-                    BlockScan(temp_storage).ExclusiveSum(blk_sum, blk_scan);
-                    blk_scan += blk_scan_offset; 
-                
-                    if(blk_idx < total_blk_val) {
-                        params->d_block_sums_scan[blk_idx] = blk_scan; 
-                    }
-                    
-                    __syncthreads(); // blk_scan_offset + reuse temp_storage
-                    if(threadIdx.x == (COMPUTE_DEGREES_DIMX-1)) {
-                        int total = blk_scan + blk_sum;
-                        blk_scan_offset = total;
-                    }
-
-                }
-
-            if(threadIdx.x == 0) {
-                *params->d_q_token_from_narcs = blk_scan_offset; 
-            }
-        }
-        grid_sync(params->barrier); // after finishing all tokens
-        int q_off = queue_offset;
-        int q_end = queue_end;
-        int q_size = q_end - q_off;
-
-        for(int idx = blockDim.x*blockIdx.x + threadIdx.x;
-                idx < q_size;
-                idx += blockDim.x*gridDim.x) {
-
-            int blk_idx = idx / blockDim.x;
-            int blk_scan_offset = params->d_block_sums_scan[blk_idx]; // we rely on L1 for this one, avoiding syncs
-
-            params->d_degrees_scan[idx] += blk_scan_offset;
-        }
+    // if there's another iteration, we'll reuse temp_storage
+    if ((block_offset + gridDim.x * blockDim.x) < queue_end) __syncthreads();
   }
 
+  // for is_last_CTA (the last block to finish)
+  if (threadIdx.x == 0) {
+    int old = atomicAdd(params->d_n_CTA_done, 1);
+    blk_scan_offset = 0; // will be used if last CTA, avoiding a second sync
+    is_last_CTA = (old == (gridDim.x - 1));
+  }
+  __syncthreads(); // is_last_CTA + temp_storage reuse if last CTA
+  if (is_last_CTA) { // The last block alive takes care of scan of block sums
+    __threadfence();
+    if (threadIdx.x == 0) *params->d_n_CTA_done = 0;
 
-DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params* params, bool is_emitting = true, volatile int32 *modified = NULL, int isize = 0) {
-  // blockDim threads per token to process out-arcs in parallel
-  CostType cutoff = *params->cutoff;
-  //for lattice
-  typedef cub::BlockScan<int, PROC_DIMX> BlockScan;
-  __shared__ typename BlockScan::TempStorage temp_storage;
-
-    TokenMergeVector &tok_vec = is_emitting? params->prev_toks:params->cur_toks;
-    int32 size = is_emitting?tok_vec.Size():isize; // same vec, so we have to use in-parameter
-    const int total_narcs = *params->d_q_token_from_narcs;
-    const int old_q_offset = 0; 
-    const int old_q_size = tok_vec.Size(); 
-
-
-    // Keeping the whole CTA alive, we'll have syncs
-    for(int block_offset = blockDim.x*blockIdx.x;
-            block_offset < total_narcs;
-            block_offset += gridDim.x*blockDim.x) {
-
-        int th_idx = block_offset + threadIdx.x;
-        bool valid_input = (th_idx < total_narcs);
-
-        StateId prev_state;
-        BaseFloat total_cost = FLT_MAX;
-        int arc_idx;
-        StateId nextstate;
-        int q_idx;
-        BaseFloat acoustic_cost, weight;
-        TokenState* ts;
-        Token *tok = NULL;
-
-        if(valid_input) {
-            q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0, old_q_size-1); 
-            
-            int lower_bound = params->d_degrees_scan[q_idx - old_q_offset];
-            ts  = &tok_vec[q_idx];
-    tok = params->lattice_processor.GetTokenByExactIdx(ts->tok_idx_allocated);
-     prev_state= ts->state;
-
-            int arc_offset_start = params->d_q_arc_offset[q_idx - old_q_offset];
-            arc_idx = arc_offset_start + (block_offset + threadIdx.x - lower_bound);
-
-            nextstate = params->arc_nextstates[arc_idx];
-            weight = params->arc_weights[arc_idx];
-            
-            int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
-
-            acoustic_cost = (arc_ilabel != 0) ? -params->loglikelihoods[arc_ilabel] : 0.0; 
-
-            BaseFloat old_tok_cost = tok->cost_;
-
-            total_cost = acoustic_cost + weight + old_tok_cost;
-
-            if(tok->cost_ > *params->cutoff_prev || total_cost > cutoff) {
-                total_cost = FLT_MAX;
-                valid_input = false; 
-            } 
-        }
-
-      if (valid_input) { // not prune out
-        //has_suc
+    // following value can be different than gridDim.x
+    int total_blk_val = (queue_size + COMPUTE_DEGREES_DIMX - 1) /
+                        COMPUTE_DEGREES_DIMX;
+    for (int blk_idx_off = 0; // obtain block sum
+         blk_idx_off < total_blk_val;
+         blk_idx_off += blockDim.x) {
+      int blk_idx = blk_idx_off + threadIdx.x;
+      int blk_sum = (blk_idx < total_blk_val) ? params->d_block_sums[blk_idx] : 0;
+      int blk_scan;
+      BlockScan(temp_storage).ExclusiveSum(blk_sum, blk_scan);
+      blk_scan += blk_scan_offset;
+      if (blk_idx < total_blk_val) {
+        params->d_block_sums_scan[blk_idx] = blk_scan;
       }
+      __syncthreads(); // blk_scan_offset + reuse temp_storage
+      if (threadIdx.x == (COMPUTE_DEGREES_DIMX - 1)) {
+        int total = blk_scan + blk_sum;
+        blk_scan_offset = total;
+      }
+    }
+    if (threadIdx.x == 0) {
+      *params->d_q_token_from_narcs = blk_scan_offset;
+    }
+  }
 
+  grid_sync(params->barrier); // after finishing above scanning
 
-      if (valid_input) { // not prune out
-        assert(tok);
-        uint64* token_pack;
-        TokenState *next_ts = NULL;
-        int32 update_idx; 
-        // get cur_tok&token_pack addr
-        _find_or_add_token_arc(params, nextstate, total_cost,
-                              acoustic_cost, ts, arc_idx, true, &next_ts, &token_pack,
-                              &update_idx, is_emitting);
-        // 1st stage of 2-pass atomic token recombination
-        // get cur_te&new_token_pack here
-        // details in the definition of pack_cost_idx_into_uint64()
-        uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, update_idx);
-        uint64 ret = atomicMax((unsigned long long *)token_pack,
-                               (unsigned long long)new_token_pack);
-        if (ret < new_token_pack) {
-          assert(update_idx < params->max_lat_arc_per_frame);
-          Token* cur_te = params->token_per_arc + update_idx;
-          fast_store8(cur_te, &(Token(acoustic_cost + weight, tok)));
-          params->token_per_arc_update[update_idx] = 1;
-          if (!is_emitting) (*modified) = true; // show that we need another iteration
-        }
-      } // end valid_input
+  // add block sum to scan result
+  int q_off = queue_offset;
+  int q_end = queue_end;
+  int q_size = q_end - q_off;
+  for (int idx = blockDim.x * blockIdx.x + threadIdx.x;
+       idx < q_size;
+       idx += blockDim.x * gridDim.x) {
+    int blk_idx = idx / blockDim.x;
+    int blk_scan_offset =
+      params->d_block_sums_scan[blk_idx]; // we rely on L1 for this one, avoiding syncs
+    params->d_degrees_scan[idx] += blk_scan_offset;
+  }
+}
 
-    } // for block
- 
+DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params * params, 
+  bool is_emitting = true, volatile int32 *modified = NULL, int isize = 0) {
+  CostType cutoff = *params->cutoff;
+  TokenMergeVector &tok_vec = is_emitting ? params->prev_toks : params->cur_toks;
+  int32 size = is_emitting ? tok_vec.Size() :
+               isize; // same vec to be modified in the following, 
+               // so we have to use in-parameter
+  const int total_narcs = *params->d_q_token_from_narcs;
+  const int old_q_offset = 0;
+  const int old_q_size = tok_vec.Size();
+
+  // Keeping the whole CTA alive, we'll have syncs
+  for (int block_offset = blockDim.x * blockIdx.x;
+       block_offset < total_narcs;
+       block_offset += gridDim.x * blockDim.x) {
+    int th_idx = block_offset + threadIdx.x;
+    bool valid_input = (th_idx < total_narcs);
+
+    StateId prev_state, nextstate;
+    BaseFloat total_cost = FLT_MAX, acoustic_cost, weight;
+    int arc_idx, q_idx;
+    TokenState* ts;
+    Token *tok = NULL;
+
+    if (valid_input) {
+      // q_idx of the previous token
+      // we do not keep q_idx but obtain it on-the-fly, details in binsearch_maxle()
+      q_idx = old_q_offset + binsearch_maxle(params->d_degrees_scan, th_idx, 0,
+                                             old_q_size - 1);
+
+      // arc number lower bound of this previous token
+      int arc_number_offset = params->d_degrees_scan[q_idx - old_q_offset];
+      ts  = &tok_vec[q_idx];
+      tok = params->lattice_processor.GetTokenByExactIdx(ts->tok_idx_allocated);
+      assert(tok);
+      prev_state = ts->state;
+      BaseFloat old_tok_cost = tok->cost_;
+      // arc id lower bound of this previous token
+      int arc_id_offset = params->d_q_arc_offset[q_idx - old_q_offset];
+      arc_idx = arc_id_offset + (block_offset + threadIdx.x - arc_number_offset);
+      int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
+      nextstate = params->arc_nextstates[arc_idx];
+      weight = params->arc_weights[arc_idx];
+      acoustic_cost = (arc_ilabel != 0) ? -params->loglikelihoods[arc_ilabel] : 0.0;
+      total_cost = acoustic_cost + weight + old_tok_cost;
+
+      if (tok->cost_ > *params->cutoff_prev || total_cost > cutoff) continue;
+      
+      // not prune out
+      uint64* token_pack;
+      TokenState *next_ts = NULL;
+      int32 update_idx;
+      // get cur_tok&token_pack addr
+      _find_or_add_token_arc(params, nextstate, total_cost,
+                             acoustic_cost, ts, arc_idx, true, &next_ts, &token_pack,
+                             &update_idx, is_emitting);
+      // 1st stage of 2-pass atomic token recombination
+      // get cur_te&new_token_pack here
+      // details in the definition of pack_cost_idx_into_uint64()
+      uint64 new_token_pack = pack_cost_idx_into_uint64(-total_cost, update_idx);
+      uint64 ret = atomicMax((unsigned long long *)token_pack,
+                             (unsigned long long)new_token_pack);
+      if (ret < new_token_pack) {
+        assert(update_idx < params->max_lat_arc_per_frame);
+        Token* cur_te = params->token_per_arc + update_idx;
+        fast_store8(cur_te, &(Token(acoustic_cost + weight, tok)));
+        params->token_per_arc_update[update_idx] = 1;
+        if (!is_emitting) (*modified) = true; // show that we need another iteration
+      }
+    } // end valid_input
+  } // for block
+
   grid_sync(params->barrier); // after finishing all tokens
   // 2nd stage of 2-pass atomic token recombination
   params->cur_toks.StoreDataByPackIdx(params->token_per_arc,
@@ -587,7 +542,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
 
   if (!is_init) { // only do _process_nonemitting_tokens() at frame 0
-    compute_degrees_kernel(&params, true); //for emit
+    _compute_degrees_scan(&params, true); //for emit
     grid_sync(params.barrier); // after finishing all tokens
 
     _find_best_cutoff<32, 2>(&params);
@@ -645,7 +600,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // details of aggregation described in _process_nonemitting_tokens()
     bool aggregate = (!is_init) && cnt > 1 ? 1 : 0;
     if (!aggregate) {
-      compute_degrees_kernel(&params, false); //for non-emit
+      _compute_degrees_scan(&params, false); //for non-emit
       grid_sync(params.barrier);
       _process_emit_or_nemit_tokens(&params, false, modified0, size);
     } else {
