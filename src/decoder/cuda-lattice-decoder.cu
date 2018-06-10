@@ -545,7 +545,7 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     _compute_degrees_scan(&params, true); //for emit
     grid_sync(params.barrier); // after finishing all tokens
 
-    _find_best_cutoff<32, 2>(&params);
+    _find_best_cutoff(&params);
     grid_sync(params.barrier);
 
     // to reduce a grid sync, we initialize here for next frame
