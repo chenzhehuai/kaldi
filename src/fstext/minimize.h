@@ -420,7 +420,11 @@ void AcceptorMinimizeAdv(VectorFst<Arc, B> *fst,
   if (allow_acyclic_minimization && fst->Properties(kAcyclic, true)) {
     // Acyclic minimization (Revuz).
     VLOG(2) << "Acyclic minimization";
-    assert(0);
+    ArcSort(fst, ILabelCompare<Arc>());
+    AcyclicMinimizer<Arc> minimizer(*fst);
+  t2=timer.Elapsed();
+    MergeStatesAdv(minimizer.GetPartition(), fst);
+  t3=timer.Elapsed();
   } else {
     // Either the FST has cycles, or it's generated from non-deterministic input
     // (which the Revuz algorithm can't handle), so use the cyclic minimization
