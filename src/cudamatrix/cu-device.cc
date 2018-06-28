@@ -58,6 +58,15 @@ namespace kaldi {
 */
 
 static bool GetCudaContext(int32 num_gpus, std::string *debug_str) {
+
+  // Our first attempt to get a device context is: we do cudaFree(0) and see if
+  // that returns no error code.  If it succeeds then we have a device
+  // context.  Apparently this is the canonical way to get a context.
+  if (cudaFree(0) == 0)
+    return true;
+
+  // The rest of this code represents how we used to get a device context, but
+  // now its purpose is mainly a debugging one.
   std::ostringstream debug_stream;
   debug_stream << "num-gpus=" << num_gpus << ". ";
   for (int32 device = 0; device < num_gpus; device++) {
@@ -94,16 +103,14 @@ static bool GetCudaContext(int32 num_gpus, std::string *debug_str) {
  * (before first allocation in cudamatrix), or not at all (default to CPU).
  *
  */
+  
+void CuDevice::SelectGpuId(int id) {
+  cudaSetDevice(id);
+  FinalizeActiveGpu();
+}
+
 void CuDevice::SelectGpuId(std::string use_gpu) {
-#if 1
 //quick and dirty hack to get one context per device.  This should not be commited to tree.
-   CUdevice device;
-   cuDeviceGet(&device,0);
-   CUcontext ctx;
-   cuCtxCreate(&ctx, 0, device);
-   cuCtxSetCurrent(ctx);
-   FinalizeActiveGpu();
-#else
   // Possible modes
   if (use_gpu != "yes" && use_gpu != "no" && use_gpu != "optional" && use_gpu != "wait") {
     KALDI_ERR << "Please choose : --use-gpu=yes|no|optional|wait, passed '" << use_gpu << "'";
@@ -213,7 +220,6 @@ void CuDevice::SelectGpuId(std::string use_gpu) {
       }
     }
   }
-#endif
 }
 
 
@@ -230,9 +236,9 @@ void CuDevice::FinalizeActiveGpu() {
     }
     // Remember the id of active GPU
     active_gpu_id_ = act_gpu_id; // CuDevice::Enabled() is true from now on
-    // Initialize the CUBLAS
+    // Initialize CUBLAS.
     CUBLAS_SAFE_CALL(cublasCreate(&handle_));
-    // Initialize the cuSPARSE
+    // Initialize the cuSPARSE library
     CUSPARSE_SAFE_CALL(cusparseCreate(&cusparse_handle_));
 
     cublasSetStream(handle_, cudaStreamPerThread);
