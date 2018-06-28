@@ -150,7 +150,7 @@ int main(int argc, char *argv[]) {
     {
       printf("Thread %d of %d\n", omp_get_thread_num(), omp_get_num_threads());
 #if HAVE_CUDA==1
-      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().SelectGpuId(1);
       CuDevice::Instantiate().AllowMultithreading();
 #endif
 
