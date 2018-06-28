@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // GPU version of WFST
       CudaFst decode_fst_cuda;
-      CuDevice::Instantiate().SelectGpuId("yes");
+      CuDevice::Instantiate().SelectGpuId(1);
       CuDevice::Instantiate().AllowMultithreading();
       // Input FST is just one FST, not a table of FSTs.
       Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);

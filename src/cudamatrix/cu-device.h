@@ -81,13 +81,13 @@ class CuDevice {
     else allocator_.Free(ptr);
   }
 
+  void SelectGpuId(int id);
   /// Select a GPU for computation, the 'use_gpu' modes are:
   ///  "yes"      -- Select GPU automatically and die if this fails.
   ///  "optional" -- Do as above, but if it fails, back off to CPU.
   ///  "no"       -- Run on CPU.
   ///  (more comments in cu-device.cc)
   void SelectGpuId(std::string use_gpu);
-
   /// Check if the CUDA GPU is selected for use
   bool Enabled() const {
     return (active_gpu_id_ > -1);
