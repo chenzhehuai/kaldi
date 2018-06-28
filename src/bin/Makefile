@@ -31,7 +31,7 @@ LDLIBS += $(CUDA_LDLIBS)
 LDLIBS += -lnvToolsExt -lcuda 
 CXXFLAGS += -fopenmp
 LDFLAGS += -fopenmp
-LDFLAGS += ../cudamatrix/libkaldi-cudamatrix.so
+#LDFLAGS += ../cudamatrix/libkaldi-cudamatrix.so
 BINFILES += latgen-faster-mapped-cuda latgen-faster-mapped-cuda-parallel latgen-faster-mapped-cuda-parallel-eval latgen-faster-mapped-cuda-parallel-split latgen-faster-mapped-cuda-parallelclass
 endif
 
@@ -41,7 +41,7 @@ ADDLIBS = ../decoder/kaldi-decoder.a ../lat/kaldi-lat.a ../lm/kaldi-lm.a \
           ../fstext/kaldi-fstext.a ../hmm/kaldi-hmm.a \
           ../transform/kaldi-transform.a ../gmm/kaldi-gmm.a \
           ../tree/kaldi-tree.a ../util/kaldi-util.a \
-          ../matrix/kaldi-matrix.a ../base/kaldi-base.a
+          ../matrix/kaldi-matrix.a ../base/kaldi-base.a ../cudamatrix/kaldi-cudamatrix.a
 
 
 TESTFILES =
