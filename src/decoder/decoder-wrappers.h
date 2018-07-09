@@ -158,7 +158,7 @@ class DecodeUtteranceLatticeFasterClassCuda : public MultiThreadable {
 // GPU decoding interface of decoding and lattice processing
 bool DecodeUtteranceLatticeFasterCuda(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
-  DecodableInterface &decodable, // not const but is really an input.
+  DecodableChunkMatrixScaledMapped &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,
@@ -177,7 +177,7 @@ bool DecodeUtteranceLatticeFasterCuda(
 // e.g. using #pragma omp critical { }
 bool DecodeUtteranceLatticeFasterCudaOutput(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
-  DecodableInterface &decodable, // not const but is really an input.
+  DecodableChunkMatrixScaledMapped &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,

@@ -211,7 +211,7 @@ DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
       int arc_id_offset = params->d_q_arc_offset[q_idx - old_q_offset];
       arc_idx = arc_id_offset + (block_offset + threadIdx.x - arc_number_offset);
       int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
-      acoustic_cost = (arc_ilabel != 0) ? -params->loglikelihoods[arc_ilabel] : 0.0;
+      acoustic_cost = (arc_ilabel != 0) ? -params->cuda_decodable.LogLikelihood(params->frame, arc_ilabel) : 0.0;
       weight = params->arc_weights[arc_idx];
       total_cost = tok->cost_ + weight + acoustic_cost + params->beam;
 
@@ -364,7 +364,7 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params * p
       int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
       nextstate = params->arc_nextstates[arc_idx];
       weight = params->arc_weights[arc_idx];
-      acoustic_cost = (arc_ilabel != 0) ? -params->loglikelihoods[arc_ilabel] : 0.0;
+      acoustic_cost = (arc_ilabel != 0) ? -params->cuda_decodable.LogLikelihood(params->frame, arc_ilabel) : 0.0;
       total_cost = acoustic_cost + weight + old_tok_cost;
 
       if (tok->cost_ > *params->cutoff_prev || total_cost > cutoff) continue;
@@ -1429,14 +1429,17 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
              sizeof(TokenLookupElem)*fst_.numStates);
   bytes_cuda_malloc += sizeof(TokenLookupElem) * fst_.numStates;
 
-  cudaMallocHost(&loglikelihoods_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
-  cudaMallocHost(&loglikelihoods_old_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
+  /*cudaMallocHost(&loglikelihoods_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
+  cudaMallocHost(&loglikelihoods_old_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));*/ //TODO
 
+  /*
   cudaMalloc((void**)&loglikelihoods_d, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
   bytes_cuda_malloc += sizeof(BaseFloat) * (fst_.max_ilabel + 1);
   cudaMalloc((void**)&loglikelihoods_old_d,
              sizeof(BaseFloat) * (fst_.max_ilabel + 1));
   bytes_cuda_malloc += sizeof(BaseFloat) * (fst_.max_ilabel + 1);
+  */
+  loglikelihoods_d = loglikelihoods_old_d = NULL;
 
   // for pruning
   bytes_cuda_malloc += lattice_processor_.Allocate(config.max_tokens_per_frame,
@@ -1499,10 +1502,10 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
   lattice_processor_.Free();
   histogram_prev_toks_.Free();
 
-  cudaFreeHost(loglikelihoods_h);
-  cudaFreeHost(loglikelihoods_old_h);
-  cudaFree(loglikelihoods_d);
-  cudaFree(loglikelihoods_old_d);
+  /*cudaFreeHost(loglikelihoods_h); //TODO
+  cudaFreeHost(loglikelihoods_old_h);*/
+  /*cudaFree(loglikelihoods_d);
+  cudaFree(loglikelihoods_old_d);*/
   cudaFree(current_tokens_lookup_d);
 
   cudaFree(pe_idx_d);
@@ -1528,23 +1531,23 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
   cudaStreamDestroy(stream_ll);
 }
 
-void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableInterface *decodable) {
+void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableChunkMatrixScaledMapped *decodable) {
   PUSH_RANGE("ComputeLogLikelihoods", 3)
   int32 frame = num_frames_decoded_;
   // finish decoding this frame, it has been ensured outside
   // cudaStreamSynchronize(stream_comp);
 
   // double buffering so we don't overwrite loglikelihoods_h before it is copied down
-  std::swap(loglikelihoods_h,
-            loglikelihoods_old_h);
+  /*std::swap(loglikelihoods_h, //TODO
+            loglikelihoods_old_h);*/
   std::swap(loglikelihoods_d, loglikelihoods_old_d);
 
-  decodable->ComputeLogLikelihoods(loglikelihoods_h, frame, fst_.max_ilabel + 1);
-
+  int chunk_len;
   // copying in another stream to overlap transfer with compute
-  cudaMemcpyAsync(loglikelihoods_d, loglikelihoods_h,
-                  sizeof(BaseFloat) * (fst_.max_ilabel + 1),
-                  cudaMemcpyHostToDevice, stream_ll);
+  if (loglikelihoods_d) decodable->FreeLogLikelihoodChunk(loglikelihoods_d); loglikelihoods_d=NULL;
+  decodable->LogLikelihoodChunk(frame, &loglikelihoods_d, &chunk_len, stream_ll);
+  cuda_decodable_ = DecodableCuMatrixScaledMapped(decodable->id2pdf_d_, decodable->scale_, loglikelihoods_d, decodable->trans_model_.NumPdfs()); // for current frame
+
   // mark log likelihoods are copied down to the device
   cudaEventRecord(event_ll, stream_ll);
 
@@ -1576,7 +1579,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->arc_weights = fst_.arc_weights_d;
   params->arc_nextstates = fst_.arc_nextstates_d;
 
-  params->loglikelihoods = loglikelihoods_d;
+  params->cuda_decodable = cuda_decodable_;
   params->modified = modified_d;
   params->pe_idx = pe_idx_d;
   params->ne_idx = ne_idx_d;
@@ -1642,6 +1645,9 @@ void CudaLatticeDecoder::InitDecoding() {
 
   ProcessNonemitting();
 
+  //TODO
+  if (loglikelihoods_d) CuDevice::Instantiate().Free(loglikelihoods_d); loglikelihoods_d=NULL;
+  if (loglikelihoods_old_d) CuDevice::Instantiate().Free(loglikelihoods_old_d); loglikelihoods_old_d=NULL;
   if (config_.verbose > 1 ) KALDI_LOG <<
                                         "end of CUDA LatticeDecoder InitDecoding\n";
 }

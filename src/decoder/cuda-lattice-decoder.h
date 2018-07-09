@@ -442,7 +442,7 @@ class CudaLatticeDecoder {
     const __restrict__ int32 *arc_olabels; 
     const __restrict__ BaseFloat *arc_weights;
     const __restrict__ StateId *arc_nextstates;
-    const __restrict__ BaseFloat *loglikelihoods;
+    DecodableCuMatrixScaledMapped cuda_decodable;
 
     // GPU global memory temp variables
     volatile int32 *modified;
@@ -479,7 +479,7 @@ class CudaLatticeDecoder {
   ~CudaLatticeDecoder();
 
   // pre-computes log likelihoods for the current frame
-  void ComputeLogLikelihoods(DecodableInterface *decodable);
+  void ComputeLogLikelihoods(DecodableChunkMatrixScaledMapped *decodable);
 
   // decoding functions
   void InitParams(processTokens_params* params);  // parameters for calling GPU
@@ -561,6 +561,7 @@ class CudaLatticeDecoder {
   int *d_block_sums;
   int *d_degrees_scan;
   int *d_q_arc_offset;
+  DecodableCuMatrixScaledMapped cuda_decodable_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

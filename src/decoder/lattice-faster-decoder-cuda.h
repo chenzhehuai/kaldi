@@ -64,7 +64,7 @@ class LatticeFasterDecoderCuda {
   // Returns true if any kind of traceback is available (not necessarily from a
   // final state).
   // the main procedure is done in GPU
-  bool Decode(DecodableInterface *decodable);
+  bool Decode(DecodableChunkMatrixScaledMapped *decodable);
 
   // the same to the version in lattice-faster-decoder.h
   // says whether a final-state was active on the last frame.  If it was not, the

@@ -276,7 +276,7 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
       num_fail++;
       continue;
     }
-    DecodableMatrixScaledMapped decodable(trans_model_, loglikes, acoustic_scale_);
+    DecodableChunkMatrixScaledMapped decodable(trans_model_, loglikes, acoustic_scale_);
     POP_RANGE
 
     double like;
@@ -333,7 +333,7 @@ DecodeUtteranceLatticeFasterClassCuda::~DecodeUtteranceLatticeFasterClassCuda() 
 // e.g. using #pragma omp critical { }
 bool DecodeUtteranceLatticeFasterCuda(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
-  DecodableInterface &decodable, // not const but is really an input.
+  DecodableChunkMatrixScaledMapped &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,
@@ -390,7 +390,7 @@ bool DecodeUtteranceLatticeFasterCuda(
 // e.g. using #pragma omp critical { }
 bool DecodeUtteranceLatticeFasterCudaOutput(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
-  DecodableInterface &decodable, // not const but is really an input.
+  DecodableChunkMatrixScaledMapped &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,

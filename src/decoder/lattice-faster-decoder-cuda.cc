@@ -68,7 +68,7 @@ void LatticeFasterDecoderCuda::InitDecoding() {
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
 // an unusual search error.
-bool LatticeFasterDecoderCuda::Decode(DecodableInterface *decodable) {
+bool LatticeFasterDecoderCuda::Decode(DecodableChunkMatrixScaledMapped *decodable) {
   PUSH_RANGE("CudaLatticeDecoder::Decode::init_search", 0);
   InitDecoding(); // CPU init
   decoder_.InitDecoding(); // GPU init
