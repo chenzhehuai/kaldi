@@ -127,7 +127,7 @@ int main(int argc, char *argv[]) {
             num_fail++;
             continue;
           }
-          DecodableChunkMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale, config.chunk_len);
+          DecodableChunkMatrix decodable(trans_model, loglikes, acoustic_scale, config.chunk_len);
           POP_RANGE
 
           double like;

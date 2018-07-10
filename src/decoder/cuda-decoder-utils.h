@@ -3,13 +3,13 @@
 // Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// 
+//
 // http:// www.apache.org/licenses/LICENSE-2.0
-// 
+//
 // THIS CODE IS PROVIDED *AS IS* BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY IMPLIED
 // WARRANTIES OR CONDITIONS OF TITLE, FITNESS FOR A PARTICULAR PURPOSE,
@@ -56,8 +56,9 @@ namespace kaldi {
 #define USE_NVTX
 #ifdef USE_NVTX
 #include "nvToolsExt.h"
-const uint32 colors[] = {0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff, 
-                         0x0000ffff, 0x00ff0000, 0x00ffffff};
+const uint32 colors[] = {0x0000ff00, 0x000000ff, 0x00ffff00, 0x00ff00ff,
+                         0x0000ffff, 0x00ff0000, 0x00ffffff
+                        };
 const int32 num_colors = sizeof(colors) / sizeof(uint32);
 
 #define PUSH_RANGE(name,cid) do { \
@@ -116,14 +117,14 @@ void cuda_malloc_managed_preferred_device(void** devPtr, size_t size);
 // inline host device function definition
 
 union float_uint {
-    float f;
-      uint32 u;
+  float f;
+  uint32 u;
 };
 inline HOST DEVICE uint32 float_as_uint(BaseFloat val) {
-    return ((float_uint*)&val)->u;
+  return ((float_uint*)&val)->u;
 }
 inline HOST DEVICE BaseFloat uint_as_float(uint32 val) {
-    return ((float_uint*)&val)->f;
+  return ((float_uint*)&val)->f;
 }
 
 // In atomic based token recombination, we pack the
@@ -164,20 +165,21 @@ inline HOST DEVICE int32 unpack_idx_from_uint64(uint64 packed) {
 //  params->d_lowerbound[j + params->d_degrees_scan[idx]] = idx;
 // however this for loop costs 9% more time, while the binsearch costs 6% time
 // thus the fastest way is doing binsearch without pre-store
-inline DEVICE int binsearch_maxle(const int *vec, const int val, int low, int high) {
-    while(true) {
-        if(low == high)
-            return low; //we know it exists
-        if((low + 1) == high)
-            return (vec[high] <= val) ? high : low;
+inline DEVICE int binsearch_maxle(const int *vec, const int val, int low,
+                                  int high) {
+  while (true) {
+    if (low == high)
+      return low; //we know it exists
+    if ((low + 1) == high)
+      return (vec[high] <= val) ? high : low;
 
-        int mid = low + (high- low) / 2;
+    int mid = low + (high - low) / 2;
 
-        if(vec[mid] > val)
-            high = mid-1;
-        else
-            low = mid;
-    }
+    if (vec[mid] > val)
+      high = mid - 1;
+    else
+      low = mid;
+  }
 }
 
 
@@ -264,121 +266,121 @@ DEVICE inline void grid_sync(int *barrier) {
 // while current GPU decoding takes around 200 us to decode 1 frame
 #define MAX_HISTOGRAM_SIZE 10
 class CudaHistogram {
-  public:
-    int32 Allocate(BaseFloat beam, BaseFloat beam_lowest, BaseFloat step);
-    void Free();
+ public:
+  int32 Allocate(BaseFloat beam, BaseFloat beam_lowest, BaseFloat step);
+  void Free();
 
 #ifdef __CUDACC__
-    inline DEVICE void Initialize(BaseFloat best_cost) {
-        *best_cost_ = best_cost;
+  inline DEVICE void Initialize(BaseFloat best_cost) {
+    *best_cost_ = best_cost;
+  }
+  inline DEVICE int32 Size() const { return (beam_ - beam_lowest_); }
+  inline DEVICE void AddScore2LocalHist(BaseFloat cost, int32 *hist_local) {
+    int32 dist = (int)(cost - *best_cost_);
+    assert(dist <= beam_);
+    if (dist <= beam_lowest_) hist_local[0]++;
+    else if (dist == beam_) hist_local[Size() - 1]++;
+    else hist_local[(int32)(dist - beam_lowest_)]++;
+  }
+  inline DEVICE void AggregateLocalHist(int32 *hist_local) {
+    for (int i = 0; i < Size(); i++) {
+      if (hist_local[i] != 0)
+        // "fire and forget" atomics
+        atomicAdd(hist_global_ + i, hist_local[i]);
     }
-    inline DEVICE int32 Size() const { return (beam_ - beam_lowest_); }
-    inline DEVICE void AddScore2LocalHist(BaseFloat cost, int32 *hist_local) {
-        int32 dist = (int)(cost - *best_cost_);
-        assert(dist <= beam_);
-        if (dist <= beam_lowest_) hist_local[0]++;
-        else if (dist == beam_) hist_local[Size() - 1]++;
-        else hist_local[(int32)(dist - beam_lowest_)]++;
+  }
+  inline DEVICE void GetCutoff(BaseFloat *cutoff_from_hist, int32 cutoff_num,
+                               int verbose = 0) {
+    int32 acc = 0, i = 0;
+    for (i = 0; i < Size(); i++) {
+      acc += hist_global_[i];
+      if (acc > cutoff_num) break;
     }
-    inline DEVICE void AggregateLocalHist(int32 *hist_local) {
-        for (int i = 0; i < Size(); i++) {
-            if (hist_local[i] != 0)
-              // "fire and forget" atomics
-              atomicAdd(hist_global_ + i, hist_local[i]);
-        }
+    BaseFloat ret_beam = i + beam_lowest_;
+    *cutoff_from_hist = *best_cost_ + ret_beam;
+    if (verbose > 2) {
+      CUDA_PRINTF("hist_LF %f %i\n", *cutoff_from_hist, acc);
     }
-    inline DEVICE void GetCutoff(BaseFloat *cutoff_from_hist, int32 cutoff_num,
-                                 int verbose = 0) {
-        int32 acc = 0, i = 0;
-        for (i = 0; i < Size(); i++) {
-            acc += hist_global_[i];
-            if (acc > cutoff_num) break;
-        }
-        BaseFloat ret_beam = i + beam_lowest_;
-        *cutoff_from_hist = *best_cost_ + ret_beam;
-        if (verbose > 2) {
-            CUDA_PRINTF("hist_LF %f %i\n", *cutoff_from_hist, acc);
-        }
-        memset(hist_global_, 0, Size());
-    }
+    memset(hist_global_, 0, Size());
+  }
 #endif
 
-  private:
-    // configuration
-    BaseFloat beam_;
-    BaseFloat beam_lowest_;
-    BaseFloat step_;
-    // global cache data
-    BaseFloat* best_cost_;
-    int32* hist_global_;
+ private:
+  // configuration
+  BaseFloat beam_;
+  BaseFloat beam_lowest_;
+  BaseFloat step_;
+  // global cache data
+  BaseFloat* best_cost_;
+  int32* hist_global_;
 };
 
 // WFST struct designed for GPU memory
 class CudaFst {
-  public:
-    typedef fst::StdArc StdArc;
-    typedef StdArc::StateId StateId;
-    typedef BaseFloat CostType;
-    typedef StdArc::Weight StdWeight;
-    typedef StdArc::Label Label;
+ public:
+  typedef fst::StdArc StdArc;
+  typedef StdArc::StateId StateId;
+  typedef BaseFloat CostType;
+  typedef StdArc::Weight StdWeight;
+  typedef StdArc::Label Label;
 
-    CudaFst() {};
-    void Initialize(const fst::Fst<StdArc> &fst);
-    void Finalize();
+  CudaFst() {};
+  void Initialize(const fst::Fst<StdArc> &fst);
+  void Finalize();
 
-    uint32 NumStates() const {  return numStates; }
-    uint32 NumArcs() const {  return numArcs; }
-    StateId Start() const { return start; }
-    HOST DEVICE BaseFloat Final(StateId state) const;
-    size_t GetCudaMallocBytes() const { return bytes_cudaMalloc; }
+  uint32 NumStates() const {  return numStates; }
+  uint32 NumArcs() const {  return numArcs; }
+  StateId Start() const { return start; }
+  HOST DEVICE BaseFloat Final(StateId state) const;
+  size_t GetCudaMallocBytes() const { return bytes_cudaMalloc; }
 
-    uint32 numStates;               // total number of states
-    uint32 numArcs;               // total number of states
-    StateId  start;
+  uint32 numStates;               // total number of states
+  uint32 numArcs;               // total number of states
+  StateId  start;
 
-    uint32 max_ilabel;              // the largest ilabel
-    uint32 e_count, ne_count,
-           arc_count;       // number of emitting and non-emitting states
+  uint32 max_ilabel;              // the largest ilabel
+  uint32 e_count, ne_count,
+         arc_count;       // number of emitting and non-emitting states
 
-    // This data structure have 2 matrices (one emitting one non-emitting).
-    // Offset arrays are numStates+1 in size.
-    // Arc values for state i are stored in the range of [i,i+1)
-    // size numStates+1
-    uint32 *e_offsets_h, *e_offsets_d;              // Emitting offset arrays
-    uint32 *ne_offsets_h, *ne_offsets_d;            // Non-emitting offset arrays
+  // This data structure have 2 matrices (one emitting one non-emitting).
+  // Offset arrays are numStates+1 in size.
+  // Arc values for state i are stored in the range of [i,i+1)
+  // size numStates+1
+  uint32 *e_offsets_h, *e_offsets_d;              // Emitting offset arrays
+  uint32 *ne_offsets_h, *ne_offsets_d;            // Non-emitting offset arrays
 
-    // These are the values for each arc. Arcs belonging to state i are found 
-    // in the range of [offsets[i], offsets[i+1]) (Size arc_count+1)
-    BaseFloat *arc_weights_h, *arc_weights_d;
-    StateId *arc_nextstates_h, *arc_nextstates_d;
-    int32 *arc_ilabels_h, *arc_ilabels_d, *arc_olabels_d;
-    int32 *arc_olabels_h;
+  // These are the values for each arc. Arcs belonging to state i are found
+  // in the range of [offsets[i], offsets[i+1]) (Size arc_count+1)
+  BaseFloat *arc_weights_h, *arc_weights_d;
+  StateId *arc_nextstates_h, *arc_nextstates_d;
+  int32 *arc_ilabels_h, *arc_ilabels_d, *arc_olabels_d;
+  int32 *arc_olabels_h;
 
-    // final costs
-    BaseFloat *final_h, *final_d;
-    // allocation size
-    size_t bytes_cudaMalloc;
+  // final costs
+  BaseFloat *final_h, *final_d;
+  // allocation size
+  size_t bytes_cudaMalloc;
 };
 
-class DecodableChunkMatrixScaledMapped{
+class DecodableChunkMatrix {
 #define DEC_CHUNK_BUF_SIZE 2
  public:
   // This constructor creates an object that will not delete "likes"
   // when done.
-  DecodableChunkMatrixScaledMapped(const TransitionModel &tm,
-                              const Matrix<BaseFloat> &likes,
-                              BaseFloat scale, int chunk_len): trans_model_(tm), likes_(&likes),
-                                                scale_(scale), delete_likes_(false), chunk_len_(chunk_len), chunk_id_(0) {
+  DecodableChunkMatrix(const TransitionModel &tm,
+                                   const Matrix<BaseFloat> &likes,
+                                   BaseFloat scale, int chunk_len): trans_model_(tm), likes_(&likes),
+    scale_(scale), delete_likes_(false), chunk_len_(chunk_len), chunk_id_(0) {
     if (likes.NumCols() != tm.NumPdfs())
-      KALDI_ERR << "DecodableChunkMatrixScaledMapped: mismatch, matrix has "
+      KALDI_ERR << "DecodableChunkMatrix: mismatch, matrix has "
                 << likes.NumCols() << " rows but transition-model has "
                 << tm.NumPdfs() << " pdf-ids.";
     const std::vector<int32>& id2pdf_id = trans_model_.GetId2pdf();
-    int data_size = id2pdf_id.size()*sizeof(int);
+    int data_size = id2pdf_id.size() * sizeof(int);
     id2pdf_d_ = (int32*)CuDevice::Instantiate().Malloc(data_size);
-    cudaMemcpy(id2pdf_d_, id2pdf_id.data(), data_size, cudaMemcpyHostToDevice); 
-    for (int i=0;i<DEC_CHUNK_BUF_SIZE;i++) {
-      int data_size = likes_->NumCols()*sizeof(BaseFloat)*chunk_len_;
+    cudaMemcpy(id2pdf_d_, id2pdf_id.data(), data_size, cudaMemcpyHostToDevice);
+    for (int i = 0; i < DEC_CHUNK_BUF_SIZE; i++) {
+      int data_size = likes_->NumCols() * sizeof(BaseFloat) * chunk_len_;
       loglikes_d[i] = (BaseFloat*)CuDevice::Instantiate().Malloc(data_size);
     }
   }
@@ -390,24 +392,27 @@ class DecodableChunkMatrixScaledMapped{
     return (frame == NumFramesReady() - 1);
   }
 
-  void LogLikelihoodChunk(int32 frame, BaseFloat** out, int32* chunk_len, cudaStream_t stream) {
+  void LogLikelihoodChunk(int32 frame, BaseFloat** out, int32* chunk_len,
+                          cudaStream_t stream) {
     if (frame >= likes_->NumRows()) return;
-    int len = std::min(chunk_len_, likes_->NumRows()-frame);
-    BaseFloat* loglike_d = loglikes_d[++chunk_id_%DEC_CHUNK_BUF_SIZE]; 
-    for (int i=0; i< len; i++) {
-      SubVector<BaseFloat> vec = likes_->Row(i+frame);
-      int data_size = likes_->NumCols()*sizeof(BaseFloat);
-      cudaMemcpyAsync(loglike_d+i*likes_->NumCols(), vec.Data(), data_size, cudaMemcpyHostToDevice, stream); 
+    int len = std::min(chunk_len_, likes_->NumRows() - frame);
+    BaseFloat* loglike_d = loglikes_d[++chunk_id_ % DEC_CHUNK_BUF_SIZE];
+    for (int i = 0; i < len; i++) {
+      SubVector<BaseFloat> vec = likes_->Row(i + frame);
+      int data_size = likes_->NumCols() * sizeof(BaseFloat);
+      cudaMemcpyAsync(loglike_d + i * likes_->NumCols(), vec.Data(), data_size,
+                      cudaMemcpyHostToDevice, stream);
     }
     *out = loglike_d;
-    *chunk_len = len;    
+    *chunk_len = len;
     return;
   };
 
-  ~DecodableChunkMatrixScaledMapped() {
+  ~DecodableChunkMatrix() {
     if (delete_likes_) delete likes_;
     CuDevice::Instantiate().Free(id2pdf_d_);
-    for (int i=0;i<DEC_CHUNK_BUF_SIZE;i++) CuDevice::Instantiate().Free(loglikes_d[i]);
+    for (int i = 0; i < DEC_CHUNK_BUF_SIZE;
+         i++) CuDevice::Instantiate().Free(loglikes_d[i]);
   }
 
   const TransitionModel &trans_model_;  // for tid to pdf mapping
@@ -418,21 +423,24 @@ class DecodableChunkMatrixScaledMapped{
   BaseFloat *loglikes_d[DEC_CHUNK_BUF_SIZE];
 
   int chunk_len_, chunk_id_;
-  KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableChunkMatrixScaledMapped);
+  KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableChunkMatrix);
 };
 
 class DecodableCuMatrixScaledMapped {
  public:
-   DecodableCuMatrixScaledMapped() : id2pdf_d_(NULL), acoustic_scale_(0), loglike_d_(NULL), dim_(0) {}
-   DecodableCuMatrixScaledMapped(int32 *id2pdf_d, BaseFloat acoustic_scale,  BaseFloat* loglike_d, int dim) : id2pdf_d_(id2pdf_d), acoustic_scale_(acoustic_scale), loglike_d_(loglike_d), dim_(dim) {}
-   DEVICE BaseFloat LogLikelihood(int32 frame, int32 tid) const {
-     int idx = (frame-frame)*dim_ + id2pdf_d_[tid];
-     return loglike_d_[idx] * acoustic_scale_;
-   }
+  DecodableCuMatrixScaledMapped() : id2pdf_d_(NULL), acoustic_scale_(0),
+    loglike_d_(NULL), dim_(0) {}
+  DecodableCuMatrixScaledMapped(int32 *id2pdf_d, BaseFloat acoustic_scale,
+                                BaseFloat* loglike_d, int dim) : id2pdf_d_(id2pdf_d),
+    acoustic_scale_(acoustic_scale), loglike_d_(loglike_d), dim_(dim) {}
+  DEVICE BaseFloat LogLikelihood(int32 frame, int32 tid) const {
+    int idx = (frame - frame) * dim_ + id2pdf_d_[tid];
+    return loglike_d_[idx] * acoustic_scale_;
+  }
  private:
-   int32 *id2pdf_d_; 
-   BaseFloat acoustic_scale_, *loglike_d_;
-   int32 dim_;
+  int32 *id2pdf_d_;
+  BaseFloat acoustic_scale_, *loglike_d_;
+  int32 dim_;
 };
 
 } // end namespace kaldi.

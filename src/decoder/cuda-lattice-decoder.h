@@ -482,7 +482,7 @@ class CudaLatticeDecoder {
   ~CudaLatticeDecoder();
 
   // pre-computes log likelihoods for the current frame
-  void ComputeLogLikelihoods(DecodableChunkMatrixScaledMapped *decodable);
+  void ComputeLogLikelihoods(DecodableChunkMatrix *decodable);
 
   // decoding functions
   void InitParams(processTokens_params* params);  // parameters for calling GPU
