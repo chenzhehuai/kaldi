@@ -408,13 +408,13 @@ class DecodableChunkMatrixScaledMapped{
     SubVector<BaseFloat> vec = likes_->Row(frame);
     int len = 1;
     int data_size = vec.Dim()*sizeof(BaseFloat)*len;
-    BaseFloat* loglike_d = (BaseFloat*)CuDevice::Instantiate().Malloc(data_size);
+    BaseFloat* loglike_d = *out; // (BaseFloat*)CuDevice::Instantiate().Malloc(data_size);
     cudaMemcpyAsync(loglike_d, vec.Data(), data_size, cudaMemcpyHostToDevice, stream); 
     *out = loglike_d;
     *chunk_len = len;    
     return;
   };
-  void FreeLogLikelihoodChunk(BaseFloat* loglike) { CuDevice::Instantiate().Free(loglike); }
+  void FreeLogLikelihoodChunk(BaseFloat* loglike) { assert(0); CuDevice::Instantiate().Free(loglike); }
 
   ~DecodableChunkMatrixScaledMapped() {
     if (delete_likes_) delete likes_;

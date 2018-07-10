@@ -542,6 +542,8 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   bool rank0 = blockIdx.x == 0 && threadIdx.x == 0;
 
   if (!is_init) { // only do _process_nonemitting_tokens() at frame 0
+    if (rank0) params.cur_toks.Clear(0); // clear here to reduce a kernel call
+
     _compute_degrees_scan(&params, true); //for emit
     grid_sync(params.barrier); // after finishing all tokens
 
@@ -1432,14 +1434,14 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   /*cudaMallocHost(&loglikelihoods_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
   cudaMallocHost(&loglikelihoods_old_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));*/ //TODO
 
-  /*
+  
   cudaMalloc((void**)&loglikelihoods_d, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
   bytes_cuda_malloc += sizeof(BaseFloat) * (fst_.max_ilabel + 1);
   cudaMalloc((void**)&loglikelihoods_old_d,
              sizeof(BaseFloat) * (fst_.max_ilabel + 1));
   bytes_cuda_malloc += sizeof(BaseFloat) * (fst_.max_ilabel + 1);
-  */
-  loglikelihoods_d = loglikelihoods_old_d = NULL;
+  
+  //loglikelihoods_d = loglikelihoods_old_d = NULL;
 
   // for pruning
   bytes_cuda_malloc += lattice_processor_.Allocate(config.max_tokens_per_frame,
@@ -1504,8 +1506,8 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
 
   /*cudaFreeHost(loglikelihoods_h); //TODO
   cudaFreeHost(loglikelihoods_old_h);*/
-  /*cudaFree(loglikelihoods_d);
-  cudaFree(loglikelihoods_old_d);*/
+  cudaFree(loglikelihoods_d);
+  cudaFree(loglikelihoods_old_d);
   cudaFree(current_tokens_lookup_d);
 
   cudaFree(pe_idx_d);
@@ -1544,7 +1546,7 @@ void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableChunkMatrixScaledMapped 
 
   int chunk_len;
   // copying in another stream to overlap transfer with compute
-  if (loglikelihoods_d) decodable->FreeLogLikelihoodChunk(loglikelihoods_d); loglikelihoods_d=NULL;
+  //if (loglikelihoods_d) decodable->FreeLogLikelihoodChunk(loglikelihoods_d); loglikelihoods_d=NULL;
   decodable->LogLikelihoodChunk(frame, &loglikelihoods_d, &chunk_len, stream_ll);
   cuda_decodable_ = DecodableCuMatrixScaledMapped(decodable->id2pdf_d_, decodable->scale_, loglikelihoods_d, decodable->trans_model_.NumPdfs()); // for current frame
 
@@ -1646,8 +1648,8 @@ void CudaLatticeDecoder::InitDecoding() {
   ProcessNonemitting();
 
   //TODO
-  if (loglikelihoods_d) CuDevice::Instantiate().Free(loglikelihoods_d); loglikelihoods_d=NULL;
-  if (loglikelihoods_old_d) CuDevice::Instantiate().Free(loglikelihoods_old_d); loglikelihoods_old_d=NULL;
+  /*if (loglikelihoods_d) CuDevice::Instantiate().Free(loglikelihoods_d); loglikelihoods_d=NULL;
+  if (loglikelihoods_old_d) CuDevice::Instantiate().Free(loglikelihoods_old_d); loglikelihoods_old_d=NULL;*/
   if (config_.verbose > 1 ) KALDI_LOG <<
                                         "end of CUDA LatticeDecoder InitDecoding\n";
 }
@@ -1664,14 +1666,14 @@ void CudaLatticeDecoder::ClearToks(TokenMergeVector &toks) {
 }
 
 void CudaLatticeDecoder::PreProcessTokens() {
-  PUSH_RANGE("PreProcessTokens", 1)
+  //PUSH_RANGE("PreProcessTokens", 1)
 
   num_frames_decoded_++;
   UpdateTokPointersByFrame(num_frames_decoded_);
-  ClearToks(*cur_toks_);
+  // ClearToks(*cur_toks_); // to reduce a kernel
   // dont need to clear arcs as we directly take the final buffer into this vector
 
-  POP_RANGE
+  //POP_RANGE
 }
 
 void CudaLatticeDecoder::ProcessTokens() {
