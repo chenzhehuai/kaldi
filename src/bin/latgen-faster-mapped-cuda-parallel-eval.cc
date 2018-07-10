@@ -168,7 +168,7 @@ int main(int argc, char *argv[]) {
               continue;
             }
 
-            DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+            DecodableChunkMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale, config.chunk_len);
 
             POP_RANGE
 

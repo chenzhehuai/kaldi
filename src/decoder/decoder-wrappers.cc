@@ -276,7 +276,7 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
       num_fail++;
       continue;
     }
-    DecodableChunkMatrixScaledMapped decodable(trans_model_, loglikes, acoustic_scale_);
+    DecodableChunkMatrixScaledMapped decodable(trans_model_, loglikes, acoustic_scale_, config_.chunk_len);
     POP_RANGE
 
     double like;

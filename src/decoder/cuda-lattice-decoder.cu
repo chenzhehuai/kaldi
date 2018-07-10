@@ -1431,17 +1431,7 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
              sizeof(TokenLookupElem)*fst_.numStates);
   bytes_cuda_malloc += sizeof(TokenLookupElem) * fst_.numStates;
 
-  /*cudaMallocHost(&loglikelihoods_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
-  cudaMallocHost(&loglikelihoods_old_h, sizeof(BaseFloat) * (fst_.max_ilabel + 1));*/ //TODO
-
-  
-  cudaMalloc((void**)&loglikelihoods_d, sizeof(BaseFloat) * (fst_.max_ilabel + 1));
-  bytes_cuda_malloc += sizeof(BaseFloat) * (fst_.max_ilabel + 1);
-  cudaMalloc((void**)&loglikelihoods_old_d,
-             sizeof(BaseFloat) * (fst_.max_ilabel + 1));
-  bytes_cuda_malloc += sizeof(BaseFloat) * (fst_.max_ilabel + 1);
-  
-  //loglikelihoods_d = loglikelihoods_old_d = NULL;
+  loglikelihoods_d = loglikelihoods_old_d = NULL;
 
   // for pruning
   bytes_cuda_malloc += lattice_processor_.Allocate(config.max_tokens_per_frame,
@@ -1504,10 +1494,6 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
   lattice_processor_.Free();
   histogram_prev_toks_.Free();
 
-  /*cudaFreeHost(loglikelihoods_h); //TODO
-  cudaFreeHost(loglikelihoods_old_h);*/
-  cudaFree(loglikelihoods_d);
-  cudaFree(loglikelihoods_old_d);
   cudaFree(current_tokens_lookup_d);
 
   cudaFree(pe_idx_d);
@@ -1539,19 +1525,18 @@ void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableChunkMatrixScaledMapped 
   // finish decoding this frame, it has been ensured outside
   // cudaStreamSynchronize(stream_comp);
 
-  // double buffering so we don't overwrite loglikelihoods_h before it is copied down
-  /*std::swap(loglikelihoods_h, //TODO
-            loglikelihoods_old_h);*/
-  std::swap(loglikelihoods_d, loglikelihoods_old_d);
-
-  int chunk_len;
   // copying in another stream to overlap transfer with compute
-  //if (loglikelihoods_d) decodable->FreeLogLikelihoodChunk(loglikelihoods_d); loglikelihoods_d=NULL;
-  decodable->LogLikelihoodChunk(frame, &loglikelihoods_d, &chunk_len, stream_ll);
-  cuda_decodable_ = DecodableCuMatrixScaledMapped(decodable->id2pdf_d_, decodable->scale_, loglikelihoods_d, decodable->trans_model_.NumPdfs()); // for current frame
+  if (chunk_used_len_ >= chunk_len_) { // finish decoding this chunk
+    std::swap(loglikelihoods_d, loglikelihoods_old_d);
+    decodable->LogLikelihoodChunk(frame, &loglikelihoods_d, &chunk_len_, stream_ll);
+    chunk_used_len_ = 0;
+  }
+  // one frame from the chunk
+  int loglike_off = chunk_used_len_++*decodable->trans_model_.NumPdfs();
+  cuda_decodable_ = DecodableCuMatrixScaledMapped(decodable->id2pdf_d_, decodable->scale_, loglikelihoods_d+loglike_off, decodable->trans_model_.NumPdfs()); // for current frame
 
   // mark log likelihoods are copied down to the device
-  cudaEventRecord(event_ll, stream_ll);
+  if (chunk_used_len_ <= 1) cudaEventRecord(event_ll, stream_ll);
 
   // ensure logliklihoods_d is updated before consuming; we wait it in ProcessTokens
   // cudaStreamWaitEvent(stream_comp,event_ll,0);
@@ -1613,6 +1598,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
 void CudaLatticeDecoder::InitDecoding() {
   if (config_.verbose > 1 ) KALDI_LOG << "CUDA LatticeDecoder InitDecoding\n";
   num_frames_decoded_ = 0;
+  chunk_len_ = chunk_used_len_ = 0;
   for (int32 i = 0; i < LAT_BUF_SIZE; i++) {
     ClearToks(lat_toks_bufs_[i]);
   }
@@ -1647,9 +1633,6 @@ void CudaLatticeDecoder::InitDecoding() {
 
   ProcessNonemitting();
 
-  //TODO
-  /*if (loglikelihoods_d) CuDevice::Instantiate().Free(loglikelihoods_d); loglikelihoods_d=NULL;
-  if (loglikelihoods_old_d) CuDevice::Instantiate().Free(loglikelihoods_old_d); loglikelihoods_old_d=NULL;*/
   if (config_.verbose > 1 ) KALDI_LOG <<
                                         "end of CUDA LatticeDecoder InitDecoding\n";
 }
