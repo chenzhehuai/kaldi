@@ -36,6 +36,7 @@
 #include "util/stl-utils.h"
 #include "hmm/transition-model.h"
 #include "cudamatrix/cu-common.h"
+#include "cudamatrix/cu-matrix.h"
 #include "cudamatrix/cu-device.h"
 
 namespace kaldi {
@@ -362,27 +363,15 @@ class CudaFst {
   size_t bytes_cudaMalloc;
 };
 
-class DecodableChunkMatrix {
+class MatrixChunker {
 #define DEC_CHUNK_BUF_SIZE 2
  public:
   // This constructor creates an object that will not delete "likes"
   // when done.
-  DecodableChunkMatrix(const TransitionModel &tm,
-                                   const Matrix<BaseFloat> &likes,
-                                   BaseFloat scale, int chunk_len): trans_model_(tm), likes_(&likes),
-    scale_(scale), delete_likes_(false), chunk_len_(chunk_len), chunk_id_(0) {
-    if (likes.NumCols() != tm.NumPdfs())
-      KALDI_ERR << "DecodableChunkMatrix: mismatch, matrix has "
-                << likes.NumCols() << " rows but transition-model has "
-                << tm.NumPdfs() << " pdf-ids.";
-    const std::vector<int32>& id2pdf_id = trans_model_.GetId2pdf();
-    int data_size = id2pdf_id.size() * sizeof(int);
-    id2pdf_d_ = (int32*)CuDevice::Instantiate().Malloc(data_size);
-    cudaMemcpy(id2pdf_d_, id2pdf_id.data(), data_size, cudaMemcpyHostToDevice);
-    for (int i = 0; i < DEC_CHUNK_BUF_SIZE; i++) {
-      int data_size = likes_->NumCols() * sizeof(BaseFloat) * chunk_len_;
-      loglikes_d[i] = (BaseFloat*)CuDevice::Instantiate().Malloc(data_size);
-    }
+  MatrixChunker(const Matrix<BaseFloat> &likes, int chunk_len): likes_(&likes),
+    delete_likes_(false), chunk_len_(chunk_len), chunk_id_(0) {
+      for (int i = 0; i < DEC_CHUNK_BUF_SIZE; i++) 
+        loglikes_d[i].Resize(chunk_len_, likes_->NumCols());
   }
 
   int32 NumFramesReady() const { return likes_->NumRows(); }
@@ -392,55 +381,52 @@ class DecodableChunkMatrix {
     return (frame == NumFramesReady() - 1);
   }
 
-  void LogLikelihoodChunk(int32 frame, BaseFloat** out, int32* chunk_len,
-                          cudaStream_t stream) {
+  void LogLikelihoodChunk(int32 frame, CuMatrix<BaseFloat>** out, cudaStream_t stream) {
     if (frame >= likes_->NumRows()) return;
     int len = std::min(chunk_len_, likes_->NumRows() - frame);
-    BaseFloat* loglike_d = loglikes_d[++chunk_id_ % DEC_CHUNK_BUF_SIZE];
-    for (int i = 0; i < len; i++) {
-      SubVector<BaseFloat> vec = likes_->Row(i + frame);
-      int data_size = likes_->NumCols() * sizeof(BaseFloat);
-      cudaMemcpyAsync(loglike_d + i * likes_->NumCols(), vec.Data(), data_size,
-                      cudaMemcpyHostToDevice, stream);
-    }
-    *out = loglike_d;
-    *chunk_len = len;
+    assert(len);
+    CuMatrix<BaseFloat>& loglike_d = loglikes_d[++chunk_id_ % DEC_CHUNK_BUF_SIZE];
+    int data_size = likes_->NumCols() * sizeof(BaseFloat);
+
+    // we seldom Resize()
+    if (loglike_d.NumRows() != len) loglike_d.Resize(len, likes_->NumCols(), kUndefined);
+    // we need cudaMemcpyAsync with stream and cannot use kaldi::CopyFromMat
+    // as they have different strides, we have to do this
+    cudaMemcpy2DAsync(loglike_d.Data(), loglike_d.Stride()*sizeof(BaseFloat), likes_->Row(frame).Data(), 
+                      likes_->Stride()*sizeof(BaseFloat), data_size, len, cudaMemcpyHostToDevice, stream);
+    CU_SAFE_CALL(cudaGetLastError());
+    *out = &loglike_d;
     return;
   };
 
-  ~DecodableChunkMatrix() {
+  ~MatrixChunker() {
     if (delete_likes_) delete likes_;
-    CuDevice::Instantiate().Free(id2pdf_d_);
-    for (int i = 0; i < DEC_CHUNK_BUF_SIZE;
-         i++) CuDevice::Instantiate().Free(loglikes_d[i]);
   }
 
-  const TransitionModel &trans_model_;  // for tid to pdf mapping
+  
   const Matrix<BaseFloat> *likes_;
-  BaseFloat scale_;
   bool delete_likes_;
-  int32* id2pdf_d_;
-  BaseFloat *loglikes_d[DEC_CHUNK_BUF_SIZE];
+  CuMatrix<BaseFloat> loglikes_d[DEC_CHUNK_BUF_SIZE];
 
   int chunk_len_, chunk_id_;
-  KALDI_DISALLOW_COPY_AND_ASSIGN(DecodableChunkMatrix);
+  KALDI_DISALLOW_COPY_AND_ASSIGN(MatrixChunker);
 };
 
-class DecodableCuMatrixScaledMapped {
+class CuMatrixScaledMapper {
  public:
-  DecodableCuMatrixScaledMapped() : id2pdf_d_(NULL), acoustic_scale_(0),
-    loglike_d_(NULL), dim_(0) {}
-  DecodableCuMatrixScaledMapped(int32 *id2pdf_d, BaseFloat acoustic_scale,
-                                BaseFloat* loglike_d, int dim) : id2pdf_d_(id2pdf_d),
-    acoustic_scale_(acoustic_scale), loglike_d_(loglike_d), dim_(dim) {}
-  DEVICE BaseFloat LogLikelihood(int32 frame, int32 tid) const {
-    int idx = (frame - frame) * dim_ + id2pdf_d_[tid];
+  CuMatrixScaledMapper() : id2pdf_d_(NULL), acoustic_scale_(0),
+    loglike_d_(NULL) {}
+  CuMatrixScaledMapper(int32 *id2pdf_d, BaseFloat acoustic_scale,
+                                BaseFloat* loglike_d) : id2pdf_d_(id2pdf_d),
+    acoustic_scale_(acoustic_scale), loglike_d_(loglike_d) { assert(id2pdf_d_); }
+  DEVICE BaseFloat LogLikelihood(int32 tid) const {
+    assert(id2pdf_d_);
+    int idx = id2pdf_d_[tid];
     return loglike_d_[idx] * acoustic_scale_;
   }
  private:
   int32 *id2pdf_d_;
   BaseFloat acoustic_scale_, *loglike_d_;
-  int32 dim_;
 };
 
 } // end namespace kaldi.

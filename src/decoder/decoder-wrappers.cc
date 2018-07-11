@@ -254,7 +254,7 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
   CuDevice::Instantiate().SelectGpuId("yes");
   CuDevice::Instantiate().AllowMultithreading();
   #endif
-  LatticeFasterDecoderCuda decoder(decode_fst_cuda_, config_);
+  LatticeFasterDecoderCuda decoder(decode_fst_cuda_, trans_model_, config_);
   examples_mutex_->Unlock(); // to make it stable
 
   nnet0::NnetExample *example;
@@ -276,7 +276,7 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
       num_fail++;
       continue;
     }
-    DecodableChunkMatrix decodable(trans_model_, loglikes, acoustic_scale_, config_.chunk_len);
+    MatrixChunker decodable(loglikes, config_.chunk_len);
     POP_RANGE
 
     double like;
@@ -333,7 +333,7 @@ DecodeUtteranceLatticeFasterClassCuda::~DecodeUtteranceLatticeFasterClassCuda() 
 // e.g. using #pragma omp critical { }
 bool DecodeUtteranceLatticeFasterCuda(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
-  DecodableChunkMatrix &decodable, // not const but is really an input.
+  MatrixChunker &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,
@@ -390,7 +390,7 @@ bool DecodeUtteranceLatticeFasterCuda(
 // e.g. using #pragma omp critical { }
 bool DecodeUtteranceLatticeFasterCudaOutput(
   LatticeFasterDecoderCuda &decoder, // not const but is really an input.
-  DecodableChunkMatrix &decodable, // not const but is really an input.
+  MatrixChunker &decodable, // not const but is really an input.
   const TransitionModel &trans_model,
   const fst::SymbolTable *word_syms,
   std::string utt,

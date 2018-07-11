@@ -40,6 +40,7 @@ struct CudaLatticeDecoderConfig {
   uint32 prune_interval;
   int32 max_active;
   int32 chunk_len;
+  BaseFloat acoustic_scale;
 
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
   bool determinize_lattice;
@@ -58,6 +59,7 @@ struct CudaLatticeDecoderConfig {
                        prune_interval(3000),
                        max_active(100000),
                        chunk_len(1),
+                       acoustic_scale(1),
                        determinize_lattice(true),
                        mem_print_freq(10),
                        verbose(0) { }
@@ -93,7 +95,9 @@ struct CudaLatticeDecoderConfig {
     opts->Register("chunk-len", &chunk_len, "chunk length for loading posteriors.");
     opts->Register("determinize-lattice", &determinize_lattice, "If true, "
                    "determinize the lattice (lattice-determinization, keeping only "
-                   "best pdf-sequence for each word-sequence).");    
+                   "best pdf-sequence for each word-sequence).");
+    opts->Register("acoustic-scale", &acoustic_scale,
+                   "Scaling factor for acoustic likelihoods");
   }
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 &&
@@ -445,7 +449,7 @@ class CudaLatticeDecoder {
     const __restrict__ int32 *arc_olabels; 
     const __restrict__ BaseFloat *arc_weights;
     const __restrict__ StateId *arc_nextstates;
-    DecodableCuMatrixScaledMapped cuda_decodable;
+    CuMatrixScaledMapper cuda_decodable;
 
     // GPU global memory temp variables
     volatile int32 *modified;
@@ -478,11 +482,9 @@ class CudaLatticeDecoder {
 
 
  public:
-  CudaLatticeDecoder(const CudaFst &fst, const CudaLatticeDecoderConfig &config);  
+  CudaLatticeDecoder(const CudaFst &fst, const TransitionModel &trans_model, 
+                     const CudaLatticeDecoderConfig &config);  
   ~CudaLatticeDecoder();
-
-  // pre-computes log likelihoods for the current frame
-  void ComputeLogLikelihoods(DecodableChunkMatrix *decodable);
 
   // decoding functions
   void InitParams(processTokens_params* params);  // parameters for calling GPU
@@ -498,6 +500,8 @@ class CudaLatticeDecoder {
   // decodable object, then increments num_frames_decoded_.
   void ProcessTokens();
   void ProcessNonemitting(); // only called at frame 0
+  void DecodeChunk(CuMatrix<BaseFloat>* post_chunk);
+  void Decode(MatrixChunker *decodable);
 
   // lattice processing functions
   void FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx, 
@@ -565,8 +569,10 @@ class CudaLatticeDecoder {
   int32 *d_q_arc_offset;
 
   // chunk decoding
-  DecodableCuMatrixScaledMapped cuda_decodable_;
-  int32 chunk_len_, chunk_used_len_;
+  CuMatrixScaledMapper cuda_decodable_;
+
+  const TransitionModel &trans_model_;  // for tid to pdf mapping
+  int32* id2pdf_d_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

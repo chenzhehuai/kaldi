@@ -68,14 +68,11 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
     Timer timer;
     bool allow_partial = false;
-    BaseFloat acoustic_scale = 0.1;
     CudaLatticeDecoderConfig config;
 
     std::string word_syms_filename;
     config.Register(&po);
     config.gpu_fraction = 1.0 / omp_get_max_threads();
-    po.Register("acoustic-scale", &acoustic_scale,
-                "Scaling factor for acoustic likelihoods");
 
     po.Register("word-symbol-table", &word_syms_filename,
                 "Symbol table for words [for debug output]");
@@ -163,7 +160,7 @@ int main(int argc, char *argv[]) {
         }
         #pragma omp barrier
 
-        LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
+        LatticeFasterDecoderCuda decoder(decode_fst_cuda, trans_model, config);
         {
 #pragma omp for
           for (int i=0; i < feature_vector.size(); i++) {
@@ -191,8 +188,7 @@ int main(int argc, char *argv[]) {
               num_fail++;
               continue;
             }
-            DecodableChunkMatrix decodable(trans_model, loglikes, 
-                                                  acoustic_scale, config.chunk_len);
+            MatrixChunker decodable(loglikes, config.chunk_len);
 
             POP_RANGE
 
@@ -200,7 +196,7 @@ int main(int argc, char *argv[]) {
             Lattice lat;
             if (DecodeUtteranceLatticeFasterCuda(
                   decoder, decodable, trans_model, word_syms, utt,
-                  acoustic_scale, determinize, allow_partial, &alignment_writer,
+                  config.acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
                   &like,
                   &lat)) {
@@ -219,7 +215,7 @@ int main(int argc, char *argv[]) {
             {
               DecodeUtteranceLatticeFasterCudaOutput(
                 decoder, decodable, trans_model, word_syms, utt,
-                acoustic_scale, determinize, allow_partial, &alignment_writer,
+                config.acoustic_scale, determinize, allow_partial, &alignment_writer,
                 &words_writer, &compact_lattice_writer, &lattice_writer,
                 &like,
                 lat);

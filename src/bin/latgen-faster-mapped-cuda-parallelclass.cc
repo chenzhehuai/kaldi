@@ -48,15 +48,12 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
     Timer timer;
     bool allow_partial = false;
-    BaseFloat acoustic_scale = 0.1;
     CudaLatticeDecoderConfig config;
     TaskSequencerConfig sequencer_config; // has --num-threads option
 
     std::string word_syms_filename;
     config.Register(&po);
     sequencer_config.Register(&po);
-    po.Register("acoustic-scale", &acoustic_scale,
-                "Scaling factor for acoustic likelihoods");
     po.Register("word-symbol-table", &word_syms_filename,
                 "Symbol table for words [for debug output]");
     po.Register("allow-partial", &allow_partial,
@@ -121,7 +118,7 @@ int main(int argc, char *argv[]) {
 
         DecodeUtteranceLatticeFasterClassCuda c(
                   decode_fst_cuda, config, trans_model, word_syms, 
-                  acoustic_scale, determinize, allow_partial, &alignment_writer,
+                  config.acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
                   &tot_like, &frame_count, &num_success, &num_fail, NULL,
                   &repository, &examples_mutex);

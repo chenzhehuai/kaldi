@@ -177,7 +177,7 @@ int main(int argc, char *argv[]) {
         }
         #pragma omp barrier
 
-        LatticeFasterDecoderCuda decoder(decode_fst_cuda, config);
+        LatticeFasterDecoderCuda decoder(decode_fst_cuda, trans_model, config);
         {
           SequentialBaseFloatMatrixReader loglike_reader(
               feature_vector.at(omp_get_thread_num()));
@@ -206,8 +206,7 @@ int main(int argc, char *argv[]) {
               num_fail++;
               continue;
             }
-            DecodableChunkMatrix decodable(trans_model, loglikes, 
-                                                  acoustic_scale, config.chunk_len);
+            MatrixChunker decodable(loglikes, config.chunk_len);
 
             POP_RANGE //before_decoding
             if (omp_get_thread_num() == 0) timer.Reset();
@@ -217,7 +216,7 @@ int main(int argc, char *argv[]) {
             Lattice lat;
             if (DecodeUtteranceLatticeFasterCuda(
                   decoder, decodable, trans_model, word_syms, utt,
-                  acoustic_scale, determinize, allow_partial, &alignment_writer,
+                  config.acoustic_scale, determinize, allow_partial, &alignment_writer,
                   &words_writer, &compact_lattice_writer, &lattice_writer,
                   &like,
                   &lat)) {
@@ -236,7 +235,7 @@ int main(int argc, char *argv[]) {
             {
               DecodeUtteranceLatticeFasterCudaOutput(
                 decoder, decodable, trans_model, word_syms, utt,
-                acoustic_scale, determinize, allow_partial, &alignment_writer,
+                config.acoustic_scale, determinize, allow_partial, &alignment_writer,
                 &words_writer, &compact_lattice_writer, &lattice_writer,
                 &like,
                 lat);

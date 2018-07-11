@@ -45,7 +45,7 @@ class LatticeFasterDecoderCuda {
   typedef CudaLatticeDecoder::LatLink LatLink;
 
   // instantiate this class once for each thing you have to decode.
-  LatticeFasterDecoderCuda(const CudaFst &fst,
+  LatticeFasterDecoderCuda(const CudaFst &fst, const TransitionModel &trans_model, 
                            const CudaLatticeDecoderConfig &config);
   // This version of the initializer "takes ownership" of the fst,
   // and will delete it when this object is destroyed.
@@ -64,7 +64,7 @@ class LatticeFasterDecoderCuda {
   // Returns true if any kind of traceback is available (not necessarily from a
   // final state).
   // the main procedure is done in GPU
-  bool Decode(DecodableChunkMatrixScaledMapped *decodable);
+  bool Decode(MatrixChunker *decodable);
 
   // the same to the version in lattice-faster-decoder.h
   // says whether a final-state was active on the last frame.  If it was not, the

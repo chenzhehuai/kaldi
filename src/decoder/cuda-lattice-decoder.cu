@@ -210,7 +210,7 @@ DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
       arc_idx = arc_id_offset + (block_offset + threadIdx.x - arc_number_offset);
       int arc_ilabel = is_emitting ? params->arc_ilabels[arc_idx] : 0;
       acoustic_cost = (arc_ilabel != 0) ? -params->cuda_decodable.LogLikelihood(
-                        params->frame, arc_ilabel) : 0.0;
+                       arc_ilabel) : 0.0;
       weight = params->arc_weights[arc_idx];
       total_cost = tok->cost_ + weight + acoustic_cost + params->beam;
 
@@ -363,7 +363,7 @@ DEVICE static inline void _process_emit_or_nemit_tokens(processTokens_params *pa
       nextstate = params->arc_nextstates[arc_idx];
       weight = params->arc_weights[arc_idx];
       acoustic_cost = (arc_ilabel != 0) ? -params->cuda_decodable.LogLikelihood(
-                        params->frame, arc_ilabel) : 0.0;
+                       arc_ilabel) : 0.0;
       total_cost = acoustic_cost + weight + old_tok_cost;
 
       if (tok->cost_ > *params->cutoff_prev || total_cost > cutoff) continue;
@@ -613,8 +613,8 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // wait for everyone to finish process tokens and writes modified0
   } while ((*modified0) == true && cnt < 10);
   if (rank0 && params.verbose > 0 && params.frame % itv == 0)
-    CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E,
-                params.cur_toks.Size(), cutoff);
+    CUDA_PRINTF("TK: %i %i %i %f %f\n", params.frame, tok_E,
+                params.cur_toks.Size(), cutoff, params.cuda_decodable.LogLikelihood(1));
 
   // process lattice before allocate new toks to TokenState
   params.lattice_processor.CollectToksPerFrame(params.cur_toks, params.frame);
@@ -1373,9 +1373,9 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
 
 // CudaLatticeDecoder Implementation
 // constructor
-CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
+CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst, const TransitionModel &trans_model,
                                        const CudaLatticeDecoderConfig &config):
-  config_(config), fst_(fst), bytes_cuda_malloc(0) {
+  config_(config), fst_(fst), trans_model_(trans_model), bytes_cuda_malloc(0) {
   KALDI_VLOG(1) << "CudaLatticeDecoder Constructor\n";
   int32 device;
   cudaGetDevice(&device);
@@ -1476,6 +1476,13 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst,
   // sgemm requires shared memory and we don't want cache config changing.
   // So set a device wide cache config.
   cudaDeviceSetCacheConfig(cudaFuncCachePreferEqual);
+
+  const std::vector<int32>& id2pdf_id = trans_model_.GetId2pdf();
+  int data_size = id2pdf_id.size() * sizeof(int);
+  cudaMalloc((void**)&id2pdf_d_, data_size);
+  bytes_cuda_malloc+= data_size;
+  cudaMemcpy(id2pdf_d_, id2pdf_id.data(), data_size, cudaMemcpyHostToDevice);
+
   if (config_.verbose > 1)
     get_free_memory_stat("After initlization:");
 }
@@ -1509,38 +1516,14 @@ CudaLatticeDecoder::~CudaLatticeDecoder() {
   cudaFree(token_per_arc_d);
   cudaFree(token_per_arc_update_d);
 
+  cudaFree(id2pdf_d_);
+
   cudaEventDestroy(event_pt);
   cudaEventDestroy(event_ll);
   cudaStreamDestroy(stream_comp);
   for (int32 i = 0; i < LAT_BUF_SIZE; i++)
     cudaStreamDestroy(stream_lat[i]);
   cudaStreamDestroy(stream_ll);
-}
-
-void CudaLatticeDecoder::ComputeLogLikelihoods(DecodableChunkMatrix *decodable) {
-  PUSH_RANGE("ComputeLogLikelihoods", 3)
-  int32 frame = num_frames_decoded_;
-  // finish decoding this frame, it has been ensured outside
-  // cudaStreamSynchronize(stream_comp);
-
-  // copying in another stream to overlap transfer with compute
-  if (chunk_used_len_ >= chunk_len_) { // finish decoding this chunk
-    std::swap(loglikelihoods_d, loglikelihoods_old_d);
-    decodable->LogLikelihoodChunk(frame, &loglikelihoods_d, &chunk_len_, stream_ll);
-    chunk_used_len_ = 0;
-  }
-  // one frame from the chunk
-  int loglike_off = chunk_used_len_++*decodable->trans_model_.NumPdfs();
-  cuda_decodable_ = DecodableCuMatrixScaledMapped(decodable->id2pdf_d_,
-                    decodable->scale_, loglikelihoods_d + loglike_off,
-                    decodable->trans_model_.NumPdfs()); // for current frame
-
-  // mark log likelihoods are copied down to the device
-  if (chunk_used_len_ <= 1) cudaEventRecord(event_ll, stream_ll);
-
-  // ensure logliklihoods_d is updated before consuming; we wait it in ProcessTokens
-  // cudaStreamWaitEvent(stream_comp,event_ll,0);
-  POP_RANGE
 }
 
 // initialize parameters routine for launching cuda kernel
@@ -1598,7 +1581,6 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
 void CudaLatticeDecoder::InitDecoding() {
   if (config_.verbose > 1 ) KALDI_LOG << "CUDA LatticeDecoder InitDecoding\n";
   num_frames_decoded_ = 0;
-  chunk_len_ = chunk_used_len_ = 0;
   for (int32 i = 0; i < LAT_BUF_SIZE; i++) {
     ClearToks(lat_toks_bufs_[i]);
   }
@@ -1754,6 +1736,43 @@ bool CudaLatticeDecoder::GetBestPath(Lattice *fst_out,
                                      bool use_final_probs) const {
   KALDI_ERR << "We don't have this implementation in lattice decoder";
   return false;
+}
+
+void CudaLatticeDecoder::DecodeChunk(CuMatrix<BaseFloat> *post_chunk) {
+  int chunk_used_len=0;
+  while (chunk_used_len < post_chunk->NumRows()) {
+    // one frame from the chunk
+    cuda_decodable_ = CuMatrixScaledMapper(id2pdf_d_,
+                      config_.acoustic_scale, post_chunk->Row(chunk_used_len).Data()); 
+
+    PreProcessTokens(); 
+    ProcessTokens(); 
+
+    chunk_used_len++;
+  }
+}
+void CudaLatticeDecoder::Decode(MatrixChunker *decodable) {
+  while ( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
+    bool last_frame = decodable->IsLastFrame(num_frames_decoded_ - 0);
+    if (num_frames_decoded_ + 1 >= config_.prune_interval) {
+      last_frame = true;
+      KALDI_WARN << "the utterance is too long, cutoff after frames: " 
+                 << num_frames_decoded_ + 1;
+    }
+
+    PUSH_RANGE("ComputeLogLikelihoods", 3)
+    int chunk_len;
+    CuMatrix<BaseFloat> *post_chunk;
+    decodable->LogLikelihoodChunk(num_frames_decoded_, &post_chunk, stream_ll);
+    cudaEventRecord(event_ll, stream_ll);
+    DecodeChunk(post_chunk);
+    POP_RANGE
+
+    if (last_frame) {
+      KALDI_VLOG(5) << "last frame: " << NumFramesDecoded();
+      break;
+    }
+  }
 }
 
 } // end namespace kaldi.
