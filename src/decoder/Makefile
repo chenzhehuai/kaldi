@@ -19,7 +19,7 @@ LDLIBS += $(CUDA_LDLIBS)
 endif
 
 CUDAOPTS = -O3 $(CUDA_ARCH) 
-CUDAOPTS += -G  
+#CUDAOPTS += -G  
 CUDA_DEC_OPTS = -DCUDA_API_PER_THREAD_DEFAULT_STREAM -DHAVE_CXXABI_H \
                -lineinfo -w -std=c++11 -DHAVE_EXECINFO_H=1 \
                -DHAVE_ATLAS -Xcompiler "-msse -msse2 -pthread  -fopenmp" \

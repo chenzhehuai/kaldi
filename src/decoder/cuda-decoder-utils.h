@@ -370,8 +370,6 @@ class MatrixChunker {
   // when done.
   MatrixChunker(const Matrix<BaseFloat> &likes, int chunk_len): likes_(&likes),
     delete_likes_(false), chunk_len_(chunk_len), chunk_id_(0) {
-      for (int i = 0; i < DEC_CHUNK_BUF_SIZE; i++) 
-        loglikes_d[i].Resize(chunk_len_, likes_->NumCols());
   }
 
   int32 NumFramesReady() const { return likes_->NumRows(); }
@@ -402,7 +400,6 @@ class MatrixChunker {
   ~MatrixChunker() {
     if (delete_likes_) delete likes_;
   }
-
   
   const Matrix<BaseFloat> *likes_;
   bool delete_likes_;
@@ -418,7 +415,7 @@ class CuMatrixScaledMapper {
     loglike_d_(NULL) {}
   CuMatrixScaledMapper(int32 *id2pdf_d, BaseFloat acoustic_scale,
                                 BaseFloat* loglike_d) : id2pdf_d_(id2pdf_d),
-    acoustic_scale_(acoustic_scale), loglike_d_(loglike_d) { assert(id2pdf_d_); }
+    acoustic_scale_(acoustic_scale), loglike_d_(loglike_d) {}
   DEVICE BaseFloat LogLikelihood(int32 tid) const {
     assert(id2pdf_d_);
     int idx = id2pdf_d_[tid];

@@ -506,7 +506,7 @@ class CudaLatticeDecoder {
   // lattice processing functions
   void FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx, 
                                  LatLink** arcs_buf, int** arcs_fr_size,
-                                 TokenMergeVector** toks_vec_last_fr);
+                                 TokenMergeVector** toks_vec_last_fr, int *num_frames_decoded);
   void PruneActiveTokens(cudaStream_t wait_st, cudaStream_t run_st, 
       BaseFloat gpu_ratio); // prune lattice in GPU
 

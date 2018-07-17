@@ -414,7 +414,6 @@ DEVICE static inline void _process_nonemitting_tokens(processTokens_params
   // processing non-emitting tokens is only conducted on these aggregated
   // tokens. For the first time to run into this iteration, all tokens are
   // updated by _process_emit_or_nemit_tokens(), so we don't need to do aggregation
-  // TODO: reduce number of iterations in processing non-emitting tokens
   int* agg_tok_idx = params->agg_idx; // need to make it 0 before enter this func
   int* cur_tok_idx = params->ne_idx; // need to make it 0 before enter this func
   int32 tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -613,7 +612,11 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
     // wait for everyone to finish process tokens and writes modified0
   } while ((*modified0) == true && cnt < 10);
   if (rank0 && params.verbose > 0 && params.frame % itv == 0)
-    CUDA_PRINTF("TK: %i %i %i %f %f\n", params.frame, tok_E,
+    if (is_init)
+      CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E,
+                params.cur_toks.Size(), cutoff);
+    else
+      CUDA_PRINTF("TK: %i %i %i %f %f\n", params.frame, tok_E,
                 params.cur_toks.Size(), cutoff, params.cuda_decodable.LogLikelihood(1));
 
   // process lattice before allocate new toks to TokenState
@@ -1049,6 +1052,7 @@ DEVICE void LatticeProcessor::PruneActiveTokens(int32 frame,
   if (verbose > 2 && rank0)
     CUDA_PRINTF("PRt: %i %i\n", arcs_bpr_fr_sidx_d[frame + 1],
                 *arcs_apr_used_d);
+  *arcs_apr_used_h = *arcs_apr_used_d; // pinned memory 
 }
 
 // collect after each token passing, we store Token data in the sequence of
@@ -1331,9 +1335,6 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
 // after obtaining the copy size, copy the buffer asynchronously
 void LatticeProcessor::CopyArcsToHost(int32 frame, cudaStream_t st) {
   int32 sz;
-  cudaMemcpy(arcs_apr_used_h, arcs_apr_used_d,
-             sizeof(int32), cudaMemcpyDeviceToHost);
-  // TODO: optimize out above overhead
   // one possibility is we can copy static length
   // by assuming ESTIMATED_PRUNE_RATIO parts are remained
   // sz=sizeof(LatLink)*(arcs_buf_before_pr_size*ESTIMATED_PRUNE_RATIO);
@@ -1685,7 +1686,7 @@ void CudaLatticeDecoder::ProcessNonemitting() {
 
 // GPU lattice prune and copy the processed lattice nodes and arcs to host
 void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx,
-    LatLink** arcs_buf, int** arcs_fr_size, TokenMergeVector** toks_vec_last_fr) {
+    LatLink** arcs_buf, int** arcs_fr_size, TokenMergeVector** toks_vec_last_fr, int *num_frames_decoded) {
   PUSH_RANGE("FinalProcessLattice", 3)
 
   cudaStreamSynchronize(stream_comp); // after fini comp. we can start copy
@@ -1707,6 +1708,8 @@ void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sid
   lattice_processor_.GetHostData(toks_buf, toks_fr_sidx,
                                  arcs_buf, arcs_fr_size);
   CU_SAFE_CALL(cudaGetLastError());
+
+  *num_frames_decoded = num_frames_decoded_;
 
   KALDI_VLOG(1) << "Average tokens number, total frame: "
                 << (*toks_fr_sidx)[num_frames_decoded_ + 1] / num_frames_decoded_
@@ -1749,6 +1752,8 @@ void CudaLatticeDecoder::DecodeChunk(CuMatrix<BaseFloat> *post_chunk) {
     ProcessTokens(); 
 
     chunk_used_len++;
+    // if utt is too long, discard the tail
+    if (num_frames_decoded_ + 1 >= config_.prune_interval) break;
   }
 }
 void CudaLatticeDecoder::Decode(MatrixChunker *decodable) {

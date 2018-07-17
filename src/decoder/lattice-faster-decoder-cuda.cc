@@ -81,11 +81,12 @@ bool LatticeFasterDecoderCuda::Decode(MatrixChunker *decodable) {
   int* arcs_size;
   cuTokenVector* last_tokv;
   // GPU lattice processing and D2H data trasnfer
+  int num_frames_decoded;
   decoder_.FinalProcessLattice(&toks_buf, &toks_sidx, &arcs_buf, 
-                               &arcs_size, &last_tokv);
+                               &arcs_size, &last_tokv, &num_frames_decoded);
   // CPU lattice processing
   FinalProcessLattice(last_tokv, toks_buf, toks_sidx, arcs_buf, arcs_size,
-                      NumFramesDecoded());
+                      num_frames_decoded);
   // final lattice arc pruning and state trims
   // it is the same to CPU decoder in lattice-faster-decoder.h
   FinalizeDecoding();   
