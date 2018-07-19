@@ -34,24 +34,6 @@
 #include "decoder/cuda-lattice-decoder.h"
 #include <omp.h>
 
-static bool ReadStrVectorSimple(std::string rxfilename, 
-                                std::vector<std::string> *list) {
-  kaldi::Input ki;
-  rxfilename.erase(0, 4);
-  if (!ki.OpenTextMode(rxfilename)) return false;
-  std::istream &is = ki.Stream();
-  std::string i;
-  list->clear();
-  int cnt = 0;
-  while ( !(is >> i).fail() ) {
-    if (cnt++ % 2 == 0) { // ignore the value part, only keep the key
-      list->push_back(i);
-    }
-  }
-  is >> std::ws;
-  return is.eof();  // should be eof, or junk at end of file.
-}
-
 int main(int argc, char *argv[]) {
   try {
     using namespace kaldi;
@@ -137,9 +119,6 @@ int main(int argc, char *argv[]) {
     for (int i = feat_start; i <= feat_end; i++) {
       feature_vector.push_back(po.GetArg(i));
     }
-    //feature_rspecifier = po.GetArg(3),
-    //ReadStrVectorSimple(feature_rspecifier, &feature_vector);
-    //RandomAccessBaseFloatMatrixReader loglike_reader(feature_rspecifier);
 
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       Fst<StdArc> *decode_fst;

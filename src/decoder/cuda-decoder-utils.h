@@ -84,12 +84,13 @@ const int32 num_colors = sizeof(colors) / sizeof(uint32);
 
 #define __DEBUG__
 #ifdef __DEBUG__
-#define VERBOSE 5
-#define CUDA_PRINTF(format,...) printf(format, ##__VA_ARGS__)
+#define VERBOSE 2
+#define CUDA_PRINTF(VB, format,...) if (VERBOSE > VB) printf( format, ##__VA_ARGS__)
 #else
 #define VERBOSE 0
-#define CUDA_PRINTF(format,...)
+#define CUDA_PRINTF(VB, format,...)
 #endif
+
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 600
 #define MEMADVISE // used after Pascal, details in: 
@@ -300,7 +301,7 @@ class CudaHistogram {
     BaseFloat ret_beam = i + beam_lowest_;
     *cutoff_from_hist = *best_cost_ + ret_beam;
     if (verbose > 2) {
-      CUDA_PRINTF("hist_LF %f %i\n", *cutoff_from_hist, acc);
+      CUDA_PRINTF(1, "hist_LF %f %i\n", *cutoff_from_hist, acc);
     }
     memset(hist_global_, 0, Size());
   }
@@ -385,7 +386,7 @@ class MatrixChunker {
     assert(len);
     CuMatrix<BaseFloat>& loglike_d = loglikes_d[++chunk_id_ % DEC_CHUNK_BUF_SIZE];
     int data_size = likes_->NumCols() * sizeof(BaseFloat);
-
+    CU_SAFE_CALL(cudaGetLastError());
     // we seldom Resize()
     if (loglike_d.NumRows() != len) loglike_d.Resize(len, likes_->NumCols(), kUndefined);
     // we need cudaMemcpyAsync with stream and cannot use kaldi::CopyFromMat

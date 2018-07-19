@@ -37,6 +37,7 @@ int main(int argc, char *argv[]) {
     typedef kaldi::int32 int32;
     using fst::SymbolTable;
     using fst::VectorFst;
+    using fst::Fst;
     using fst::StdArc;
 
     const char *usage =
@@ -46,12 +47,10 @@ int main(int argc, char *argv[]) {
         "<loglikes-rspecifier> <words-wspecifier> [<alignments-wspecifier>]\n";
     ParseOptions po(usage);
     CudaDecoderConfig decoder_opts;
-    BaseFloat acoustic_scale = 0.1;
     bool allow_partial = true;
     std::string word_syms_filename;
     
     decoder_opts.Register(&po);  
-    po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
     po.Register("allow-partial", &allow_partial, "Produce output even when final state was not reached");
     po.Register("word-symbol-table", &word_syms_filename,
                 "Symbol table for words [for debug output]");
@@ -82,12 +81,10 @@ int main(int argc, char *argv[]) {
       if (!word_syms)
         KALDI_ERR << "Could not read symbol table from file "<<word_syms_filename;
     }
-#if 1
-    cuInit(0);
-#else
+
     CuDevice::Instantiate().SelectGpuId("yes");
     CuDevice::Instantiate().AllowMultithreading();
-#endif
+
     CudaFst cuda_fst;
     SequentialBaseFloatMatrixReader loglikes_reader(loglikes_rspecifier);
 
@@ -96,13 +93,13 @@ int main(int argc, char *argv[]) {
     // It has to do with what happens on UNIX systems if you call fork() on a
     // large process: the page-table entries are duplicated, which requires a
     // lot of virtual memory.
-    VectorFst<StdArc> *decode_fst = fst::ReadFstKaldi(fst_in_filename);
-    cuda_fst.initialize(*decode_fst);
+    Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_filename);
+    cuda_fst.Initialize(*decode_fst);
 
     BaseFloat tot_like = 0.0;
     kaldi::int64 frame_count = 0;
     int num_success = 0, num_fail = 0;
-    FasterDecoderCuda decoder(decoder_opts, cuda_fst);
+    FasterDecoderCuda decoder(decoder_opts, trans_model, cuda_fst);
 
     Timer timer;
 
@@ -116,7 +113,7 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
-      DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+      MatrixChunker decodable(loglikes, decoder_opts.chunk_len);
       decoder.Decode(&decodable);
 
       Lattice decoded;  // linear FST.
@@ -173,7 +170,7 @@ int main(int argc, char *argv[]) {
     delete decode_fst;
 
     printf("Stopping CUDA\n");
-    cuda_fst.finalize();
+    cuda_fst.Finalize();
     cudaDeviceSynchronize();
     cudaProfilerStop();
 

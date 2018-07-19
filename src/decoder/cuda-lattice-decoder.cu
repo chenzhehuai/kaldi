@@ -429,7 +429,7 @@ DEVICE static inline void _process_nonemitting_tokens(processTokens_params
     grid_sync(params->barrier);
   }
   if (params->verbose > 3 && threadIdx.x == 0
-      && blockIdx.x == 0) CUDA_PRINTF("PNE: %i %i %i %f\n", params->frame,
+      && blockIdx.x == 0) CUDA_PRINTF(1, "PNE: %i %i %i %f\n", params->frame,
                                         params->cur_toks.Size(), *agg_tok_idx, *params->cutoff);
 
   while (true) {
@@ -613,10 +613,10 @@ static void _process_tokens(processTokens_params params, bool is_init = false) {
   } while ((*modified0) == true && cnt < 10);
   if (rank0 && params.verbose > 0 && params.frame % itv == 0)
     if (is_init)
-      CUDA_PRINTF("TK: %i %i %i %f\n", params.frame, tok_E,
+      CUDA_PRINTF(1, "TK: %i %i %i %f\n", params.frame, tok_E,
                 params.cur_toks.Size(), cutoff);
     else
-      CUDA_PRINTF("TK: %i %i %i %f %f\n", params.frame, tok_E,
+      CUDA_PRINTF(1, "TK: %i %i %i %f %f\n", params.frame, tok_E,
                 params.cur_toks.Size(), cutoff, params.cuda_decodable.LogLikelihood(1));
 
   // process lattice before allocate new toks to TokenState
@@ -1050,7 +1050,7 @@ DEVICE void LatticeProcessor::PruneActiveTokens(int32 frame,
   // by ESTIMATED_PRUNE_RATIO to reduce memory allocation and D2H data transfer
   assert(*arcs_apr_used_d < arcs_buf_before_pr_size * ESTIMATED_PRUNE_RATIO);
   if (verbose > 2 && rank0)
-    CUDA_PRINTF("PRt: %i %i\n", arcs_bpr_fr_sidx_d[frame + 1],
+    CUDA_PRINTF(1, "PRt: %i %i\n", arcs_bpr_fr_sidx_d[frame + 1],
                 *arcs_apr_used_d);
   *arcs_apr_used_h = *arcs_apr_used_d; // pinned memory 
 }
@@ -1158,9 +1158,9 @@ DEVICE Token* LatticeProcessor::GetActiveTokenByExactId(int32 frame,
   Token* tok = toks_bpr_d + id_exact;
 
   if (check) {
-    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF("h %i %i\n", id_exact,
+    if (id_exact < toks_bpr_fr_sidx_d[frame]) CUDA_PRINTF(1, "h %i %i\n", id_exact,
           toks_bpr_fr_sidx_d[frame]);
-    if (id_exact >= toks_bpr_fr_sidx_d[frame + 1]) CUDA_PRINTF("t %i %i\n", id_exact,
+    if (id_exact >= toks_bpr_fr_sidx_d[frame + 1]) CUDA_PRINTF(1, "t %i %i\n", id_exact,
           toks_bpr_fr_sidx_d[frame + 1]);
     assert(toks_bpr_fr_sidx_d[frame] <= id_exact &&
            id_exact < toks_bpr_fr_sidx_d[frame + 1]);
@@ -1224,7 +1224,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
   volatile int32 *modified2;
   int32 cnt = 0;
   UpdateModifiedFlags(&modified0, &modified1, &modified2, cnt, modified_d);
-  if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, GetSize(toks_bpr_fr_sidx_d,
+  if (rank0 && verbose > 3) CUDA_PRINTF(2, "%i %i\n", c++, GetSize(toks_bpr_fr_sidx_d,
                                           frame - 1)); // size before pruning
   {
     // initialize
@@ -1269,7 +1269,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
         // not prune out
         if (link_extra_cost < -1) {// debug
-          CUDA_PRINTF("%i %f %f %f %f %f\n", frame, next_tok->extra_cost, tok->cost_,
+          CUDA_PRINTF(2, "%i %f %f %f %f %f\n", frame, next_tok->extra_cost, tok->cost_,
                       link->acoustic_cost, arc_weights[link->arc_id], next_tok->cost_);
           link_extra_cost = lattice_beam / 2;
         }
@@ -1280,7 +1280,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
       }
     }
     grid_sync(barrier_);
-    if (rank0 && verbose > 3) CUDA_PRINTF("%i %i\n", c++, cnt);
+    if (rank0 && verbose > 3) CUDA_PRINTF(2, "%i %i\n", c++, cnt);
   }
 
   // final aggregate remaining arcs
@@ -1325,7 +1325,7 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
     int& size_arc_of_frame = arcs_apr_fr_size_d[frame];
     size_arc_of_frame = *arcs_apr_used_d - prev_cidx;
     if (verbose > 3 || (size_arc_of_frame == 0
-                        && frame != 0)) CUDA_PRINTF("PR %i %i %i\n", frame,
+                        && frame != 0)) CUDA_PRINTF(1, "PR %i %i %i\n", frame,
                               GetSize(arcs_bpr_fr_sidx_d, frame), size_arc_of_frame);
   }
   // grid_sync(barrier_);
