@@ -301,7 +301,7 @@ class CudaHistogram {
     BaseFloat ret_beam = i + beam_lowest_;
     *cutoff_from_hist = *best_cost_ + ret_beam;
     if (verbose > 2) {
-      CUDA_PRINTF(1, "hist_LF %f %i\n", *cutoff_from_hist, acc);
+      CUDA_PRINTF(2, "hist_LF %f %i\n", *cutoff_from_hist, acc);
     }
     memset(hist_global_, 0, Size());
   }

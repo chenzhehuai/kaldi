@@ -172,11 +172,17 @@ DEVICE static inline void _find_prev_cutoff_by_histogram(processTokens_params* p
 }
 
 DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
+  int32 size = params->prev_toks.Size();
+  // frame 0 don't obtain params->cutoff
+  if (size > params->max_active && params->frame > 1) {
+    _find_prev_cutoff_by_histogram(params);
+    // params->cutoff_prev to be used in the latter part
+    grid_sync(params->barrier);
+  }
   typedef cub::BlockReduce<BaseFloat, COMPUTE_DEGREES_DIMX> BlockReduce;
   __shared__ typename BlockReduce::TempStorage temp_storage_reduce;
 
   CostType local_cutoff = INFINITY;
-  int32 size = params->prev_toks.Size();
   bool is_emitting = true;
   TokenMergeVector &tok_vec = is_emitting ? params->prev_toks : params->cur_toks;
   const int total_narcs = *params->d_q_token_from_narcs;
@@ -212,6 +218,7 @@ DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
       acoustic_cost = (arc_ilabel != 0) ? -params->cuda_decodable.LogLikelihood(
                        arc_ilabel) : 0.0;
       weight = params->arc_weights[arc_idx];
+      //if (tok->cost_ > *params->cutoff_prev) continue;
       total_cost = tok->cost_ + weight + acoustic_cost + params->beam;
 
       if (total_cost < local_cutoff)
@@ -518,6 +525,7 @@ static void _add_initial_token(processTokens_params params, StateId state) {
 
   // putting this here to avoid extra kernel launch cost
   _initialize_cutoff(params.cutoff);
+  _initialize_cutoff(params.cutoff_prev);
 
   _find_or_add_token_arc(&params, state, 0, // add first token
                          0, NULL, j, false,  &next_ts,

@@ -81,6 +81,7 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const TransitionModel &trans_model,
     h_reversed_path = (int*)malloc(50000 * sizeof(int));
 
     cudaMalloc(&d_cutoff, sizeof(float));
+    cudaMalloc(&cutoff_prev_, sizeof(float));
     
     cudaMalloc(&d_path_size, sizeof(int));
     cudaMalloc(&d_n_CTA_done, sizeof(int));
@@ -94,12 +95,17 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const TransitionModel &trans_model,
   int data_size = id2pdf_id.size() * sizeof(int);
   cudaMalloc((void**)&id2pdf_d_, data_size);
   cudaMemcpy(id2pdf_d_, id2pdf_id.data(), data_size, cudaMemcpyHostToDevice);
+  histogram_prev_toks_.Allocate(config_.beam,
+                       (int32)(config_.beam * 0.5), 1.0);
+
+
    CU_SAFE_CALL(cudaGetLastError());
   }
 
   CudaDecoder::~CudaDecoder() {
         printf("CUDA DECODER DESTRUCTOR TODO\n");
       // TODO
+      histogram_prev_toks_.Free();
   }
 
   void CudaDecoder::InitDecoding() {
@@ -134,6 +140,7 @@ CudaDecoder::CudaDecoder(const CudaFst &fst, const TransitionModel &trans_model,
 
     float cutoff = FLT_MAX;
     cudaMemcpy(d_cutoff, &cutoff, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(cutoff_prev_, &cutoff, sizeof(float), cudaMemcpyHostToDevice);
 
     cudaMemset(d_n_CTA_done, 0, sizeof(int));
 
@@ -326,6 +333,8 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     params.arc_weights = fst_.arc_weights_d; 
     params.arc_nextstates = fst_.arc_nextstates_d; 
     params.d_cutoff = d_cutoff;
+    params.cutoff_prev= cutoff_prev_;
+    params.max_active = config_.max_active;
     params.beam = beam_;
     params.d_lookup = d_state_cost;
     params.is_emitting = is_emitting;
@@ -339,6 +348,7 @@ bool CudaDecoder::ProcessToken(unsigned int *d_arc_offsets,
     params.d_arc_offsets = d_arc_offsets;
     params.d_block_sums_scan = d_block_sums_scan;
     params.cuda_decodable = cuda_decodable_;
+    params.histogram_prev_toks = histogram_prev_toks_;
 
     // Compute degrees, reduce by key, apply cutoff
     // Compute first part of the prefix sums of the degrees
@@ -437,11 +447,12 @@ as "d_q_arc_offset"
 
 */
 
+typedef CudaDecoder::ExpandArcParams ExpandArcParams; 
 
 DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int *d_q_token_from, const int
   *d_q_token_to, int *d_degrees_scan, unsigned int
   *d_offsets, uint64 *d_state_cost, BaseFloat *d_cutoff, int *d_q_arc_offset,
-  int *d_block_sums, int *d_block_sums_scan,  int * h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num) {
+  int *d_block_sums, int *d_block_sums_scan,  int * h_q_token_from_narcs, int *d_q_token_from_narcs, int *d_n_CTA_done, int *d_dbg_tok_num, ExpandArcParams* params) {
 
        typedef cub::BlockScan<int, COMPUTE_DEGREES_DIMX> BlockScan;
        __shared__ typename BlockScan::TempStorage temp_storage;
@@ -456,6 +467,11 @@ DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int 
 
         BaseFloat cutoff = *d_cutoff;
         //if ( threadIdx.x==0 && blockIdx.x==0) CUDA_PRINTF("1 %d %d %d %f\n", queue_size, queue_offset, queue_end, *d_cutoff);
+        bool hist=params->max_active < queue_size && params->frame>1;
+  int32 hist_local[MAX_HISTOGRAM_SIZE];
+  if (hist) memset(hist_local, 0, params->histogram_prev_toks.Size());
+
+
 
         for(int block_offset = blockDim.x*blockIdx.x;
                 block_offset < queue_size;
@@ -476,6 +492,8 @@ DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int 
                         degree = end - start;
                         d_q_arc_offset[idx-queue_offset] = start;
                         if (d_dbg_tok_num) atomicAdd(d_dbg_tok_num, 1);
+                        if (hist) params->histogram_prev_toks.AddScore2LocalHist(cost, hist_local);
+
                     }
                 }
             }
@@ -495,6 +513,7 @@ DEVICE void compute_degrees_kernel(StateId *d_q, InfoToken *d_q_info, const int 
                 __syncthreads();
             }
         }
+        if (hist) params->histogram_prev_toks.AggregateLocalHist(hist_local);
 
         if(threadIdx.x == 0) {
             int old = atomicAdd(d_n_CTA_done, 1);
@@ -573,16 +592,22 @@ DEVICE void finalize_degrees_scan_kernel(int *d_scan, int *d_blk_scan, const int
 
  }
 
-typedef CudaDecoder::ExpandArcParams ExpandArcParams; 
 void __global__ compute_degrees_with_reset_kernel(ExpandArcParams params, bool reset=true) {
   compute_degrees_kernel(params.d_q, params.d_q_info,params.d_q_token_from, 
       params.d_q_token_to, params.d_degrees_scan, params.d_arc_offsets, 
       params.d_lookup, params.d_cutoff, params.d_q_arc_offset, 
       params.d_block_sums_scan, params.d_block_sums_scan,  params.h_q_token_from_narcs, params.d_q_token_from_narcs, 
-      params.d_n_CTA_done, params.d_dbg_tok_num);
+      params.d_n_CTA_done, params.d_dbg_tok_num, &params);
   grid_sync(params.barrier);
+  int rank0 = threadIdx.x==0 && blockIdx.x==0;
+  if (rank0&&params.frame >1&&*params.d_dbg_tok_num > params.max_active) {
+    params.histogram_prev_toks.GetCutoff(params.cutoff_prev,
+                                          params.max_active, 0);
+  }
+
   reset_lookup_kernel(params.d_q, params.d_q_token_from, params.d_q_token_to, params.d_lookup, params.d_cutoff, params.d_dbg_tok_num, params.frame, params.d_q_token_from_narcs, reset);
   finalize_degrees_scan_kernel(params.d_degrees_scan, params.d_block_sums_scan, params.d_q_token_from, params.d_q_token_to);
+
 
 }
   void CudaDecoder::FinalizeDegreesScan() {
@@ -718,6 +743,9 @@ void __global__ get_cutoff(ExpandArcParams params, BaseFloat set = 0) {
     }
 }
 void __global__ expand_arcs_kernel(ExpandArcParams params) {
+    int rank0=threadIdx.x==0 && blockIdx.x==0;
+    // reduce a kernel for histogram_prev_toks
+    if (rank0) params.histogram_prev_toks.Initialize(*params.d_cutoff - params.beam);
     typedef cub::BlockScan<int, EXPAND_ARCS_DIMX> BlockScan;
     typedef cub::BlockReduce<BaseFloat, EXPAND_ARCS_DIMX> BlockReduce;
     
@@ -745,6 +773,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
         StateId arc_next_state;
         int q_idx;
 
+        BaseFloat old_tok_cost;
         if(valid_input) {
             //we can do better than that
             q_idx = old_q_offset + binsearch_maxle(params.d_degrees_scan, th_idx, 0, old_q_size-1); 
@@ -764,7 +793,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
                        arc_ilabel): 0.0; 
             BaseFloat next_state_cost = unpack_cost_from_uint64(params.d_lookup[arc_next_state]);
 
-            BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
+            old_tok_cost = params.d_q_info[q_idx].cost;
 
             total_cost = accoustic_cost + arc_weight + old_tok_cost;
 
@@ -776,7 +805,7 @@ void __global__ expand_arcs_kernel(ExpandArcParams params) {
        
         BaseFloat cutoff = *params.d_cutoff;
 
-        int has_successor = (total_cost < cutoff && valid_input) ? 1 : 0;
+        int has_successor = (total_cost < cutoff && valid_input && old_tok_cost < *params.cutoff_prev) ? 1 : 0;
 
         int new_q_idx_block;
 
@@ -1223,6 +1252,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             StateId arc_next_state;
             int q_idx, local_q_idx=-1;
 
+            BaseFloat old_tok_cost;
             if(valid_input) {
                 //we can do better than that
                 local_q_idx = binsearch_maxle(params.d_degrees_scan, th_idx, 0, old_q_size-1); // get from token idx
@@ -1236,7 +1266,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
                 arc_next_state = params.arc_nextstates[arc_idx];
                 BaseFloat arc_weight = params.arc_weights[arc_idx];
                 BaseFloat next_state_cost = unpack_cost_from_uint64(params.d_lookup[arc_next_state]);
-                BaseFloat old_tok_cost = params.d_q_info[q_idx].cost;
+                old_tok_cost = params.d_q_info[q_idx].cost;
 
                 total_cost = arc_weight + old_tok_cost;
 
@@ -1257,7 +1287,7 @@ __global__ void process_nonem_longtail(unsigned int *d_arc_offsets,
             }
             */
 
-            int has_successor = (total_cost < cutoff && valid_input) ? 1 : 0;
+            int has_successor = (total_cost < cutoff && valid_input && old_tok_cost < *params.cutoff_prev) ? 1 : 0;
 
             int new_q_idx_block, new_q_index;
 

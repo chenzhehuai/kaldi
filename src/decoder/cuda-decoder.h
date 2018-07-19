@@ -41,12 +41,14 @@ struct CudaDecoderConfig {
   double gpu_fraction;
   uint32_t max_tokens_per_frame;
   uint32_t max_tokens;
+  int32 max_active;
   BaseFloat acoustic_scale;
   int32 chunk_len;
   
   CudaDecoderConfig(): beam(16.0),
                        gpu_fraction(1.0/8.0),
                        max_tokens(300000000),
+                       max_active(100000),
                        acoustic_scale(0.1), chunk_len(1) {}
   
   void Register(OptionsItf *opts) {
@@ -56,6 +58,8 @@ struct CudaDecoderConfig {
                                                   "Use multiple decoders in parallel for the best performance.");
     opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
                                                         "  If actual usaged exceeds this the results are undefined.");
+    opts->Register("max-active", &max_active, "Decoder max active states.  Larger->slower; "
+                   "more accurate. It's a faster but approximate version for GPU.");    
     opts->Register("acoustic-scale", &acoustic_scale,
                    "Scaling factor for acoustic likelihoods");
     opts->Register("chunk-len", &chunk_len, "chunk length for loading posteriors.");
@@ -143,6 +147,8 @@ class CudaDecoder {
       BaseFloat *arc_weights; 
       StateId *arc_nextstates; 
       BaseFloat *d_cutoff;
+      BaseFloat *cutoff_prev;
+      int max_active;
       BaseFloat beam; 
 
       uint64 *d_lookup;
@@ -160,6 +166,7 @@ class CudaDecoder {
       uint *d_arc_offsets;
       int* d_block_sums_scan;
       CuMatrixScaledMapper cuda_decodable;
+      CudaHistogram histogram_prev_toks;
 };
 
     int debug_max_narcs;
@@ -281,6 +288,8 @@ class CudaDecoder {
   const TransitionModel &trans_model_;  // for tid to pdf mapping
   int32* id2pdf_d_;
   const CudaDecoderConfig &config_;
+  CudaHistogram histogram_prev_toks_;
+  BaseFloat *cutoff_prev_;
 
 
   size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
