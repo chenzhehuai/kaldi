@@ -37,7 +37,7 @@ struct CudaLatticeDecoderConfig {
   uint32 max_arcs;
   BaseFloat lattice_beam;
   BaseFloat beam;
-  uint32 prune_interval;
+  uint32 max_len;
   int32 max_active;
   int32 chunk_len;
   BaseFloat acoustic_scale;
@@ -56,7 +56,7 @@ struct CudaLatticeDecoderConfig {
                        max_arcs(20000000), 
                        lattice_beam(10.0),
                        beam(16.0),
-                       prune_interval(3000),
+                       max_len(3000),
                        max_active(100000),
                        chunk_len(1),
                        acoustic_scale(1),
@@ -88,8 +88,7 @@ struct CudaLatticeDecoderConfig {
       "  If actual usaged exceeds this the results are undefined.");
     opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam.  Larger->slower, "
                    "and deeper lattices");
-    opts->Register("prune-interval", &prune_interval, "Interval (in frames) at "
-                   "which to prune tokens");
+    opts->Register("max-len", &max_len, "Decoder max len. ");
     opts->Register("max-active", &max_active, "Decoder max active states.  Larger->slower; "
                    "more accurate. It's a faster but approximate version for GPU.");    
     opts->Register("chunk-len", &chunk_len, "chunk length for loading posteriors.");
@@ -103,7 +102,7 @@ struct CudaLatticeDecoderConfig {
     KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 &&
      lat_fraction>0 && lat_fraction <= 1 
       && max_tokens_per_frame > 0 && max_tokens>0 && lattice_beam > 0.0
-                 && prune_interval > 0);
+                 && max_len > 0);
   }
 };
 
@@ -314,7 +313,7 @@ class CudaLatticeDecoder {
    public:  
     void Initialize();
     int32 Allocate(int32 max_tokens_per_frame, int32 max_lat_arc_per_frame, 
-      int32 prune_interval, int32 max_toks, int32 max_arcs, const CudaFst& fst);
+      int32 max_len, int32 max_toks, int32 max_arcs, const CudaFst& fst);
     void Free();
     // The GPU memory of lattice arcs is shared with LatLinkVector
     LatLinkCompact* GetDeviceArcsBpr() { return arcs_bpr_d; } 
@@ -398,7 +397,7 @@ class CudaLatticeDecoder {
 
     // after pruning (apr)
     // save size but not start idx because: i) it's in reverse order; 
-    // of [frame-2*prune_interval+1, frame-1*prune_interval]
+    // of [frame-2*max_len+1, frame-1*max_len]
     // ii) we organize arcs by frame in CPU, which needs arc size per frame
     int* arcs_apr_fr_size_d; 
     int* arcs_apr_fr_size_h; 
@@ -413,7 +412,7 @@ class CudaLatticeDecoder {
     int* modified_d;
 
     // configurations
-    int32 prune_interval;
+    int32 max_len;
     int32 toks_buf_before_pr_size;
     int32 arcs_buf_before_pr_size;
 
@@ -465,7 +464,7 @@ class CudaLatticeDecoder {
     BaseFloat beam;
     int32 verbose; // for debug 
     BaseFloat lattice_beam;
-    int32 prune_interval;
+    int32 max_len;
     int32 numArcs;
     uint32 frame;   
     int32 max_lat_arc_per_frame;
@@ -540,15 +539,24 @@ class CudaLatticeDecoder {
   TokenLookupElem *current_tokens_lookup_d;
   CudaHistogram histogram_prev_toks_;
 
-  // data store for log likelihoods needed in the current frame.  
-  // Double buffering to avoid synchronization.
-  BaseFloat *loglikelihoods_d, *loglikelihoods_old_d;    
-
   // lattice
   TokenMergeVector lat_toks_bufs_[LAT_BUF_SIZE];
   LatLinkVector lat_arcs_buf_;
   int32* lat_arcs_buf_end_;
   LatticeProcessor lattice_processor_;
+
+  // scan & expand
+  int32 *d_q_token_from_narcs;
+  int32 *d_block_sums_scan;
+  int32 *d_n_CTA_done;
+  int32 *d_block_sums;
+  int32 *d_degrees_scan;
+  int32 *d_q_arc_offset;
+
+  // data store for log likelihoods needed in the current frame.  
+  CuMatrixScaledMapper cuda_decodable_;
+  const TransitionModel &trans_model_;  // for tid to pdf mapping
+  int32* id2pdf_d_;
 
   // GPU usage
   uint32 total_threads; // GPU utilization
@@ -559,20 +567,6 @@ class CudaLatticeDecoder {
   cudaStream_t stream_comp; // decoding
   cudaStream_t stream_lat[LAT_BUF_SIZE]; // lattice processing and copying
   cudaStream_t stream_ll; // log likelihoods calculation
-
-  // scan & expand
-  int32 *d_q_token_from_narcs;
-  int32 *d_block_sums_scan;
-  int32 *d_n_CTA_done;
-  int32 *d_block_sums;
-  int32 *d_degrees_scan;
-  int32 *d_q_arc_offset;
-
-  // chunk decoding
-  CuMatrixScaledMapper cuda_decodable_;
-
-  const TransitionModel &trans_model_;  // for tid to pdf mapping
-  int32* id2pdf_d_;
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaLatticeDecoder);
 };

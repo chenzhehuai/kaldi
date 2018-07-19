@@ -22,7 +22,7 @@ BINFILES = align-equal align-equal-compiled acc-tree-stats \
         matrix-sum build-pfile-from-ali get-post-on-ali tree-info am-info \
         vector-sum matrix-sum-rows est-pca sum-lda-accs sum-mllt-accs \
         transform-vec align-text matrix-dim post-to-smat 
-BINFILES += decode-faster-mapped-cuda 
+BINFILES += decode-faster-mapped-cuda decode-faster-mapped-cuda-parallel
 
 
 ifeq ($(CUDA), true)

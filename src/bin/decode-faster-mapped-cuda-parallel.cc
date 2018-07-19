@@ -24,7 +24,7 @@
 #include "tree/context-dep.h"
 #include "hmm/transition-model.h"
 #include "fstext/fstext-lib.h"
-#include "decoder/faster-decoder-cuda.h"
+#include "decoder/cuda-decoder.h"
 #include "decoder/decodable-matrix.h"
 #include "nnet3/nnet-utils.h"
 #include "base/timer.h"
@@ -111,20 +111,15 @@ int main(int argc, char *argv[]) {
     // large process: the page-table entries are duplicated, which requires a
     // lot of virtual memory.
         
-    if(omp_get_thread_num()==0) cuda_fst.initialize(*decode_fst);
+    if(omp_get_thread_num()==0) cuda_fst.Initialize(*decode_fst);
 #pragma omp barrier
 
 
     BaseFloat tot_like = 0.0;
-    FasterDecoderCuda decoder(decoder_opts, cuda_fst);
+    CudaDecoder decoder(cuda_fst, trans_model, decoder_opts);
 
 
     for (; !loglikes_reader.Done(); loglikes_reader.Next()) {
-            if(omp_get_thread_num()==0) {
-              printf("cudaMallocMemory: %lg GB, cudaMallocManagedMemory: %lg GB\n", 
-                  (decoder.Decoder().getCudaMallocBytes()*omp_get_num_threads()+cuda_fst.getCudaMallocBytes())/1024.0/1024/1024, 
-                  decoder.Decoder().getCudaMallocManagedBytes()/1024.0/1024/1024*omp_get_num_threads());
-            }
 #pragma omp barrier
       timer.Reset();
       nvtxRangePushA("real decoding");
@@ -137,7 +132,7 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
-      DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
+      MatrixChunker decodable(loglikes, decoder_opts.chunk_len);
       decoder.Decode(&decodable);
       Lattice decoded;  // linear FST.
 
@@ -205,7 +200,7 @@ int main(int argc, char *argv[]) {
     delete word_syms;
     delete decode_fst;
 
-    cuda_fst.finalize();
+    cuda_fst.Finalize();
     cudaDeviceSynchronize();
     cudaProfilerStop();
 

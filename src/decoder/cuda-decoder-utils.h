@@ -23,7 +23,6 @@
 
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
-#include "omp.h"
 #include "cuda_runtime.h"
 #include <algorithm>
 #include <cuda_runtime_api.h>
@@ -155,7 +154,6 @@ inline HOST DEVICE BaseFloat unpack_cost_from_uint64(uint64 packed) {
 
 // Unpacks a idx for tracing the data
 inline HOST DEVICE int32 unpack_idx_from_uint64(uint64 packed) {
-  // assert (!(packed & 0x80000000));
   return packed & 0x7FFFFFFF;
 }
 
@@ -213,7 +211,7 @@ inline  DEVICE void fast_store32(void *a, const void *b) {
 }
 
 // overload CUDA atomicMin to consume double
-inline DEVICE void atomic_min(double *address, double val) {
+inline DEVICE double atomic_min(double *address, double val) {
   unsigned long long *address_ull = (unsigned long long *)address;
   double minval = *address;
   while (val < minval) {  // if my value is less than minimum
@@ -221,10 +219,11 @@ inline DEVICE void atomic_min(double *address, double val) {
     // write minimum and read back value
     val = __longlong_as_double(atomicExch(address_ull, __double_as_longlong(val)));
   } // if the new value is < the minimum I wrote I need to try again.
+  return minval;
 }
 
 // overload CUDA atomicMin to consume BaseFloat
-inline DEVICE void atomic_min(BaseFloat *address, BaseFloat val) {
+inline DEVICE BaseFloat atomic_min(BaseFloat *address, BaseFloat val) {
   uint32 *address_ui = (uint32  *)address;
   BaseFloat minval = *address;
   while (val < minval) {  // if my value is less than minimum
@@ -232,6 +231,7 @@ inline DEVICE void atomic_min(BaseFloat *address, BaseFloat val) {
     // write minimum and read back value
     val = __uint_as_float(atomicExch(address_ui, __float_as_uint(val)));
   } // if the new value is < the minimum I wrote I need to try again.
+  return minval;
 }
 
 // Assumptions: 1-d grid and blocks. No threads "early-exit" the grid.

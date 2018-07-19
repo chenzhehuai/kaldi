@@ -24,9 +24,7 @@
 #include "itf/decodable-itf.h"
 
 #include "cuda-decoder-utils.h"
-// #include "lattice-faster-decoder-cuda.h"
 #include "decoder/cuda-lattice-decoder.h"
-
 
 namespace kaldi {
 
@@ -173,12 +171,10 @@ DEVICE static inline void _find_prev_cutoff_by_histogram(processTokens_params* p
 
 DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
   int32 size = params->prev_toks.Size();
-  // frame 0 don't obtain params->cutoff
-  if (size > params->max_active && params->frame > 1) {
+  // frame 0 don't have params->cutoff
+  if (size > params->max_active && params->frame > 1) 
     _find_prev_cutoff_by_histogram(params);
-    // params->cutoff_prev to be used in the latter part
-    grid_sync(params->barrier);
-  }
+
   typedef cub::BlockReduce<BaseFloat, COMPUTE_DEGREES_DIMX> BlockReduce;
   __shared__ typename BlockReduce::TempStorage temp_storage_reduce;
 
@@ -218,9 +214,7 @@ DEVICE static inline void _find_best_cutoff(processTokens_params * params) {
       acoustic_cost = (arc_ilabel != 0) ? -params->cuda_decodable.LogLikelihood(
                        arc_ilabel) : 0.0;
       weight = params->arc_weights[arc_idx];
-      //if (tok->cost_ > *params->cutoff_prev) continue;
       total_cost = tok->cost_ + weight + acoustic_cost + params->beam;
-
       if (total_cost < local_cutoff)
         local_cutoff = total_cost;
     }
@@ -321,8 +315,7 @@ DEVICE static inline void _compute_degrees_scan(processTokens_params * params,
        idx < q_size;
        idx += blockDim.x * gridDim.x) {
     int blk_idx = idx / blockDim.x;
-    int blk_scan_offset =
-      params->d_block_sums_scan[blk_idx]; // we rely on L1 for this one, avoiding syncs
+    int blk_scan_offset = params->d_block_sums_scan[blk_idx]; 
     params->d_degrees_scan[idx] += blk_scan_offset;
   }
 }
@@ -924,17 +917,17 @@ DEVICE uint32 CudaMergeVector<T>::PushBack(const T &val,
 // LatticeProcessor Implementation
 // Initialize in InitDecoding()
 void LatticeProcessor::Initialize() {
-  cudaMemset(arcs_apr_fr_size_d, 0, sizeof(int32) * (prune_interval + 2));
+  cudaMemset(arcs_apr_fr_size_d, 0, sizeof(int32) * (max_len + 2));
   cudaMemset(arcs_apr_used_d, 0, sizeof(int32));
   cudaMemset(arcs_bpr_used_d, 0, sizeof(int32));
-  cudaMemset(toks_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 2));
-  cudaMemset(arcs_bpr_fr_sidx_d, 0, sizeof(int32) * (prune_interval + 2));
+  cudaMemset(toks_bpr_fr_sidx_d, 0, sizeof(int32) * (max_len + 2));
+  cudaMemset(arcs_bpr_fr_sidx_d, 0, sizeof(int32) * (max_len + 2));
   cudaMemset(toks_num_used, 0, sizeof(int32));
 }
 
 // the return value including the cudaMallocManaged size
 int32 LatticeProcessor::Allocate(int32 max_tokens_per_frame,
-                                 int32 max_lat_arc_per_frame, int32 prune_interval,
+                                 int32 max_lat_arc_per_frame, int32 max_len,
                                  int32 max_toks, int32 max_arcs,
                                  const CudaFst& fst) {
   int32 sz;
@@ -957,16 +950,16 @@ int32 LatticeProcessor::Allocate(int32 max_tokens_per_frame,
   bytes_cuda_malloc += sz;
 
   arcs_buf_before_pr_size = max_arcs;
-  sz = sizeof(int32) * (prune_interval + 2);
+  sz = sizeof(int32) * (max_len + 2);
   cudaMalloc((void**)&toks_bpr_fr_sidx_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&toks_bpr_fr_sidx_h, sz);
   sz = sizeof(int32);
   cudaMalloc((void**)&toks_num_used, sz); bytes_cuda_malloc += sz;
-  sz = sizeof(int32) * (prune_interval + 2);
+  sz = sizeof(int32) * (max_len + 2);
   cudaMalloc((void**)&arcs_bpr_fr_sidx_d, sz); bytes_cuda_malloc += sz;
 
   // after pruning
-  sz = sizeof(int32) * (prune_interval + 2);
+  sz = sizeof(int32) * (max_len + 2);
   cudaMalloc((void**)&arcs_apr_fr_size_d, sz); bytes_cuda_malloc += sz;
   cudaMallocHost((void**)&arcs_apr_fr_size_h, sz);
   sz = ESTIMATED_PRUNE_RATIO * sizeof(LatLink) * max_arcs;
@@ -987,7 +980,7 @@ int32 LatticeProcessor::Allocate(int32 max_tokens_per_frame,
   cudaMalloc((void**)&modified_d, sz); bytes_cuda_malloc += sz;
   sz = sizeof(int32) * (2);
   cudaMalloc((void**)&count_vec_acc_d, sz); bytes_cuda_malloc += sz;
-  this->prune_interval = prune_interval;
+  this->max_len = max_len;
 
   arc_ilabels = fst.arc_ilabels_d;
   arc_olabels = fst.arc_olabels_d;
@@ -1272,8 +1265,8 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
       // extra cost is defined as the difference between the best
       // cost including the current arc and the best overall path.
       BaseFloat link_extra_cost = next_tok->extra_cost +
-                                  ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
-                                   - next_tok->cost_);
+                                  ((tok->cost_ + link->acoustic_cost + 
+                                  arc_weights[link->arc_id]) - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
         // not prune out
         if (link_extra_cost < -1) {// debug
@@ -1301,8 +1294,8 @@ DEVICE void LatticeProcessor::PruneLatticeForFrame(int32 frame,
       Token* next_tok = GetActiveToken(frame, link->next_tok_id, true);
       Token* tok = GetActiveToken(frame_tok, link->GetPrevTokId(), true);
       BaseFloat link_extra_cost = next_tok->extra_cost +
-                                  ((tok->cost_ + link->acoustic_cost + arc_weights[link->arc_id])
-                                   - next_tok->cost_);
+                                  ((tok->cost_ + link->acoustic_cost + 
+                                  arc_weights[link->arc_id]) - next_tok->cost_);
       if (!isnan(link_extra_cost) && link_extra_cost <= lattice_beam) {
         // not pruned out
         if (merge) {
@@ -1361,7 +1354,7 @@ void LatticeProcessor::CopyArcsToHost(int32 frame, cudaStream_t st) {
 void LatticeProcessor::CopyToksToHost(int32 frame, cudaStream_t st) {
   int32 sz;
   // include frame 0 count and the total count in the last element
-  assert(frame <= prune_interval); // the max size of toks_bpr_fr_sidx_h
+  assert(frame <= max_len); // the max size of toks_bpr_fr_sidx_h
   sz = sizeof(int32) * (frame + 1 + 1) * (1);
   cudaMemcpy(toks_bpr_fr_sidx_h, toks_bpr_fr_sidx_d,
              sz, cudaMemcpyDeviceToHost);
@@ -1376,8 +1369,8 @@ void LatticeProcessor::GetHostData(Token** toks_buf, int** toks_fr_sidx,
                                    LatLink** arcs_buf, int** arcs_fr_size) {
   *toks_fr_sidx = toks_bpr_fr_sidx_h;
   *toks_buf = toks_bpr_h;
-  *arcs_fr_size = arcs_apr_fr_size_h; // prune_interval len
-  *arcs_buf = arcs_apr_h; // start of prune_interval len arcs
+  *arcs_fr_size = arcs_apr_fr_size_h; // max_len len
+  *arcs_buf = arcs_apr_h; // start of max_len len arcs
 }
 
 // CudaLatticeDecoder Implementation
@@ -1438,11 +1431,9 @@ CudaLatticeDecoder::CudaLatticeDecoder(const CudaFst &fst, const TransitionModel
              sizeof(TokenLookupElem)*fst_.numStates);
   bytes_cuda_malloc += sizeof(TokenLookupElem) * fst_.numStates;
 
-  loglikelihoods_d = loglikelihoods_old_d = NULL;
-
   // for pruning
   bytes_cuda_malloc += lattice_processor_.Allocate(config.max_tokens_per_frame,
-                       config.max_lat_arc_per_frame, config.prune_interval,
+                       config.max_lat_arc_per_frame, config.max_len,
                        config.max_tokens, config.max_arcs, fst_);
 
   lat_arcs_buf_.Allocate(config.max_arcs, NULL, NULL, NULL,
@@ -1570,7 +1561,7 @@ void CudaLatticeDecoder::InitParams(processTokens_params* params) {
   params->beam = config_.beam;
   params->verbose = config_.verbose;
   params->lattice_beam = config_.lattice_beam;
-  params->prune_interval = config_.prune_interval;
+  params->max_len = config_.max_len;
   params->numArcs = fst_.NumArcs();
   params->frame = num_frames_decoded_;
   params->num_arcs_till_last = num_arcs_till_last_d;
@@ -1599,10 +1590,10 @@ void CudaLatticeDecoder::InitDecoding() {
   lattice_processor_.Initialize();
   CU_SAFE_CALL(cudaGetLastError());
 
-  // we launch 64 threads as a block, i.e. 2 cooperative_groups
+  // we launch 256 threads as a block, i.e. 8 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
-  int32 threads = 64;
+  int32 threads = PROC_DIMX;
   int32 blocks = DIV_ROUND_UP(total_threads, threads);
 
   // try to reduce number of tokens_allocation by not doing allocate, but only
@@ -1654,7 +1645,7 @@ void CudaLatticeDecoder::ProcessTokens() {
   PUSH_RANGE("ProcessTokens", 2)
   KALDI_VLOG(4) << num_frames_decoded_ << std::endl;
 
-  // we launch 64 threads as a block, i.e. 2 cooperative_groups
+  // we launch 256 threads as a block, i.e. 8 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
   dim3 threads(PROC_DIMX, 1);
@@ -1678,7 +1669,7 @@ void CudaLatticeDecoder::ProcessTokens() {
 void CudaLatticeDecoder::ProcessNonemitting() {
   PUSH_RANGE("ProcessNonemitting", 0)
 
-  // we launch 64 threads as a block, i.e. 2 cooperative_groups
+  // we launch 256 threads as a block, i.e. 8 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
   dim3 threads(PROC_DIMX, 1);
@@ -1692,9 +1683,51 @@ void CudaLatticeDecoder::ProcessNonemitting() {
   POP_RANGE
 }
 
+
+void CudaLatticeDecoder::DecodeChunk(CuMatrix<BaseFloat> *post_chunk) {
+  int chunk_used_len=0;
+  while (chunk_used_len < post_chunk->NumRows()) {
+    // one frame from the chunk
+    cuda_decodable_ = CuMatrixScaledMapper(id2pdf_d_,
+                      config_.acoustic_scale, post_chunk->Row(chunk_used_len).Data()); 
+
+    PreProcessTokens(); 
+    ProcessTokens(); 
+
+    chunk_used_len++;
+    // if utt is too long, discard the tail
+    if (num_frames_decoded_ + 1 >= config_.max_len) break;
+  }
+}
+
+void CudaLatticeDecoder::Decode(MatrixChunker *decodable) {
+  while ( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
+    bool last_frame = decodable->IsLastFrame(num_frames_decoded_ - 0);
+    if (num_frames_decoded_ + 1 >= config_.max_len) {
+      last_frame = true;
+      KALDI_WARN << "the utterance is too long, cutoff after frames: " 
+                 << num_frames_decoded_ + 1;
+    }
+
+    PUSH_RANGE("ComputeLogLikelihoods", 3)
+    int chunk_len;
+    CuMatrix<BaseFloat> *post_chunk;
+    decodable->LogLikelihoodChunk(num_frames_decoded_, &post_chunk, stream_ll);
+    cudaEventRecord(event_ll, stream_ll);
+    POP_RANGE
+    DecodeChunk(post_chunk);
+
+    if (last_frame) {
+      KALDI_VLOG(5) << "last frame: " << NumFramesDecoded();
+      break;
+    }
+  }
+}
+
 // GPU lattice prune and copy the processed lattice nodes and arcs to host
 void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sidx,
-    LatLink** arcs_buf, int** arcs_fr_size, TokenMergeVector** toks_vec_last_fr, int *num_frames_decoded) {
+    LatLink** arcs_buf, int** arcs_fr_size, TokenMergeVector** toks_vec_last_fr, 
+    int *num_frames_decoded) {
   PUSH_RANGE("FinalProcessLattice", 3)
 
   cudaStreamSynchronize(stream_comp); // after fini comp. we can start copy
@@ -1727,7 +1760,7 @@ void CudaLatticeDecoder::FinalProcessLattice(Token** toks_buf, int** toks_fr_sid
 
 void CudaLatticeDecoder::PruneActiveTokens(cudaStream_t wait_st,
     cudaStream_t run_st, BaseFloat gpu_ratio) {
-  // we launch 64 threads as a block, i.e. 2 cooperative_groups
+  // we launch 256 threads as a block, i.e. 8 cooperative_groups
   // in cuda kernel of dynamic load balancing. more details are described there
   // we use a static launch size to reduce the kernel launch time 30us->10us
   dim3 threads(PROC_DIMX, 1);
@@ -1749,43 +1782,5 @@ bool CudaLatticeDecoder::GetBestPath(Lattice *fst_out,
   return false;
 }
 
-void CudaLatticeDecoder::DecodeChunk(CuMatrix<BaseFloat> *post_chunk) {
-  int chunk_used_len=0;
-  while (chunk_used_len < post_chunk->NumRows()) {
-    // one frame from the chunk
-    cuda_decodable_ = CuMatrixScaledMapper(id2pdf_d_,
-                      config_.acoustic_scale, post_chunk->Row(chunk_used_len).Data()); 
-
-    PreProcessTokens(); 
-    ProcessTokens(); 
-
-    chunk_used_len++;
-    // if utt is too long, discard the tail
-    if (num_frames_decoded_ + 1 >= config_.prune_interval) break;
-  }
-}
-void CudaLatticeDecoder::Decode(MatrixChunker *decodable) {
-  while ( !decodable->IsLastFrame(num_frames_decoded_ - 1)) {
-    bool last_frame = decodable->IsLastFrame(num_frames_decoded_ - 0);
-    if (num_frames_decoded_ + 1 >= config_.prune_interval) {
-      last_frame = true;
-      KALDI_WARN << "the utterance is too long, cutoff after frames: " 
-                 << num_frames_decoded_ + 1;
-    }
-
-    PUSH_RANGE("ComputeLogLikelihoods", 3)
-    int chunk_len;
-    CuMatrix<BaseFloat> *post_chunk;
-    decodable->LogLikelihoodChunk(num_frames_decoded_, &post_chunk, stream_ll);
-    cudaEventRecord(event_ll, stream_ll);
-    DecodeChunk(post_chunk);
-    POP_RANGE
-
-    if (last_frame) {
-      KALDI_VLOG(5) << "last frame: " << NumFramesDecoded();
-      break;
-    }
-  }
-}
 
 } // end namespace kaldi.

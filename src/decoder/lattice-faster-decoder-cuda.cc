@@ -162,7 +162,7 @@ void LatticeFasterDecoderCuda::FinalProcessLattice(cuTokenVector* last_toks,
   if (proc_frame < 0) return;
   PUSH_RANGE("FinalProcessLattice", 3)
 
-  assert(proc_frame <= config_.prune_interval);
+  assert(proc_frame <= config_.max_len);
   active_toks_.resize(proc_frame + 1);
   assert(proc_frame < active_toks_.size());
 

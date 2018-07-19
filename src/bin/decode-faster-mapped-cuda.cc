@@ -1,7 +1,6 @@
 // bin/decode-faster-mapped-cuda.cc
 
-// Copyright 2009-2011  Microsoft Corporation
-//                2013  Johns Hopkins University (author: Daniel Povey)
+// Copyright      2018  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -25,7 +24,7 @@
 #include "tree/context-dep.h"
 #include "hmm/transition-model.h"
 #include "fstext/fstext-lib.h"
-#include "decoder/faster-decoder-cuda.h"
+#include "decoder/cuda-decoder.h"
 #include "decoder/decodable-matrix.h"
 #include "nnet3/nnet-utils.h"
 #include "base/timer.h"
@@ -41,17 +40,18 @@ int main(int argc, char *argv[]) {
     using fst::StdArc;
 
     const char *usage =
-        "Decode, reading log-likelihoods as matrices\n"
-        " (model is needed only for the integer mappings in its transition-model)\n"
-        "Usage:   decode-faster-mapped-cuda [options] <model-in> <fst-in> "
-        "<loglikes-rspecifier> <words-wspecifier> [<alignments-wspecifier>]\n";
+      "Decode, reading log-likelihoods as matrices\n"
+      " (model is needed only for the integer mappings in its transition-model)\n"
+      "Usage:   decode-faster-mapped-cuda [options] <model-in> <fst-in> "
+      "<loglikes-rspecifier> <words-wspecifier> [<alignments-wspecifier>]\n";
     ParseOptions po(usage);
     CudaDecoderConfig decoder_opts;
     bool allow_partial = true;
     std::string word_syms_filename;
-    
-    decoder_opts.Register(&po);  
-    po.Register("allow-partial", &allow_partial, "Produce output even when final state was not reached");
+
+    decoder_opts.Register(&po);
+    po.Register("allow-partial", &allow_partial,
+                "Produce output even when final state was not reached");
     po.Register("word-symbol-table", &word_syms_filename,
                 "Symbol table for words [for debug output]");
 
@@ -63,10 +63,10 @@ int main(int argc, char *argv[]) {
     }
 
     std::string model_in_filename = po.GetArg(1),
-        fst_in_filename = po.GetArg(2),
-        loglikes_rspecifier = po.GetArg(3),
-        words_wspecifier = po.GetArg(4),
-        alignment_wspecifier = po.GetOptArg(5);
+                fst_in_filename = po.GetArg(2),
+                loglikes_rspecifier = po.GetArg(3),
+                words_wspecifier = po.GetArg(4),
+                alignment_wspecifier = po.GetOptArg(5);
 
     TransitionModel trans_model;
     ReadKaldiObject(model_in_filename, &trans_model);
@@ -79,7 +79,7 @@ int main(int argc, char *argv[]) {
     if (word_syms_filename != "") {
       word_syms = fst::SymbolTable::ReadText(word_syms_filename);
       if (!word_syms)
-        KALDI_ERR << "Could not read symbol table from file "<<word_syms_filename;
+        KALDI_ERR << "Could not read symbol table from file " << word_syms_filename;
     }
 
     CuDevice::Instantiate().SelectGpuId("yes");
@@ -99,7 +99,7 @@ int main(int argc, char *argv[]) {
     BaseFloat tot_like = 0.0;
     kaldi::int64 frame_count = 0;
     int num_success = 0, num_fail = 0;
-    FasterDecoderCuda decoder(decoder_opts, trans_model, cuda_fst);
+    CudaDecoder decoder(cuda_fst, trans_model, decoder_opts);
 
     Timer timer;
 
@@ -139,12 +139,12 @@ int main(int argc, char *argv[]) {
           for (size_t i = 0; i < words.size(); i++) {
             std::string s = word_syms->Find(words[i]);
             if (s == "")
-              KALDI_ERR << "Word-id " << words[i] <<" not in symbol table.";
+              KALDI_ERR << "Word-id " << words[i] << " not in symbol table.";
             std::cerr << s << ' ';
           }
           std::cerr << '\n';
         }
-        BaseFloat like = -weight.Value1() -weight.Value2();
+        BaseFloat like = -weight.Value1() - weight.Value2();
         tot_like += like;
         KALDI_LOG << "Log-like per frame for utterance " << key << " is "
                   << (like / loglikes.NumRows()) << " over "
@@ -158,12 +158,12 @@ int main(int argc, char *argv[]) {
     }
 
     double elapsed = timer.Elapsed();
-    KALDI_LOG << "Time taken [excluding initialization] "<< elapsed
+    KALDI_LOG << "Time taken [excluding initialization] " << elapsed
               << "s: real-time factor assuming 100 frames/sec is "
-              << (elapsed*100.0/frame_count);
+              << (elapsed * 100.0 / frame_count);
     KALDI_LOG << "Done " << num_success << " utterances, failed for "
               << num_fail;
-    KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like/frame_count)
+    KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like / frame_count)
               << " over " << frame_count << " frames.";
 
     delete word_syms;
@@ -176,7 +176,7 @@ int main(int argc, char *argv[]) {
 
     if (num_success != 0) return 0;
     else return 1;
-  } catch(const std::exception &e) {
+  } catch (const std::exception &e) {
     std::cerr << e.what();
     return -1;
   }

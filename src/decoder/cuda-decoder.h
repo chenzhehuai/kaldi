@@ -1,8 +1,6 @@
-// decoder/simple-decoder.h
+// decoder/cuda-decoder.h
 
-// Copyright 2009-2013  Microsoft Corporation;  Lukas Burget;
-//                      Saarland University (author: Arnab Ghoshal);
-//                      Johns Hopkins University (author: Daniel Povey)
+// Copyright      2018  Zhehuai Chen; Hugo Braun; Justin Luitjens
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -19,67 +17,64 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef KALDI_DECODER_SIMPLE_DECODER_H_
-#define KALDI_DECODER_SIMPLE_DECODER_H_
+#ifndef KALDI_DECODER_CUDA_DECODER_H_
+#define KALDI_DECODER_CUDA_DECODER_H_
 
-#include "util/stl-utils.h"
 #include "fst/fstlib.h"
 #include "lat/kaldi-lattice.h"
 #include "itf/decodable-itf.h"
-#include "omp.h"
-
 #include "cuda-decoder-utils.h"
+
 namespace kaldi {
-  
-/** 
- * Simple Cuda Decoder
- */
+
 class CudaDecoder;
 
 struct CudaDecoderConfig {
   BaseFloat beam;
   double gpu_fraction;
-  uint32_t max_tokens_per_frame;
-  uint32_t max_tokens;
+  uint32 max_tokens;
   int32 max_active;
+  uint32 max_tokens_per_frame;
+  int32 max_len;
   BaseFloat acoustic_scale;
   int32 chunk_len;
-  
+
   CudaDecoderConfig(): beam(16.0),
-                       gpu_fraction(1.0/8.0),
-                       max_tokens(300000000),
-                       max_active(100000),
-                       acoustic_scale(0.1), chunk_len(1) {}
-  
+    gpu_fraction(1.0 / 8.0),
+    max_tokens(300000000),
+    max_active(100000),
+    max_tokens_per_frame(1000000),
+    max_len(50000),
+    acoustic_scale(0.1), chunk_len(1) {}
+
   void Register(OptionsItf *opts) {
     opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
-    opts->Register("gpu-fraction", &gpu_fraction, "Percent of GPU to use for this decoder.  "
-                                                  "A single decoding cannot saturate the device.  "
-                                                  "Use multiple decoders in parallel for the best performance.");
-    opts->Register("max-tokens-allocated", &max_tokens, "Total number of tokens allocated.  This controls how many tokens are allocated to the entire decoding process."
-                                                        "  If actual usaged exceeds this the results are undefined.");
-    opts->Register("max-active", &max_active, "Decoder max active states.  Larger->slower; "
-                   "more accurate. It's a faster but approximate version for GPU.");    
+    opts->Register("gpu-fraction", &gpu_fraction,
+                   "Percent of GPU to use for this decoder.  "
+                   "A single decoding cannot saturate the device.  "
+                   "Use multiple decoders in parallel for the best performance.");
+    opts->Register("max-tokens-allocated", &max_tokens,
+                   "Total number of tokens allocated.  This controls how many tokens "
+                   "are allocated to the entire decoding process."
+                   "  If actual usaged exceeds this the results are undefined.");
+    opts->Register("max-active", &max_active,
+                   "Decoder max active states.  Larger->slower; "
+                   "more accurate. It's a faster but approximate version for GPU.");
+    opts->Register("max-tokens-per-frame", &max_tokens_per_frame, 
+      "Maximum tokens used per frame.  If decoding exceeds this resutls are undefined.");
+    opts->Register("max-len", &max_len, "Decoder max len. ");
     opts->Register("acoustic-scale", &acoustic_scale,
                    "Scaling factor for acoustic likelihoods");
     opts->Register("chunk-len", &chunk_len, "chunk length for loading posteriors.");
 
   }
   void Check() const {
-    KALDI_ASSERT(beam > 0.0 && gpu_fraction>0 && gpu_fraction <= 1 && max_tokens_per_frame > 0 && max_tokens>0);
+    KALDI_ASSERT(beam > 0.0 && gpu_fraction > 0 && gpu_fraction <= 1
+                 && max_tokens_per_frame > 0 && max_tokens > 0 && chunk_len > 0);
   }
 };
 
-// is mostly read in coalesced accesses
-struct InfoToken { // we needed to take StateId out
-    BaseFloat cost; // accumulated total cost up to this point.
-    int prev_token;
-    int arc_idx;
-};
-
-
 class CudaDecoder {
-
  public:
   typedef fst::StdArc StdArc;
   typedef StdArc::Weight StdWeight;
@@ -87,212 +82,137 @@ class CudaDecoder {
   typedef StdArc::StateId StateId;
   typedef float CostType;
 
-  CudaDecoder(const CudaFst &fst, const TransitionModel &trans_model, const CudaDecoderConfig &config);  
+  struct Token {
+    // to mostly read in coalesced accesses, we needed to take StateId out
+    BaseFloat cost; // accumulated total cost up to this point.
+    int prev_token;
+    int arc_idx;
+  };
+
+  struct processTokens_params {
+    CuMatrixScaledMapper cuda_decodable;
+    CudaHistogram histogram_prev_toks;
+
+    StateId *d_q;
+    Token *d_q_info;
+
+    int *tok_from_d_;
+    int *tok_to_d_;
+    int *tok_end_d_;
+    int *tot_narcs_d_;
+    int *tot_narcs_h_;
+    int *arc_offset_pertok_d_;
+    int *tot_ntok_h_; // to be set at the end
+    int *cur_tok_from_d_;
+    uint *arc_offset_d;
+    int *narcs_scan_d_;
+    int* narcs_blksum_scan_d_;
+    uint64 *d_lookup;
+
+    BaseFloat *cutoff_d_;
+    BaseFloat *cutoff_prev;
+
+    int *arc_ilabels;
+    BaseFloat *arc_weights;
+    StateId *arc_nextstates;
+
+    int max_active;
+    BaseFloat beam;
+    bool is_emitting;
+    int frame;
+    int *active_tok_cnt_d;
+
+    int *n_CTA_d_;
+    int *barrier;
+  };
+
+  CudaDecoder(const CudaFst &fst, const TransitionModel &trans_model,
+              const CudaDecoderConfig &config);
   ~CudaDecoder();
 
-  inline size_t getCudaMallocBytes() const { return bytes_cudaMalloc; } 
-  inline size_t getCudaMallocManagedBytes() const { return bytes_cudaMallocManaged;  }
+  void InitDecoding();
+  void Decode(MatrixChunker *decodable); // Decode an utterance of speech
+  void DecodeChunk(CuMatrix<BaseFloat> *post_chunk); // Decode a chunk of speech
 
-  /// Decode this utterance.
-  /// Returns true if any tokens reached the end of the file (regardless of
-  /// whether they are in a final state); query ReachedFinal() after Decode()
-  /// to see whether we reached a final state.
-  void Decode(MatrixChunker *decodable);
-  void DecodeChunk(CuMatrix<BaseFloat> *post_chunk);
-
+  int32 NumFramesDecoded() const { return num_frames_decoded_; }
   bool ReachedFinal() const;
-
-  // GetBestPath gets the decoding traceback. If "use_final_probs" is true
-  // AND we reached a final state, it limits itself to final states;
-  // otherwise it gets the most likely token not taking into account final-probs.
-  // fst_out will be empty (Start() == kNoStateId) if nothing was available due to
-  // search error.
-  // If Decode() returned true, it is safe to assume GetBestPath will return true.
-  // It returns true if the output lattice was nonempty (i.e. had states in it);
-  // using the return value is deprecated.
   bool GetBestPath(Lattice *fst_out, bool use_final_probs = true) const;
-  
-  /// *** The next functions are from the "new interface". ***
-  
-  /// FinalRelativeCost() serves the same function as ReachedFinal(), but gives
-  /// more information.  It returns the difference between the best (final-cost plus
-  /// cost) of any token on the final frame, and the best cost of any token
-  /// on the final frame.  If it is infinity it means no final-states were present
-  /// on the final frame.  It will usually be nonnegative.
   BaseFloat FinalRelativeCost() const;
 
-  /// InitDecoding initializes the decoding, and should only be used if you
-  /// intend to call AdvanceDecoding().  If you call Decode(), you don't need
-  /// to call this.  You can call InitDecoding if you have already decoded an
-  /// utterance and want to start with a new utterance. 
-  void InitDecoding();  
-
-
-  struct ExpandArcParams {
-      StateId *d_q; 
-      InfoToken *d_q_info; 
-
-      int *d_q_token_from; 
-      int *d_q_token_to;
-      int *d_q_token_end;
-
-      int *d_q_token_from_narcs; 
-      int *h_q_token_from_narcs;
-
-      int *d_degrees_scan; 
-
-      int *d_q_arc_offset; 
-      int *arc_ilabels; 
-
-      BaseFloat *arc_weights; 
-      StateId *arc_nextstates; 
-      BaseFloat *d_cutoff;
-      BaseFloat *cutoff_prev;
-      int max_active;
-      BaseFloat beam; 
-
-      uint64 *d_lookup;
-        
-      bool is_emitting;
-
-      int *d_n_CTA_done;
-
-      int *h_q_token_from_size; // to be set at the end
-
-      int *d_curr_token;
-      int *d_dbg_tok_num;
-      int *barrier;
-      int frame;
-      uint *d_arc_offsets;
-      int* d_block_sums_scan;
-      CuMatrixScaledMapper cuda_decodable;
-      CudaHistogram histogram_prev_toks;
-};
-
-    int debug_max_narcs;
-
-  void ExpandArcs(int nthreads, const ExpandArcParams &params);
-
-  void DeviceScan(int *d_degrees, int h_prevTok_size, int *d_degrees_scan);
-
-  void ComputeDegrees(const ExpandArcParams &params);
-  void FinalizeDegreesScan();
-
-  /// This will decode until there are no more frames ready in the decodable
-  /// object, but if max_num_frames is >= 0 it will decode no more than
-  /// that many frames.  If it returns false, then no tokens are alive,
-  /// which is a kind of error state.
-  
-  /// Returns the number of frames already decoded.  
-  int32 NumFramesDecoded() const { return num_frames_decoded_; }
-
-
-  StateId *d_allToken; 
-  InfoToken *d_allTokenInfo;
-
-  // Used to detect last CTA alive in some kernels
-  int *d_n_CTA_done;
-
-  // At each ProcessToken, we will propagate the queue [from, to[ to [to, end[
-  int *d_q_token_from;
-  int *d_q_token_to;
-  int *d_q_token_end; 
-
-  // Save the offset of currToken of the current frame
-  // Used for ProcessEmitting of following frame
-  int *d_curr_token;
-
-  // Total number of arcs contained in the [from,to[ queue
-  // ie total # of arcs from tok.next_state, where tok is in [from,to[
-  // (actually one "valid arcs" are counted, cf ComputeDegrees)
-  int *d_q_token_from_narcs, *h_q_token_from_narcs; // TODO
- 
-  // Host Pinned memory
-  // size = to - from, total # of tokens in [from,to[
-  int *h_q_token_from_size;
-
-  // Host Pinned memory
-  // Total number of arcs contained in the [from,to[ queue
-  // ie total # of arcs from tok.next_state, where tok is in [from,to[
-  // (actually one "valid arcs" are counted, cf ComputeDegrees)
-
- 
-  // Scan of the outgoing arc degrees of tokens in [from,to[
-  int *d_degrees_scan;
-
-  // # arcs in the corresponding CTA block
-  // Cf Compute degrees
-  int *d_block_sums_scan;
-
-  // Cf Compute degrees
-  int *d_q_arc_offset;
-
-  int *h_reached_final;
-
-  // TODO remove the d_reversed_path, use only host
-  StateId *d_reversed_path, *h_reversed_path;
-
-  int *d_path_size;
-
-  // Lookup table of all the costs
-  // d_state_cost[state] -> best cost for that state
-  // Resetted between frames
-  // Costs is stored as an ordered int representing a float
-  uint64 *d_state_cost;
-
-  // Current cutoff for current frame
-  BaseFloat *d_cutoff;
-
-  int max_tokens;
-
-
-  // Streams, overlap likelihoods copies with compute
-  cudaStream_t compute_st, stream_ll;
-  cudaEvent_t event_ll;
-
-  //pre-computes log likelihoods for the current frame
- 
-  // ProcessEmitting decodes the frame num_frames_decoded_ of the
-  // decodable object, then increments num_frames_decoded_.
-  //void ProcessEmitting(DecodableInterface *decodable);
-
-  // Descriptions in .cu file
-
+ private:
   void InitLookup();
-  void ResetLookup(bool reset = true);
-  void NonEmittingLongTail(unsigned int *d_arc_offsets, const ExpandArcParams &params);
 
-  void GetBestCost(BaseFloat *min, int *arg, bool isfinal) const;
+  bool ProcessToken(bool is_emitting);
   void ProcessEmitting();
   void ProcessNonemitting();
 
- 
-  bool ProcessToken(unsigned int *d_arc_offsets, bool is_emitting);
+  // functions called by ProcessToken
+  void InitParams(processTokens_params* params, bool is_emitting);
+  // Compute degrees, reduce by key, apply cutoff
+  // Compute first part of the prefix sums of the degrees
+  // At the end of that step, the kernel
+  // set the value of tot_narcs_h_
+  // (the number of arcs in the current queue processed)
+  // The detailed description can be referred to GPU kernel definition
+  void ContractAndPreprocess(const processTokens_params &params);
+  // The description can be referred to GPU kernel definition
+  void ExpandArcs(int nthreads, const processTokens_params &params);
+  // a combination of above two processes with a single kernel
+  void NonEmittingLongTail(const processTokens_params &params);
 
-  
+  void GetBestCost(BaseFloat *min, int *arg, bool isfinal) const;
+
+  const CudaDecoderConfig &config_;
   const CudaFst fst_;
+  // for tid to pdf mapping
+  const TransitionModel &trans_model_;
+  int32* id2pdf_d_;
+  CuMatrixScaledMapper cuda_decodable_; // keep loglikelihoods
+  CudaHistogram histogram_prev_toks_;
 
-  BaseFloat beam_;
-
+  // cutoff of current frame
+  BaseFloat *cutoff_d_;
+  // cutoff of prev frame
+  BaseFloat *cutoff_prev_d_;
   // Keep track of the number of frames decoded in the current file.
   int32 num_frames_decoded_;
+  int *active_tok_cnt_d_;
+  // Lookup table of each WFST state, it is a pack of [score, token_idx]
+  uint64 *state_pack_d_;
+  // store info of tokens
+  StateId *token_stateid_d_;
+  Token *token_stateid_d_Info;
 
-  BaseFloat *cutoff;
+  // used in Compute degrees
+  // Total number of arcs from tok.next_state
+  int *tot_narcs_d_, *tot_narcs_h_;
+  // number of tokens in the queue
+  int *tot_ntok_h_;
+  // Scan of the outgoing arc degrees of tokens
+  int *narcs_scan_d_;
+  // number of arcs in the corresponding CTA block
+  int *narcs_blksum_scan_d_;
+  // the starting arc_id of out-going arcs from each token
+  int *arc_offset_pertok_d_;
 
-  int *d_dbg_tok_num;
-  int *d_barrier;
+  // Save the offset of currToken of the current frame
+  int *cur_tok_from_d_; // Used for ProcessEmitting of following frame
+  // At each ProcessToken, we will propagate the token queue
+  int *tok_from_d_;
+  int *tok_to_d_;
+  int *tok_end_d_;
 
-  // chunk decoding
-  CuMatrixScaledMapper cuda_decodable_;
+  // backtrack the path
+  int *reached_final_h_;
+  StateId *reversed_path_d_, *reversed_path_h_;
+  int *path_size_d_;
 
-  const TransitionModel &trans_model_;  // for tid to pdf mapping
-  int32* id2pdf_d_;
-  const CudaDecoderConfig &config_;
-  CudaHistogram histogram_prev_toks_;
-  BaseFloat *cutoff_prev_;
-
-
-  size_t bytes_cudaMalloc, bytes_cudaMallocManaged;
+  // Used to detect last CTA alive in some kernels
+  int *n_CTA_d_;
+  int *barrier_d_; // for grid sync
+  // Streams, overlap loglikelihoods copies with compute
+  cudaStream_t stream_comp, stream_ll;
+  cudaEvent_t event_ll; // finish loglikelihoods copy
 
   KALDI_DISALLOW_COPY_AND_ASSIGN(CudaDecoder);
 };
