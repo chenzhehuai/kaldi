@@ -251,8 +251,8 @@ void DecodeUtteranceLatticeFasterClassCuda::operator () () {
   examples_mutex_->Lock();
   // Select the GPU
   #if HAVE_CUDA == 1
-  CuDevice::Instantiate().SelectGpuId("yes");
-  CuDevice::Instantiate().AllowMultithreading();
+  // CuDevice::Instantiate().SelectGpuId("yes");
+  // CuDevice::Instantiate().AllowMultithreading();
   #endif
   LatticeFasterDecoderCuda decoder(decode_fst_cuda_, trans_model_, config_);
   examples_mutex_->Unlock(); // to make it stable
