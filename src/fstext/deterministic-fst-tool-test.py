@@ -9,19 +9,21 @@ from ctypes import *
 #fstcompile /tmp/test.fst.txt | fstarcsort -  /tmp/test.fst
 
 fst_lib = CDLL('libkaldi-fstext.so')
+fstname='tmp.fst'
+max_tok=10
+cnt=c_int(0)
 fst_lib.allocate.argtypes=[POINTER(c_char)]
-fstname='/tmp/test.fst'
 STR=(c_char*len(fstname))(*bytes(fstname, "utf-8"))
 ret=fst_lib.allocate(STR)
-lm_state_next=c_int(0)
-score=c_float(0)
+lm_state_next=(c_int*max_tok)()
+score=(c_float*max_tok)()
 print(ret)
-ret=fst_lib.get_next(fst_lib.init(), 2, byref(lm_state_next), byref(score))
-print (ret,lm_state_next, score)
-ret=fst_lib.get_next(lm_state_next, 4, byref(lm_state_next), byref(score))
-print (ret,lm_state_next, score)
-ret=fst_lib.get_next(lm_state_next, 3, byref(lm_state_next), byref(score))
-print (ret,lm_state_next, score)
-ret=fst_lib.get_next(lm_state_next, 9, byref(lm_state_next), byref(score))
-print (ret,lm_state_next, score)
+ret=fst_lib.get_next(fst_lib.init(), 2, lm_state_next, score, byref(cnt))
+print (ret, ",".join([str(lm_state_next[i]) for i in range(cnt.value)]), ",".join([str(score[i]) for i in range(cnt.value)]), cnt)
+ret=fst_lib.get_next(lm_state_next[0], 3, lm_state_next, score, byref(cnt))
+print (ret, ",".join([str(lm_state_next[i]) for i in range(cnt.value)]), ",".join([str(score[i]) for i in range(cnt.value)]), cnt)
+ret=fst_lib.get_next(lm_state_next[0], 4, lm_state_next, score, byref(cnt))
+print (ret, ",".join([str(lm_state_next[i]) for i in range(cnt.value)]), ",".join([str(score[i]) for i in range(cnt.value)]), cnt)
+ret=fst_lib.get_next(lm_state_next[0], 9, lm_state_next, score, byref(cnt))
+print (ret, ",".join([str(lm_state_next[i]) for i in range(cnt.value)]), ",".join([str(score[i]) for i in range(cnt.value)]), cnt)
 fst_lib.free()
