@@ -37,7 +37,7 @@ class BackoffOnDemandFst {
     }
     return true;
   } else {
-    if (s == Start()) return false;
+    // if (s == Start()) return false;
     bool f = false;
     ArcIterator<Fst<Arc> > aiter(fst_, s); // SortedMatcher cannot match ilabel == 0
     for (; !aiter.Done(); aiter.Next()) { // all <eps>
