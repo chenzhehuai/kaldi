@@ -63,19 +63,24 @@ class Lattice2BiglmFasterDecoder {
     KALDI_ASSERT(fst.Start() != fst::kNoStateId &&
                  lm_diff_fst->Start() != fst::kNoStateId);
     toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
+    for (int i = 0; i < 2; i++) toks_shadowing_[i].SetSize(1000);  // just so on the first frame we do something reasonable.
   }
   void SetOptions(const Lattice2BiglmFasterDecoderConfig &config) { config_ = config; } 
   Lattice2BiglmFasterDecoderConfig GetOptions() { return config_; } 
   ~Lattice2BiglmFasterDecoder() {
     DeleteElems(toks_.Clear());    
+    for (int i = 0; i < 2; i++) toks_shadowing_[i].Clear();
     ClearActiveTokens();
   }
 
+
+  inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
   // Returns true if any kind of traceback is available (not necessarily from
   // a final state).
   bool Decode(DecodableInterface *decodable) {
     // clean up from last time:
     DeleteElems(toks_.Clear());
+    for (int i = 0; i < 2; i++) toks_shadowing_[i].Clear();
     ClearActiveTokens();
     warned_ = false;
     final_active_ = false;
@@ -83,9 +88,10 @@ class Lattice2BiglmFasterDecoder {
     num_toks_ = 0;
     PairId start_pair = ConstructPair(fst_.Start(), lm_diff_fst_->Start());
     active_toks_.resize(1);
-    Token *start_tok = new Token(0.0, 0.0, NULL, NULL);
+    Token *start_tok = new Token(0.0, 0.0, NULL, NULL, lm_diff_fst_->Start());
     active_toks_[0].toks = start_tok;
     toks_.Insert(start_pair, start_tok);
+    toks_shadowing_[NumFramesDecoded()%2].Insert(fst_->Start(), start_tok);
     num_toks_++;
     ProcessNonemitting(0);
     
@@ -103,12 +109,47 @@ class Lattice2BiglmFasterDecoder {
         PruneActiveTokensFinal(frame);
       else if (frame % config_.prune_interval == 0)
         PruneActiveTokens(frame, config_.lattice_beam * 0.1); // use larger delta.        
+
+      // TODO
+      ExpandShadowTokens(frame-config_.prune_interval);
     }
+    for (int32 frame = NumFramesDecoded()-config_.prune_interval; // final expand
+      NumFramesDecoded()+1; frame++) ExpandShadowTokens(frame);
     // Returns true if we have any kind of traceback available (not necessarily
     // to the end state; query ReachedFinal() for that).
     return !final_costs_.empty();
   }
 
+  void ExpandShadowTokens(int32 frame) {
+    for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
+      if (!tok->shadowing_tok) continue; // shadowing token
+      Token* shadowing_tok = tok->shadowing_tok;
+      for (link = shadowing_tok->links; link != NULL; ) {
+        // See if we need to excise this link...
+        Token *next_tok = link->next_tok;
+        // olabel is of no use
+        Arc arc(link->ilabel, link->olabel, link->graph_cost_ori, 0); 
+        PropagateLm(lm_state, &arc); // may affect "arc.weight".
+        // We don't need the return value (the new LM state).
+
+        Token *&toks = link->ilabel ? active_toks_[frame+1].toks : active_toks_[frame].toks;
+        assert(toks);
+        // store a new token in the current / next frame
+        Token *new_tok = new Token(tot_cost, extra_cost, NULL, toks, PairToLmState(state_pair));
+        // a signal to expand them appropriately when we do backfill on the next frame.
+        new_tok->shadowing_tok = next_tok; 
+        toks = new_tok;
+        num_toks_++;
+        // create lattice arc
+        BaseFloat ac_cost = link->acoustic_cost,
+                  graph_cost = arc.weight.Value(),
+                  cur_cost = tok->tot_cost,
+                  tot_cost = cur_cost + ac_cost + graph_cost;
+        tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
+                                     graph_cost, ac_cost, tok->links, link->graph_cost_ori);
+      }
+      tok->shadowing_tok = NULL; // already expand
+  }
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
   bool ReachedFinal() const { return final_active_; }
@@ -247,12 +288,13 @@ class Lattice2BiglmFasterDecoder {
     BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
     ForwardLink *next; // next in singly-linked list of forward links from a
                        // token.
+    BaseFloat graph_cost_ori;
     inline ForwardLink(Token *next_tok, Label ilabel, Label olabel,
                        BaseFloat graph_cost, BaseFloat acoustic_cost, 
-                       ForwardLink *next):
+                       ForwardLink *next, BaseFloat graph_cost_ori):
         next_tok(next_tok), ilabel(ilabel), olabel(olabel),
         graph_cost(graph_cost), acoustic_cost(acoustic_cost), 
-        next(next) { }
+        next(next), graph_cost_ori(graph_cost_ori) { }
   };  
   
   // Token is what's resident in a particular state at a particular time.
@@ -271,10 +313,12 @@ class Lattice2BiglmFasterDecoder {
     ForwardLink *links; // Head of singly linked list of ForwardLinks
     
     Token *next; // Next in list of tokens for this frame.
+    Token *shadowing_tok;
+    StateId lm_state; // for expanding shadowed states
     
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
-                 Token *next): tot_cost(tot_cost), extra_cost(extra_cost),
-                 links(links), next(next) { }
+                 Token *next, StateId lm_state): tot_cost(tot_cost), extra_cost(extra_cost),
+                 links(links), next(next), shadowing_state(NULL), lm_state(lm_state) { }
     inline void DeleteForwardLinks() {
       ForwardLink *l = links, *m; 
       while (l != NULL) {
@@ -297,7 +341,8 @@ class Lattice2BiglmFasterDecoder {
   };
 
   typedef HashList<PairId, Token*>::Elem Elem;
-  
+  typedef HashList<StateId, Token*>::Elem Elem_Shadow;
+
   void PossiblyResizeHash(size_t num_toks) {
     size_t new_sz = static_cast<size_t>(static_cast<BaseFloat>(num_toks)
                                         * config_.hash_ratio);
@@ -323,7 +368,7 @@ class Lattice2BiglmFasterDecoder {
       // tokens on the currently final frame have zero extra_cost
       // as any of them could end up
       // on the winning path.
-      Token *new_tok = new Token (tot_cost, extra_cost, NULL, toks);
+      Token *new_tok = new Token(tot_cost, extra_cost, NULL, toks, PairToLmState(state_pair));
       // NULL: no forward links yet
       toks = new_tok;
       num_toks_++;
@@ -539,22 +584,42 @@ class Lattice2BiglmFasterDecoder {
     Token *&toks = active_toks_[frame].toks;
     if (toks == NULL)
       KALDI_WARN << "No tokens alive [doing pruning]\n";
-    Token *tok, *next_tok, *prev_tok = NULL;
-    for (tok = toks; tok != NULL; tok = next_tok) {
+    Token *tok, *next_tok, *prev_tok;
+    // proc shadowed token at first as it needs info from shadowing token
+    for (tok = toks, prev_tok = NULL; tok != NULL; tok = next_tok) {
       next_tok = tok->next;
-      if (tok->extra_cost == std::numeric_limits<BaseFloat>::infinity()) {
-        // token is unreachable from end of graph; (no forward links survived)
-        // excise tok from list and delete tok.
-        if (prev_tok != NULL) prev_tok->next = tok->next;
-        else toks = tok->next;
-        delete tok;
-        num_toks_--;
-      } else { // fetch next Token
-        prev_tok = tok;
+
+      if (tok->shadowing_tok) {// shadowed token
+        if (tok->shadowing_tok->extra_cost == std::numeric_limits<BaseFloat>::infinity()) {
+          // token is unreachable from end of graph; (no forward links survived)
+          // excise tok from list and delete tok.
+          if (prev_tok != NULL) prev_tok->next = tok->next;
+          else toks = tok->next;
+          delete tok;
+          num_toks_--;
+        } else { // fetch next Token
+          prev_tok = tok;
+        }
+      }
+    }
+    for (tok = toks, prev_tok = NULL; tok != NULL; tok = next_tok) {
+      next_tok = tok->next;
+
+      if (!tok->shadowing_tok) { // shadowing token
+        if (tok->extra_cost == std::numeric_limits<BaseFloat>::infinity()) { 
+          // token is unreachable from end of graph; (no forward links survived)
+          // excise tok from list and delete tok.
+          if (prev_tok != NULL) prev_tok->next = tok->next;
+          else toks = tok->next;
+          delete tok;
+          num_toks_--;
+        } else { // fetch next Token
+          prev_tok = tok;
+        }
       }
     }
   }
-  
+ 
   // Go backwards through still-alive tokens, pruning them.  note: cur_frame is
   // where hash toks_ are (so we do not want to mess with it because these tokens
   // don't yet have forward pointers), but we do all previous frames, unless we
@@ -688,13 +753,18 @@ class Lattice2BiglmFasterDecoder {
   
   void ProcessEmitting(DecodableInterface *decodable, int32 frame) {
     // Processes emitting arcs for one frame.  Propagates from prev_toks_ to cur_toks_.
+    HashList<StateId, Token*> *toks_shadowing_check=toks_shadowing_+(frame-1)%2;
+    HashList<StateId, Token*> *toks_shadowing_mod=toks_shadowing_+frame%2;
+    toks_shadowing_mod.Clear();
+
     Elem *last_toks = toks_.Clear(); // swapping prev_toks_ / cur_toks_
     Elem *best_elem = NULL;
     BaseFloat adaptive_beam;
     size_t tok_cnt;
     BaseFloat cur_cutoff = GetCutoff(last_toks, &tok_cnt, &adaptive_beam, &best_elem);
     PossiblyResizeHash(tok_cnt);  // This makes sure the hash is always big enough.    
-    KALDI_VLOG(6) << "Adaptive beam on frame " << frame << "\t" << active_toks_.size() << " is "
+    // TODO PossiblyResizeHash for toks_shadowing_
+    KALDI_VLOG(6) << "Adaptive beam on frame " << frame << "\t" << NumFramesDecoded() << " is "
                 << adaptive_beam << "\t" << cur_cutoff;
 
   
@@ -734,29 +804,43 @@ class Lattice2BiglmFasterDecoder {
           lm_state = PairToLmState(state_pair);
       Token *tok = e->val;
       if (tok->tot_cost <=  cur_cutoff) {
-        for (fst::ArcIterator<fst::Fst<Arc> > aiter(fst_, state);
-             !aiter.Done();
-             aiter.Next()) {
-          const Arc &arc_ref = aiter.Value();
-          if (arc_ref.ilabel != 0) {  // propagate..
-            Arc arc(arc_ref);
-            StateId next_lm_state = PropagateLm(lm_state, &arc);
-            BaseFloat ac_cost = -decodable->LogLikelihood(frame-1, arc.ilabel),
-                graph_cost = arc.weight.Value(),
-                cur_cost = tok->tot_cost,
-                tot_cost = cur_cost + ac_cost + graph_cost;
-            if (tot_cost > next_cutoff) continue;
-            else if (tot_cost + config_.beam < next_cutoff)
-              next_cutoff = tot_cost + config_.beam; // prune by best current token
-            PairId next_pair = ConstructPair(arc.nextstate, next_lm_state);
-            Token *next_tok = FindOrAddToken(next_pair, frame, tot_cost, true, NULL);
-            // true: emitting, NULL: no change indicator needed
-          
-            // Add ForwardLink from tok to next_tok (put on head of list tok->links)
-            tok->links = new ForwardLink(next_tok, arc.ilabel, arc.olabel, 
-                                         graph_cost, ac_cost, tok->links);
-          }
-        } // for all arcs
+        Elem_Shadow *elem = toks_shadowing_check.Find(state);
+        assert(elem);
+        if (elem->val == tok) { // shadowing
+          for (fst::ArcIterator<fst::Fst<Arc> > aiter(fst_, state);
+               !aiter.Done();
+               aiter.Next()) {
+            const Arc &arc_ref = aiter.Value();
+            if (arc_ref.ilabel != 0) {  // propagate..
+              Arc arc(arc_ref);
+              BaseFloat graph_cost_ori = arc.weight.Value();
+              StateId next_lm_state = PropagateLm(lm_state, &arc);
+              BaseFloat ac_cost = -decodable->LogLikelihood(frame-1, arc.ilabel),
+                  graph_cost = arc.weight.Value(),
+                  cur_cost = tok->tot_cost,
+                  tot_cost = cur_cost + ac_cost + graph_cost;
+              if (tot_cost > next_cutoff) continue;
+              else if (tot_cost + config_.beam < next_cutoff)
+                next_cutoff = tot_cost + config_.beam; // prune by best current token
+              PairId next_pair = ConstructPair(arc.nextstate, next_lm_state);
+              Token *next_tok = FindOrAddToken(next_pair, frame, tot_cost, true, NULL);
+              // true: emitting, NULL: no change indicator needed
+              Elem_Shadow *elem = toks_shadowing_mod.Find(arc.nextstate);
+              if (elem && elem->val->tot_cost > tot_cost) {
+                elem->val = next_tok; // update it
+              } else {
+                toks_shadowing_mod.Insert(arc.nextstate, next_tok);
+              }
+
+              // Add ForwardLink from tok to next_tok (put on head of list tok->links)
+              tok->links = new ForwardLink(next_tok, arc.ilabel, arc.olabel, 
+                                           graph_cost, ac_cost, tok->links, graph_cost_ori);
+            }
+          } // for all arcs
+          tok->shadowing_tok = NULL; // it's shadowing token
+        } else { // shadowed
+          tok->shadowing_tok = elem->val;
+        }
       }
       e_tail = e->tail;
       toks_.Delete(e); // delete Elem
@@ -773,6 +857,9 @@ class Lattice2BiglmFasterDecoder {
     // problem did not improve overall speed.
 
     KALDI_ASSERT(queue_.empty());
+    HashList<StateId, Token*> *toks_shadowing_check=toks_shadowing_+frame%2;
+    HashList<StateId, Token*> *toks_shadowing_mod=toks_shadowing_+frame%2;
+
     BaseFloat best_cost = std::numeric_limits<BaseFloat>::infinity();
     for (const Elem *e = toks_.GetList(); e != NULL;  e = e->tail) {
       queue_.push_back(e->key);
@@ -803,32 +890,46 @@ class Lattice2BiglmFasterDecoder {
       // because we're about to regenerate them.  This is a kind
       // of non-optimality (remember, this is the simple decoder),
       // but since most states are emitting it's not a huge issue.
-      tok->DeleteForwardLinks(); // necessary when re-visiting
-      tok->links = NULL;
-      for (fst::ArcIterator<fst::Fst<Arc> > aiter(fst_, state);
-          !aiter.Done();
-          aiter.Next()) {
-        const Arc &arc_ref = aiter.Value();
-        if (arc_ref.ilabel == 0) {  // propagate nonemitting only...
-          Arc arc(arc_ref);
-          StateId next_lm_state = PropagateLm(lm_state, &arc);          
-          BaseFloat graph_cost = arc.weight.Value(),
-              tot_cost = cur_cost + graph_cost;
-          if (tot_cost < cutoff) {
-            bool changed;
-            PairId next_pair = ConstructPair(arc.nextstate, next_lm_state);
-            Token *new_tok = FindOrAddToken(next_pair, frame, tot_cost,
-                                            false, &changed); // false: non-emit
-            
-            tok->links = new ForwardLink(new_tok, 0, arc.olabel,
-                                         graph_cost, 0, tok->links);
-            
-            // "changed" tells us whether the new token has a different
-            // cost from before, or is new [if so, add into queue].
-            if (changed) queue_.push_back(next_pair);
+      Elem_Shadow *elem = toks_shadowing_check.Find(state);
+      assert(elem);
+      if (elem->val == tok) { // shadowing
+        tok->DeleteForwardLinks(); // necessary when re-visiting
+        tok->links = NULL;
+        for (fst::ArcIterator<fst::Fst<Arc> > aiter(fst_, state);
+            !aiter.Done();
+            aiter.Next()) {
+          const Arc &arc_ref = aiter.Value();
+          if (arc_ref.ilabel == 0) {  // propagate nonemitting only...
+            Arc arc(arc_ref);
+            BaseFloat graph_cost_ori = arc.weight.Value();
+            StateId next_lm_state = PropagateLm(lm_state, &arc);          
+            BaseFloat graph_cost = arc.weight.Value(),
+                tot_cost = cur_cost + graph_cost;
+            if (tot_cost < cutoff) {
+              bool changed;
+              PairId next_pair = ConstructPair(arc.nextstate, next_lm_state);
+              Token *new_tok = FindOrAddToken(next_pair, frame, tot_cost,
+                                              false, &changed); // false: non-emit
+              Elem_Shadow *elem = toks_shadowing_mod.Find(arc.nextstate);
+              if (elem && elem->val->tot_cost > tot_cost) {
+                elem->val = new_tok; // update it
+              } else {
+                toks_shadowing_mod.Insert(arc.nextstate, new_tok);
+              }
+
+              tok->links = new ForwardLink(new_tok, 0, arc.olabel,
+                                           graph_cost, 0, tok->links, graph_cost_ori);
+              
+              // "changed" tells us whether the new token has a different
+              // cost from before, or is new [if so, add into queue].
+              if (changed) queue_.push_back(next_pair);
+            }
           }
-        }
-      } // for all arcs
+        } // for all arcs
+        tok->shadowing_tok = NULL; // it's shadowing token
+      } else { // shadowed
+        tok->shadowing_tok = elem->val;
+      }
     } // while queue not empty
   }
 
@@ -837,6 +938,7 @@ class Lattice2BiglmFasterDecoder {
   // more than one list (e.g. for current and previous frames), but only one of
   // them at a time can be indexed by StateId.
   HashList<PairId, Token*> toks_;
+  HashList<StateId, Token*> toks_shadowing_[2];
   std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
   // frame (members of TokenList are toks, must_prune_forward_links,
   // must_prune_tokens).

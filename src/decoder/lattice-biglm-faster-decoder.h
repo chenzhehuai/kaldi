@@ -72,6 +72,8 @@ class LatticeBiglmFasterDecoder {
     ClearActiveTokens();
   }
 
+
+  inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
   // Returns true if any kind of traceback is available (not necessarily from
   // a final state).
   bool Decode(DecodableInterface *decodable) {
@@ -692,7 +694,10 @@ class LatticeBiglmFasterDecoder {
     size_t tok_cnt;
     BaseFloat cur_cutoff = GetCutoff(last_toks, &tok_cnt, &adaptive_beam, &best_elem);
     PossiblyResizeHash(tok_cnt);  // This makes sure the hash is always big enough.    
-    
+    KALDI_VLOG(6) << "Adaptive beam on frame " << frame << "\t" << NumFramesDecoded() << " is "
+                << adaptive_beam << "\t" << cur_cutoff;
+
+  
     BaseFloat next_cutoff = std::numeric_limits<BaseFloat>::infinity();
     // pruning "online" before having seen all tokens
 
