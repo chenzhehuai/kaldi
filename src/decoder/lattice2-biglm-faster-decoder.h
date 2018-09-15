@@ -69,7 +69,7 @@ class Lattice2BiglmFasterDecoder {
   Lattice2BiglmFasterDecoderConfig GetOptions() { return config_; } 
   ~Lattice2BiglmFasterDecoder() {
     DeleteElems(toks_.Clear());    
-    for (int i = 0; i < 2; i++) toks_shadowing_[i].Clear();
+    for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
     ClearActiveTokens();
   }
 
@@ -80,7 +80,7 @@ class Lattice2BiglmFasterDecoder {
   bool Decode(DecodableInterface *decodable) {
     // clean up from last time:
     DeleteElems(toks_.Clear());
-    for (int i = 0; i < 2; i++) toks_shadowing_[i].Clear();
+    for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
     ClearActiveTokens();
     warned_ = false;
     final_active_ = false;
@@ -218,7 +218,7 @@ class Lattice2BiglmFasterDecoder {
           unordered_map<Token*, StateId>::const_iterator iter =
               tok_map.find(l->next_tok);
           // the tok has been pruned, so the arc do not need to exist
-          // TODO
+          // TODO better way to solve it in pruning arc
           if (iter == tok_map.end()) continue; 
           StateId nextstate = iter->second;
           KALDI_ASSERT(iter != tok_map.end());
@@ -776,6 +776,7 @@ class Lattice2BiglmFasterDecoder {
     HashList<StateId, Token*> &toks_shadowing_check=toks_shadowing_[(frame-1)%2];
     HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[frame%2];
     toks_shadowing_mod.Clear();
+    DeleteElemsShadow(toks_shadowing_mod);
 
     Elem *last_toks = toks_.Clear(); // swapping prev_toks_ / cur_toks_
     Elem *best_elem = NULL;
@@ -989,6 +990,15 @@ class Lattice2BiglmFasterDecoder {
     }
     toks_.Clear();
   }
+  void DeleteElemsShadow(HashList<StateId, Token*> &toks) {
+    Elem_Shadow *list = toks.Clear();
+    for (Elem_Shadow *e = list, *e_tail; e != NULL; e = e_tail) {
+      e_tail = e->tail;
+      toks.Delete(e);
+    }
+    toks.Clear();
+  }
+
   
   void ClearActiveTokens() { // a cleanup routine, at utt end/begin
     for (size_t i = 0; i < active_toks_.size(); i++) {
