@@ -64,12 +64,14 @@ class Lattice2BiglmFasterDecoder {
                  lm_diff_fst->Start() != fst::kNoStateId);
     toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
     for (int i = 0; i < 2; i++) toks_shadowing_[i].SetSize(1000);  // just so on the first frame we do something reasonable.
+    toks_backfill_.SetSize(1000);
   }
   void SetOptions(const Lattice2BiglmFasterDecoderConfig &config) { config_ = config; } 
   Lattice2BiglmFasterDecoderConfig GetOptions() { return config_; } 
   ~Lattice2BiglmFasterDecoder() {
     DeleteElems(toks_.Clear());    
     for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
+    DeleteElemsShadow(toks_backfill_);
     ClearActiveTokens();
   }
 
@@ -81,6 +83,7 @@ class Lattice2BiglmFasterDecoder {
     // clean up from last time:
     DeleteElems(toks_.Clear());
     for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
+    DeleteElemsShadow(toks_backfill_);
     ClearActiveTokens();
     warned_ = false;
     final_active_ = false;
@@ -121,6 +124,7 @@ class Lattice2BiglmFasterDecoder {
 
   void ExpandShadowTokens(int32 frame) {
     assert(frame >= 0);
+    DeleteElemsShadow(toks_backfill_); // reset for each frame
     for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
       if (!tok->shadowing_tok) continue; // shadowing token
       Token* shadowing_tok = tok->shadowing_tok;
@@ -139,13 +143,26 @@ class Lattice2BiglmFasterDecoder {
                   graph_cost = arc.weight.Value(),
                   cur_cost = tok->tot_cost,
                   tot_cost = cur_cost + ac_cost + graph_cost;
-        const BaseFloat extra_cost = 0.0;
-       
-        Token *new_tok = new Token(tot_cost, extra_cost, NULL, toks, next_lm_state);
-        // a signal to expand them appropriately when we do backfill on the next frame.
-        new_tok->shadowing_tok = next_tok; 
-        toks = new_tok;
-        num_toks_++;
+        const BaseFloat extra_cost = next_tok->extra_cost + 0; // TODO
+
+        // TODO use toks_backfill_ to constrain
+        Elem_Shadow *e_found = toks_backfill_.Find(next_lm_state);
+        Token *new_tok;
+        if (e_found == NULL) { // no such token presently.
+          new_tok = new Token(tot_cost, extra_cost, NULL, toks, next_lm_state);
+          // a signal to expand them appropriately when we do backfill on the next frame.
+          new_tok->shadowing_tok = next_tok; 
+          toks = new_tok;
+          num_toks_++;
+          toks_backfill_.Insert(next_lm_state, new_tok);
+        } else {
+          new_tok = e_found->val; // There is an existing Token for this state.
+          if (new_tok->tot_cost > tot_cost) {
+            new_tok->tot_cost = tot_cost;
+            // TODO update extra_cost
+          }
+        }
+
         // create lattice arc
         tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
                                      graph_cost, ac_cost, tok->links, link->graph_cost_ori);
@@ -960,6 +977,7 @@ class Lattice2BiglmFasterDecoder {
   // them at a time can be indexed by StateId.
   HashList<PairId, Token*> toks_;
   HashList<StateId, Token*> toks_shadowing_[2];
+  HashList<StateId, Token*> toks_backfill_;
   std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
   // frame (members of TokenList are toks, must_prune_forward_links,
   // must_prune_tokens).
