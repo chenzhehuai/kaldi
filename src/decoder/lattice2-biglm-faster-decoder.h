@@ -1,6 +1,7 @@
 // decoder/lattice2-biglm-faster-decoder.h
 
 // Copyright      2018  Zhehuai Chen
+//                      Hang Lyu
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -52,6 +53,7 @@ class Lattice2BiglmFasterDecoder {
   // A PairId will be constructed as: (StateId in fst) + (StateId in lm_diff_fst) << 32;
   typedef uint64 PairId;
   typedef Arc::Weight Weight;
+
   // instantiate this class once for each thing you have to decode.
   Lattice2BiglmFasterDecoder(
       const fst::Fst<fst::StdArc> &fst,      
@@ -66,8 +68,11 @@ class Lattice2BiglmFasterDecoder {
     for (int i = 0; i < 2; i++) toks_shadowing_[i].SetSize(1000);  // just so on the first frame we do something reasonable.
     toks_backfill_.SetSize(1000);
   }
+
   void SetOptions(const Lattice2BiglmFasterDecoderConfig &config) { config_ = config; } 
+  
   Lattice2BiglmFasterDecoderConfig GetOptions() { return config_; } 
+  
   ~Lattice2BiglmFasterDecoder() {
     DeleteElems(toks_.Clear());    
     for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
@@ -75,23 +80,28 @@ class Lattice2BiglmFasterDecoder {
     ClearActiveTokens();
   }
 
-
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
+  
   // Returns true if any kind of traceback is available (not necessarily from
   // a final state).
   bool Decode(DecodableInterface *decodable) {
-    // clean up from last time:
+    // clean up from last time.
     DeleteElems(toks_.Clear());
     for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
     DeleteElemsShadow(toks_backfill_);
     ClearActiveTokens();
+
+    // clean up private members
+    warned_noarc_ = false;
     warned_ = false;
     final_active_ = false;
     final_costs_.clear();
     num_toks_ = 0;
+
+    // At the beginning of an utterance, initialize.
     PairId start_pair = ConstructPair(fst_.Start(), lm_diff_fst_->Start());
     active_toks_.resize(1);
-    Token *start_tok = new Token(0.0, 0.0, NULL, NULL, lm_diff_fst_->Start());
+    Token *start_tok = new Token(0.0, 0.0, NULL, NULL, lm_diff_fst_->Start(), fst_.Start());
     active_toks_[0].toks = start_tok;
     toks_.Insert(start_pair, start_tok);
     toks_shadowing_[NumFramesDecoded()%2].Insert(fst_.Start(), start_tok);
@@ -113,10 +123,17 @@ class Lattice2BiglmFasterDecoder {
       else if (frame % config_.prune_interval == 0)
         PruneActiveTokens(frame, config_.lattice_beam * 0.1); // use larger delta.        
 
+      // We could add another config option to decide the gap between state passing
+      // and lm passing.
       if (frame-config_.prune_interval >= 0) ExpandShadowTokens(frame-config_.prune_interval);
     }
+
+    // Process the last few frames lm passing
     for (int32 frame = std::max(0, NumFramesDecoded()-config_.prune_interval); // final expand
-      frame < NumFramesDecoded()+1; frame++) ExpandShadowTokens(frame);
+         frame < NumFramesDecoded()+1; frame++) {
+      ExpandShadowTokens(frame);
+    }
+
     // Returns true if we have any kind of traceback available (not necessarily
     // to the end state; query ReachedFinal() for that).
     return !final_costs_.empty();
@@ -127,6 +144,9 @@ class Lattice2BiglmFasterDecoder {
     DeleteElemsShadow(toks_backfill_); // reset for each frame
     for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
       if (!tok->shadowing_tok) continue; // shadowing token
+                                         // If shadowing_tok == NULL, it means
+                                         // this token has been processed. Skip
+                                         // it.
       Token* shadowing_tok = tok->shadowing_tok;
       for (ForwardLink *link = shadowing_tok->links; link != NULL; link = link->next) {
         // See if we need to excise this link...
@@ -149,9 +169,10 @@ class Lattice2BiglmFasterDecoder {
         Elem_Shadow *e_found = toks_backfill_.Find(next_lm_state);
         Token *new_tok;
         if (e_found == NULL) { // no such token presently.
-          new_tok = new Token(tot_cost, extra_cost, NULL, toks, next_lm_state);
+          new_tok = new Token(tot_cost, extra_cost, NULL, toks, next_lm_state, next_tok->hclg_state);
           // a signal to expand them appropriately when we do backfill on the next frame.
-          new_tok->shadowing_tok = next_tok; 
+          new_tok->shadowing_tok = next_tok;
+          new_tok->processed_shadowing_tok = true;
           toks = new_tok;
           num_toks_++;
           toks_backfill_.Insert(next_lm_state, new_tok);
@@ -168,6 +189,7 @@ class Lattice2BiglmFasterDecoder {
                                      graph_cost, ac_cost, tok->links, link->graph_cost_ori);
       }
       tok->shadowing_tok = NULL; // already expand
+      tok->processed_shadowing_tok = true;
     }
   }
   /// says whether a final-state was active on the last frame.  If it was not, the
@@ -337,11 +359,27 @@ class Lattice2BiglmFasterDecoder {
     
     Token *next; // Next in list of tokens for this frame.
     Token *shadowing_tok;
+
+    // The following two states are used to record the hclg_state id and
+    // lm_state id in current token. They will be used in expanding shadowed
+    // tokens as the hashlist has been released at that time.
     StateId lm_state; // for expanding shadowed states
+    StateId hclg_state; // for expanding shadowed states
+
+    // This is a signal to express whether the "shadowing_tok" of this token has
+    // been processed in ProcessNonemitting() or ProcessEmitting().
+    // We only process those tokens which are the best record in corresponding
+    // HCLG.fst state. sometimes, the best record will be updated repatedly in
+    // process. For sloving this problem so that we link the shadowed token to
+    // the best one, we use this signal.
+    bool processed_shadowing_tok;
     
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
-                 Token *next, StateId lm_state): tot_cost(tot_cost), extra_cost(extra_cost),
-                 links(links), next(next), shadowing_tok(NULL), lm_state(lm_state) { }
+                 Token *next, StateId lm_state, StateId hclg_state): tot_cost(tot_cost),
+                 extra_cost(extra_cost), links(links), next(next),
+                 shadowing_tok(NULL), lm_state(lm_state),
+                 hclg_state(hclg_state), processed_shadowing_tok(false) { }
+
     inline void DeleteForwardLinks() {
       ForwardLink *l = links, *m; 
       while (l != NULL) {
@@ -391,7 +429,9 @@ class Lattice2BiglmFasterDecoder {
       // tokens on the currently final frame have zero extra_cost
       // as any of them could end up
       // on the winning path.
-      Token *new_tok = new Token(tot_cost, extra_cost, NULL, toks, PairToLmState(state_pair));
+      Token *new_tok = new Token(tot_cost, extra_cost, NULL, toks,
+                                 PairToLmState(state_pair),
+                                 PairToState(state_pair));
       // NULL: no forward links yet
       toks = new_tok;
       num_toks_++;
@@ -835,6 +875,9 @@ class Lattice2BiglmFasterDecoder {
     // the tokens are now owned here, in last_toks, and the hash is empty.
     // 'owned' is a complex thing here; the point is we need to call DeleteElem
     // on each elem 'e' to let toks_ know we're done with them.
+    //
+    // Process all previous frame tokens. Only the tokens which are stored in
+    // toks_shadowing_check will move forward. Others will wait to expand.
     for (Elem *e = last_toks, *e_tail; e != NULL; e = e_tail) {
       // loop this way because we delete "e" as we go.
       PairId state_pair = e->key;
@@ -876,8 +919,7 @@ class Lattice2BiglmFasterDecoder {
             }
           } // for all arcs
           tok->shadowing_tok = NULL; // it's shadowing token
-        } else { // shadowed
-          tok->shadowing_tok = elem->val;
+          tok->processed_shadowing_tok = true;
         }
       }
       e_tail = e->tail;
@@ -906,7 +948,7 @@ class Lattice2BiglmFasterDecoder {
     }
     if (queue_.empty()) {
       if (!warned_) {
-        KALDI_ERR << "Error in ProcessEmitting: no surviving tokens: frame is "
+        KALDI_ERR << "Error in ProcessNonemitting: no surviving tokens: frame is "
                   << frame;
         warned_ = true;
       }
@@ -940,7 +982,7 @@ class Lattice2BiglmFasterDecoder {
           if (arc_ref.ilabel == 0) {  // propagate nonemitting only...
             Arc arc(arc_ref);
             BaseFloat graph_cost_ori = arc.weight.Value();
-            StateId next_lm_state = PropagateLm(lm_state, &arc);          
+            StateId next_lm_state = PropagateLm(lm_state, &arc);
             BaseFloat graph_cost = arc.weight.Value(),
                 tot_cost = cur_cost + graph_cost;
             if (tot_cost < cutoff) {
@@ -965,10 +1007,25 @@ class Lattice2BiglmFasterDecoder {
           }
         } // for all arcs
         tok->shadowing_tok = NULL; // it's shadowing token
+        tok->processed_shadowing_tok = true;
       } else { // shadowed
-        tok->shadowing_tok = elem->val;
+        // This token hasn't been processed. It will be shadowed to the best
+        // one which has the same HCLG state id later.
+        tok->processed_shadowing_tok = false;
       }
     } // while queue not empty
+
+    // Make the "shadowing_tok" pointer of those unprocessed point to the best
+    // one with the same HCLG state id.
+    for (const Elem *e = toks_.GetList(); e != NULL;  e = e->tail) {
+      Token *cur_tok = e->val;
+      if (!cur_tok->processed_shadowing_tok){
+        // In ProcessNonemitting toks_shadowing_mod == toks_shadowing_check
+        Elem_Shadow *elem = toks_shadowing_mod.Find(cur_tok->hclg_state);
+        assert(elem);
+        cur_tok->shadowing_tok = elem->val;
+      }
+    }
   }
 
 
