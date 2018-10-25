@@ -152,7 +152,7 @@ int main(int argc, char *argv[]) {
         "Generate lattices using on-the-fly composition.\n"
         "User supplies LM used to generate decoding graph, and desired LM;\n"
         "this decoder applies the difference during decoding\n"
-        "Usage: latgen-biglm-faster-mapped [options] model-in (fst-in|fsts-rspecifier) "
+        "Usage: lat2gen-biglm-faster-mapped [options] model-in (fst-in|fsts-rspecifier) "
         "oldlm-fst-in newlm-fst-in features-rspecifier"
         " lattice-wspecifier [ words-wspecifier [alignments-wspecifier] ]\n";
     ParseOptions po(usage);
