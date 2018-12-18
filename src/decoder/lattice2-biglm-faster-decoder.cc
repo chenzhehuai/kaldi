@@ -75,7 +75,7 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
     ProcessNonemitting(frame);
 
     // Update the backward-cost of each token
-    //if (frame % 5) UpdateBackwardCost(frame, config_.lattice_beam * 0.1);
+    if (frame % 5 == 0) UpdateBackwardCost(frame, config_.lattice_beam * 0.1);
 
     //if (decodable->IsLastFrame(frame-1))
     //  PruneActiveTokensFinal(frame);
@@ -117,13 +117,12 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
     KALDI_WARN << "ExpandShadowTokens: no tokens active on frame " << frame;
   }
 
-  /*
-    // Find the minimum backward cost in this frame
-    BaseFloat best_back_cost = std::numeric_limits<BaseFloat>::infinity();
-    for(Token* tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
-      best_back_cost = std::min(best_back_cost, tok->back_cost);
-    }
-  */
+  
+  // Find the minimum backward cost in this frame
+  BaseFloat best_backward_cost = std::numeric_limits<BaseFloat>::infinity();
+  for (Token* tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
+    best_backward_cost = std::min(best_backward_cost, tok->backward_cost);
+  }
 
   /*
     std::cout << "Show pair map." << std::endl;
@@ -151,10 +150,10 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                                        // is the best one in this HCLG state
                                        // in the frame. Skip it.
     // Decide which token should be expanded
-    //if (tok->back_cost < best_back_cost + config_.beam) {
-    expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
+    if (tok->backward_cost <= best_backward_cost + config_.beam) {
+      expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
                                                   tok->lm_state));
-    //}
+    }
   }
 
   while (!expand_current_frame_queue.empty()) {
@@ -165,6 +164,8 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                  toks_backfill_pair_[frame]->end());
   
     Token* tok = (*toks_backfill_pair_[frame])[cur_id];
+    if (tok->backward_cost > best_backward_cost + config_.beam) continue;
+
     Token* shadowing_tok = tok->shadowing_tok;
 
     /*
@@ -185,7 +186,13 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                 graph_cost = arc.weight.Value(),
                 cur_cost = tok->tot_cost,
                 tot_cost = cur_cost + ac_cost + graph_cost;
-      BaseFloat extra_cost = next_tok->extra_cost;
+      // The extra_cost and backward_cost are temporary. They are inherited from
+      // "next_tok" which is the destation of "shadowing_token". So they are
+      // estimated rather than exact. They will be used to initialize a new
+      // token and help to decide the new token will be expanded or not, as the
+      // backward_cost value will be updated periodly rather than frame-by-frame.
+      BaseFloat extra_cost = next_tok->extra_cost,
+                backward_cost = next_tok->backward_cost;
 
       // prepare to store a new token in the current / next frame
       int32 new_frame_index = link->ilabel ? frame+1 : frame; 
@@ -238,7 +245,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
       if (!exist_flag) {  // A new token.
         // Construct the new token.
         new_tok = new Token(tot_cost, extra_cost, NULL, toks, new_lm_state,
-                            new_hclg_state);
+                            new_hclg_state, backward_cost);
         toks = new_tok;
         num_toks_++;
 
@@ -494,7 +501,7 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
           if (link_extra_cost < 0.0) { // this is just a precaution.
             if (link_extra_cost < -0.01)
               KALDI_WARN << "Negative extra_cost: " << link_extra_cost;
-          //  link_extra_cost = 0.0;
+            link_extra_cost = 0.0;
           }
           if (link_extra_cost < tok_extra_cost)
             tok_extra_cost = link_extra_cost;
@@ -784,7 +791,6 @@ void Lattice2BiglmFasterDecoder::ProcessEmitting(DecodableInterface *decodable,
   // Processes emitting arcs for one frame.  Propagates from prev_toks_ to cur_toks_.
   HashList<StateId, Token*> &toks_shadowing_check=toks_shadowing_[(frame-1)%2];
   HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[frame%2];
-  toks_shadowing_mod.Clear();
   DeleteElemsShadow(toks_shadowing_mod);
 
   Elem *last_toks = toks_.Clear(); // swapping prev_toks_ / cur_toks_
@@ -1250,10 +1256,11 @@ void Lattice2BiglmFasterDecoder::UpdateBackwardCost(int32 cur_frame,
                                                     BaseFloat delta) {
   // Set the backward-cost of current frame tokens to zero
   for(Token* tok = active_toks_[cur_frame].toks; tok != NULL; tok = tok->next) {
-    tok->back_cost = 0;
+    tok->backward_cost = 0;
   }
 
-  for (int32 frame = cur_frame-1; frame >= 0; frame--) {
+  for (int32 frame = cur_frame-1;
+       frame >= 0 && frame > cur_frame - config_.prune_interval; frame--) {
     if (active_toks_[frame].toks == NULL ) { // empty list; should not happen.
       KALDI_WARN << "No tokens alive when compute backward cost\n";
     }
@@ -1266,30 +1273,31 @@ void Lattice2BiglmFasterDecoder::UpdateBackwardCost(int32 cur_frame,
       for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
         ForwardLink *link;
         // will recompute tok_extra_cost for tok.
-        BaseFloat tok_back_cost = std::numeric_limits<BaseFloat>::infinity();
-        // tok_back_cost is the best (min) of link_extra_cost of outgoing links
-        for (link = tok->links; link != NULL; ) {
+        BaseFloat tok_backward_cost = std::numeric_limits<BaseFloat>::infinity();
+        // tok_backward_cost is the best (min) of link_extra_cost of outgoing links
+        for (link = tok->links; link != NULL; link = link->next) {
           Token *next_tok = link->next_tok;
-          BaseFloat link_back_cost = std::numeric_limits<BaseFloat>::infinity();
+          BaseFloat link_backward_cost =
+            std::numeric_limits<BaseFloat>::infinity();
           if (next_tok->shadowing_tok) {
-            link_back_cost = next_tok->shadowing_tok->back_cost + 
-                             link->acoustic_cost + link->graph_cost;
+            link_backward_cost = next_tok->shadowing_tok->backward_cost + 
+                                 link->acoustic_cost + link->graph_cost;
           } else {
-            link_back_cost = next_tok->back_cost + link->acoustic_cost +
-                             link->graph_cost;
+            link_backward_cost = next_tok->backward_cost + link->acoustic_cost +
+                                 link->graph_cost;
           }
-          tok_back_cost = std::min(tok_back_cost, link_back_cost);
-          KALDI_ASSERT(link_back_cost == link_back_cost); // check for NaN
-          if (fabs(tok_back_cost - tok->back_cost) > delta)
-            changed = true;  // difference new minus old is bigger than delta
-          tok->back_cost = tok_back_cost;
-        } // for all Token on active_toks_[frame]
-      }
+          KALDI_ASSERT(link_backward_cost == link_backward_cost); // check for NaN
+          tok_backward_cost = std::min(tok_backward_cost, link_backward_cost);
+        }
+        if (fabs(tok_backward_cost - tok->backward_cost) > delta)
+          changed = true;  // difference new minus old is bigger than delta
+        tok->backward_cost = tok_backward_cost;
+      } // for all Token on active_toks_[frame]
     }
   }
   // Set the backward-cost of current frame tokens back to infinity
   for (Token* tok = active_toks_[cur_frame].toks; tok != NULL; tok = tok->next) {
-    tok->back_cost = std::numeric_limits<BaseFloat>::infinity();
+    tok->backward_cost = std::numeric_limits<BaseFloat>::infinity();
   }
 } 
 

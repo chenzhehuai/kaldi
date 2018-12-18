@@ -197,19 +197,28 @@ class Lattice2BiglmFasterDecoder {
     StateId lm_state; // for expanding shadowed states
     StateId hclg_state; // for expanding shadowed states
 
-    BaseFloat back_cost; // backward-cost. It will be updated periodly.
+    BaseFloat backward_cost; // backward-cost. It will be updated periodly.
                          // It will be used in Backfill stage. We will not
                          // expand all shadowing token. The shadowed token
-                         // whose back_cost < best_back_cost + config_.beam
+                         // whose backward_cost < best_backward_cost + config_.beam
                          // will be expanded. In another word, if we prune the
                          // lattice on each frame rather than prune it periodly,
                          // we only expand the survived tokens after pruning.
    
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
-                 Token *next, StateId lm_state, StateId hclg_state): tot_cost(tot_cost),
-                 extra_cost(extra_cost), links(links), next(next),
-                 shadowing_tok(NULL), lm_state(lm_state), hclg_state(hclg_state),
-                 back_cost(std::numeric_limits<BaseFloat>::infinity()) {}
+                 Token *next, StateId lm_state, StateId hclg_state):
+                 tot_cost(tot_cost), extra_cost(extra_cost), links(links),
+                 next(next), shadowing_tok(NULL), lm_state(lm_state),
+                 hclg_state(hclg_state),
+                 backward_cost(std::numeric_limits<BaseFloat>::infinity()) {}
+
+    inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
+                 Token *next, StateId lm_state, StateId hclg_state,
+                 BaseFloat backward_cost):
+                 tot_cost(tot_cost), extra_cost(extra_cost), links(links),
+                 next(next), shadowing_tok(NULL), lm_state(lm_state),
+                 hclg_state(hclg_state), backward_cost(backward_cost) {}
+
 
     inline void DeleteForwardLinks() {
       ForwardLink *l = links, *m; 
@@ -416,7 +425,6 @@ class Lattice2BiglmFasterDecoder {
       e_tail = e->tail;
       toks_.Delete(e);
     }
-    toks_.Clear();
   }
   void DeleteElemsShadow(HashList<StateId, Token*> &toks) {
     ElemShadow *list = toks.Clear();
@@ -424,7 +432,6 @@ class Lattice2BiglmFasterDecoder {
       e_tail = e->tail;
       toks.Delete(e);
     }
-    toks.Clear();
   }
 
   
@@ -464,7 +471,8 @@ class Lattice2BiglmFasterDecoder {
 
   // Update the Backward cost of each token. Assume the current frame is the
   // fake final frame. Iterator frame-1 to 0. For each token, the formula is
-  // tok->back_cost = min(next_tok->back_cost + link->graph + link->acoustic)
+  // tok->backward_cost = min(next_tok->backward_cost + link->graph +
+  // link->acoustic)
   void UpdateBackwardCost(int32 cur_frame, BaseFloat delta);
 };
 
