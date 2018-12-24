@@ -7,9 +7,10 @@
 nj=4
 cmd=run.pl
 maxactive=7000
-beam=13.0
-lattice_beam=6.0
-acwt=0.083333
+beam=15.0
+lattice_beam=8.0
+expand_beam=30.0
+acwt=1.0
 skip_scoring=false
 
 stage=0
@@ -118,7 +119,8 @@ oldlm_cmd="fstproject --project_output=true $oldlm_fst | fstarcsort --sort_type=
 newlm_cmd="fstproject --project_output=true $newlm_fst | fstarcsort --sort_type=ilabel |"
 
 $cmd JOB=1:$nj $dir/log/decode.JOB.log \
- lat2gen-biglm-faster-mapped --max-active=$maxactive --beam=$beam --lattice-beam=$lattice_beam \
+ lat2gen-biglm-faster-mapped --max-active=$maxactive --beam=$beam \
+   --lattice-beam=$lattice_beam --expand-beam=$expand_beam \
    --acoustic-scale=$acwt --allow-partial=true --word-symbol-table=$graphdir/words.txt \
   $srcdir/final.mdl $graphdir/HCLG.fst "$oldlm_cmd" "$newlm_cmd" "$posteriors_scp" \
   "$lat_wspecifier" || exit 1;

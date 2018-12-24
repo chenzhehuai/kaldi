@@ -67,7 +67,6 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
   // terms of features), but note that the decodable object uses zero-based
   // numbering, which we have to correct for when we call it.
   for (int32 frame = 1; !decodable->IsLastFrame(frame-2); frame++) {
-    std::cout << "Decoding frame " << frame << std::endl; 
     active_toks_.resize(frame+1); // new column
 
     ProcessEmitting(decodable, frame);
@@ -91,8 +90,8 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
   }
 
   // Process the last few frames lm passing
-  for (int32 frame = std::max(0, NumFramesDecoded()-config_.prune_interval); // final expand
-       frame < NumFramesDecoded()+1; frame++) {
+  for (int32 frame = std::max(0, NumFramesDecoded() - config_.prune_interval + 1); // final expand
+       frame < NumFramesDecoded() + 1; frame++) {
     ExpandShadowTokens(frame);
   }
     
@@ -107,7 +106,6 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
 void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
   assert(frame >= 0);
     
-  std::cout << "Expand frame " << frame << std::endl;
   BuildBackfillMap(frame);
   if ( (frame + 1) <= active_toks_.size()) {
     BuildBackfillMap(frame+1);
@@ -117,12 +115,30 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
     KALDI_WARN << "ExpandShadowTokens: no tokens active on frame " << frame;
   }
 
-  
+  /*
   // Find the minimum backward cost in this frame
   BaseFloat best_backward_cost = std::numeric_limits<BaseFloat>::infinity();
+  BaseFloat worst_backward_cost = std::numeric_limits<BaseFloat>::lowest();
   for (Token* tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
     best_backward_cost = std::min(best_backward_cost, tok->backward_cost);
+    if (tok->backward_cost != std::numeric_limits<BaseFloat>::infinity())
+      worst_backward_cost = std::max(worst_backward_cost, tok->backward_cost);
   }
+  std::cout << "In frame " << frame
+            << " Best backward cost is " << best_backward_cost
+            << " Worst backward cost is " << worst_backward_cost << std::endl;
+  */
+  BaseFloat best_forward_cost = std::numeric_limits<BaseFloat>::infinity();
+  BaseFloat worst_forward_cost = std::numeric_limits<BaseFloat>::lowest();
+  for (Token* tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
+    best_forward_cost = std::min(best_forward_cost, tok->tot_cost);
+    worst_forward_cost = std::max(worst_forward_cost, tok->tot_cost);
+  }
+  std::cout << "In frame " << frame
+            << " Best forward cost is " << best_forward_cost
+            << " Worst forward cost is " << worst_forward_cost << std::endl;
+  
+
 
   /*
     std::cout << "Show pair map." << std::endl;
@@ -150,7 +166,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                                        // is the best one in this HCLG state
                                        // in the frame. Skip it.
     // Decide which token should be expanded
-    if (tok->backward_cost <= best_backward_cost + config_.beam) {
+    if (tok->tot_cost <= best_forward_cost + config_.expand_beam) {
       expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
                                                   tok->lm_state));
     }
@@ -164,7 +180,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                  toks_backfill_pair_[frame]->end());
   
     Token* tok = (*toks_backfill_pair_[frame])[cur_id];
-    if (tok->backward_cost > best_backward_cost + config_.beam) continue;
+    if (tok->tot_cost > best_forward_cost + config_.expand_beam) continue;
 
     Token* shadowing_tok = tok->shadowing_tok;
 
@@ -216,13 +232,13 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
       }
 
       // Special case: An arc that we expand in backfill reaches an existing
-      // state，but it gives that state a better forward cost than before.
+      // state but it gives that state a better forward cost than before.
       /*
-        if (exist_flag && tot_cost <
-            (*toks_backfill_pair_[new_frame_index])[new_pair]->tot_cost) {
-          // Update the destination token
-          ProcessBetterExistingToken(new_frame_index, new_pair, tot_cost);
-        }
+      if (exist_flag && tot_cost <
+          (*toks_backfill_pair_[new_frame_index])[new_pair]->tot_cost) {
+        // Update the destination token
+        ProcessBetterExistingToken(new_frame_index, new_pair, tot_cost);
+      }
       */
       if (exist_flag && tot_cost <
           (*toks_backfill_pair_[new_frame_index])[new_pair]->tot_cost) {
@@ -269,22 +285,22 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                                    link->graph_cost_ori);
 
 
+      
+      // Special case: A previously unseen state was created that has a higher
+      // probability than an existing copy of the same HCLG.fst state.
       /*
-        // Special case: A previously unseen state was created that has a higher
-        // probability than an existing copy of the same HCLG.fst state.
-        if (tot_cost <
-            (*toks_backfill_hclg_[new_frame_index])[new_hclg_state]->tot_cost) {
-          ProcessBetterHCLGToken(new_frame_index, new_tok);
-          // The token has been processed along previous-best-HCLG token
-          new_tok->shadowing_tok = NULL;
-        } else {
-          if (!exist_flag) {
-            new_tok->shadowing_tok =
-              (*toks_backfill_hclg_[new_frame_index])[new_hclg_state];
-          }
+      if (tot_cost <
+          (*toks_backfill_hclg_[new_frame_index])[new_hclg_state]->tot_cost) {
+        ProcessBetterHCLGToken(new_frame_index, new_tok);
+        // The token has been processed along previous-best-HCLG token
+        new_tok->shadowing_tok = NULL;
+      } else {
+        if (!exist_flag) {
+          new_tok->shadowing_tok =
+            (*toks_backfill_hclg_[new_frame_index])[new_hclg_state];
         }
+      }
       */
-
     }  // end of for loop
     tok->shadowing_tok = NULL;  // already expand
   }
@@ -651,7 +667,8 @@ void Lattice2BiglmFasterDecoder::PruneTokensForFrame(int32 frame) {
         num_toks_--;
       } else { // fetch next Token
         prev_tok = tok;
-        KALDI_ASSERT(tok->shadowing_tok->tot_cost <= tok->tot_cost);
+        // KALDI_ASSERT(tok->shadowing_tok->tot_cost <= tok->tot_cost);
+        // After expanding, sometimes the tok->tot_cost better than shadowing's.
         tok->extra_cost = tok->shadowing_tok->extra_cost +
                           tok->shadowing_tok->tot_cost - tok->tot_cost;
       }
