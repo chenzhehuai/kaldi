@@ -223,7 +223,7 @@ template<class Arc>
  PreinitDeterministicOnDemandFst<Arc>::PreinitDeterministicOnDemandFst(
     DeterministicOnDemandFst<Arc> *fst,
     StateId num_cached_arcs, int32 init_mode, Fst<Arc>* pat_fst): fst_(fst),
-                              num_cached_arcs_(num_cached_arcs), num_cached_arcs_used_(0) {
+                              num_cached_arcs_(num_cached_arcs), num_cached_arcs_used_(0), miss_(0), hit_(0){
   KALDI_ASSERT(num_cached_arcs > 0);
   cached_arcs_.reserve(num_cached_arcs_);
 
@@ -260,7 +260,7 @@ template<class Arc>
           }
         }
       }
-     KALDI_VLOG(0) << "preInit state num: " << lev_map.size() << " " << MAX_LEV << " cache: "<< 1.0*num_cached_arcs_used_/num_cached_arcs_ << "% " << 1.0*cache_arcs / num_cached_arcs_used_;
+     KALDI_VLOG(0) << "preInit state num: " << lev_map.size() << " " << MAX_LEV << " cache: "<< 1.0*num_cached_arcs_used_/num_cached_arcs_ << " " << 1.0*cache_arcs / num_cached_arcs_used_;
   }
 }
 
@@ -272,6 +272,7 @@ bool  PreinitDeterministicOnDemandFst<Arc>::GetArc(StateId s, Label ilabel,
   auto ret = cached_arcs_.find(idx);
   if (ret == cached_arcs_.end()) {
     Arc arc;
+    miss_++;
     if (fst_->GetArc(s, ilabel, &arc)) {
       if (num_cached_arcs_used_<num_cached_arcs_) {
         cached_arcs_[idx]=arc; 
@@ -284,6 +285,7 @@ bool  PreinitDeterministicOnDemandFst<Arc>::GetArc(StateId s, Label ilabel,
     }
   } else {
     *oarc = ret->second;
+    hit_++;
     return true;
   }
 }
@@ -307,7 +309,7 @@ CacheDeterministicOnDemandFst<Arc>::CacheDeterministicOnDemandFst(
     DeterministicOnDemandFst<Arc> *fst,
     StateId num_cached_arcs, bool overwrite): fst_(fst),
                               num_cached_arcs_(num_cached_arcs),
-                              cached_arcs_(num_cached_arcs), overwrite_(overwrite) {
+                              cached_arcs_(num_cached_arcs), overwrite_(overwrite), miss_(0), hit_(0) {
   KALDI_ASSERT(num_cached_arcs > 0);
   for (StateId i = 0; i < num_cached_arcs; i++)
     cached_arcs_[i].first = kNoStateId; // Invalidate all elements of the cache.
@@ -324,8 +326,10 @@ bool CacheDeterministicOnDemandFst<Arc>::GetArc(StateId s, Label ilabel,
   if (cached_arcs_[index].first == s &&
       cached_arcs_[index].second.ilabel == ilabel) {
     *oarc = cached_arcs_[index].second;
+    hit_++;
     return true;
   } else {
+    miss_++;
     Arc arc;
     if (fst_->GetArc(s, ilabel, &arc)) {
       if (overwrite_ || cached_arcs_[index].first == kNoStateId) {

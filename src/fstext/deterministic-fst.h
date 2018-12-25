@@ -238,6 +238,7 @@ class PreinitDeterministicOnDemandFst: public DeterministicOnDemandFst<Arc> {
   PreinitDeterministicOnDemandFst(DeterministicOnDemandFst<Arc> *fst,
                                 StateId num_layer = 1, int init_mode=0, Fst<Arc>* pat_fst=NULL);
 
+  ~PreinitDeterministicOnDemandFst() { KALDI_LOG<<"m ratio: "<<1.0*miss_/(miss_+hit_);}
   virtual StateId Start() { return fst_->Start(); }
 
   /// We don't bother caching the final-probs, just the arcs.
@@ -253,6 +254,7 @@ class PreinitDeterministicOnDemandFst: public DeterministicOnDemandFst<Arc> {
   StateId num_cached_arcs_;
   std::unordered_map<index_type, Arc, kaldi::PairHasher<StateId>> cached_arcs_;
   StateId num_cached_arcs_used_;
+  int miss_, hit_;
 };
 
 
@@ -264,6 +266,7 @@ class CacheDeterministicOnDemandFst: public DeterministicOnDemandFst<Arc> {
   typedef typename Arc::Label Label;
 
   /// We don't take ownership of this pointer.  The argument is "really" const.
+  ~CacheDeterministicOnDemandFst() { KALDI_LOG<<"m ratio: "<<1.0*miss_/(miss_+hit_); }
   CacheDeterministicOnDemandFst(DeterministicOnDemandFst<Arc> *fst,
                                 StateId num_cached_arcs = 100000, bool overwrite = true);
 
@@ -282,6 +285,7 @@ class CacheDeterministicOnDemandFst: public DeterministicOnDemandFst<Arc> {
   StateId num_cached_arcs_;
   std::vector<std::pair<StateId, Arc> > cached_arcs_;
   bool overwrite_;
+  int miss_,hit_;
 };
 
 
