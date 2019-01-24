@@ -61,6 +61,7 @@ class LatticeBiglmFasterDecoder {
       fst_(fst), lm_diff_fst_(lm_diff_fst), config_(config),
       warned_noarc_(false), num_toks_(0) {
     config.Check();
+    cutoff_per_frame_.clear();
     KALDI_ASSERT(fst.Start() != fst::kNoStateId &&
                  lm_diff_fst->Start() != fst::kNoStateId);
     toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
@@ -72,12 +73,22 @@ class LatticeBiglmFasterDecoder {
     ClearActiveTokens();
   }
 
+  // Get Cutoff
+  void GetExactCutoffPerFrame(Vector<BaseFloat> *cutoff) {
+    cutoff->Resize(cutoff_per_frame_.size());
+    for (int32 i = 0; i < cutoff_per_frame_.size(); i++) {
+      (*cutoff)(i) = cutoff_per_frame_[i];
+    }
+    cutoff_per_frame_.clear();
+  }
+
 
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
   // Returns true if any kind of traceback is available (not necessarily from
   // a final state).
   bool Decode(DecodableInterface *decodable) {
     // clean up from last time:
+    cutoff_per_frame_.clear();
     DeleteElems(toks_.Clear());
     ClearActiveTokens();
     warned_ = false;
@@ -698,6 +709,8 @@ class LatticeBiglmFasterDecoder {
                 << adaptive_beam << "\t" << cur_cutoff;
 
   
+    KALDI_ASSERT(cutoff_per_frame_.size() == frame - 1);
+    cutoff_per_frame_.push_back(cur_cutoff);
     BaseFloat next_cutoff = std::numeric_limits<BaseFloat>::infinity();
     // pruning "online" before having seen all tokens
 
@@ -853,6 +866,9 @@ class LatticeBiglmFasterDecoder {
   // on the last frame.
   std::map<Token*, BaseFloat> final_costs_; // A cache of final-costs
   // of tokens on the last frame-- it's just convenient to store it this way.
+  //
+  // Get cutoff
+  std::vector<BaseFloat> cutoff_per_frame_;
   
   // It might seem unclear why we call DeleteElems(toks_.Clear()).
   // There are two separate cleanup tasks we need to do at when we start a new file.

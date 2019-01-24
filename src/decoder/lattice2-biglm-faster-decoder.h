@@ -81,6 +81,7 @@ class Lattice2BiglmFasterDecoder {
   // Returns true if any kind of traceback is available (not necessarily from
   // a final state).
   bool Decode(DecodableInterface *decodable);
+  bool Decode(DecodableInterface *decodable, const Vector<BaseFloat> &cutoff);
 
   // The core code of this method. We split this method into two stage --
   // exploration stage and backfill stage. In the exploration stage, we only
@@ -474,6 +475,8 @@ class Lattice2BiglmFasterDecoder {
   // tok->backward_cost = min(next_tok->backward_cost + link->graph +
   // link->acoustic)
   void UpdateBackwardCost(int32 cur_frame, BaseFloat delta);
+
+  Vector<BaseFloat> cutoff_;
 };
 
 } // end namespace kaldi.

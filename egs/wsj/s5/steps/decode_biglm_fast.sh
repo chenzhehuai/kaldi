@@ -119,10 +119,11 @@ oldlm_cmd="fstproject --project_output=true $oldlm_fst | fstarcsort --sort_type=
 newlm_cmd="fstproject --project_output=true $newlm_fst | fstarcsort --sort_type=ilabel |"
 
 $cmd JOB=1:$nj $dir/log/decode.JOB.log \
- lat2gen-biglm-faster-mapped --max-active=$maxactive --beam=$beam \
+ lat2gen-biglm-faster-mapped-cutoff --max-active=$maxactive --beam=$beam \
    --lattice-beam=$lattice_beam --expand-beam=$expand_beam \
    --acoustic-scale=$acwt --allow-partial=true --word-symbol-table=$graphdir/words.txt \
   $srcdir/final.mdl $graphdir/HCLG.fst "$oldlm_cmd" "$newlm_cmd" "$posteriors_scp" \
+  ark,t:$dir/../decode_biglm_dev_clean_5_diff_15_8_15_getcutoff/cutoff.JOB.txt \
   "$lat_wspecifier" || exit 1;
 
 if ! $skip_scoring ; then
