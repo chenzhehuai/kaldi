@@ -32,6 +32,7 @@
 #include "lat/kaldi-lattice.h"
 #include "decoder/grammar-fst.h"
 #include "decoder/lattice-faster-decoder.h"
+#include "memory.h"
 
 namespace kaldi {
 
@@ -242,7 +243,8 @@ class LatticeFasterDecoderCombineTpl {
   using Weight = typename Arc::Weight;
   using ForwardLinkT = decodercombine::ForwardLink<Token>;
 
-  using StateIdToTokenMap = typename std::unordered_map<StateId, Token*>;
+  //using StateIdToTokenMap = typename std::unordered_map<StateId, Token*>;
+  using StateIdToTokenMap = typename std::unordered_map<StateId, Token*, std::hash<StateId>, std::equal_to<StateId>, fkaldi::PoolAllocator<std::pair<const StateId, Token*>>>;
   using IterType = typename StateIdToTokenMap::const_iterator;
 
   // Instantiate this class once for each thing you have to decode.

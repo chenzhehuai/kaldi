@@ -892,6 +892,7 @@ void LatticeFasterDecoderCombineTpl<FST, Token>::ProcessForFrame(
   }  // end of while loop
   frame_processed_[frame] = true;
   frame_processed_[frame + 1] = false;
+  KALDI_VLOG(6) << "toks after: " << cur_toks_.size();
 }
 
 
