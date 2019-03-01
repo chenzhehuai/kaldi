@@ -44,6 +44,9 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
   for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
   ClearActiveTokens();
 
+  cutoff_.Resize(1);
+  cutoff_.Data()[0] = std::numeric_limits<int32>::max();
+
   // clean up private members
   warned_noarc_ = false;
   warned_ = false;
@@ -111,8 +114,13 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable,
   ClearActiveTokens();
 
   // initial cutoff_
-  cutoff_.Resize(cutoff.Dim());
-  cutoff_ = cutoff;
+  if (cutoff.Dim()) {
+    cutoff_.Resize(cutoff.Dim());
+    cutoff_ = cutoff;
+  } else {
+    cutoff_.Resize(1);
+    cutoff_.Data()[0] = std::numeric_limits<int32>::max();
+  }
 
   // clean up private members
   warned_noarc_ = false;
@@ -193,6 +201,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
   }
 
   BaseFloat cur_cutoff = cutoff_(frame);
+  KALDI_VLOG(0) << cur_cutoff;
 
   /*
   // Find the minimum backward cost in this frame
@@ -256,7 +265,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
     if (tok->tot_cost <= cur_cutoff) {
       expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
                                                     tok->lm_state));
-    }
+    } // else is possible since the next_tok is explored according to next_cutoff
   }
 
   while (!expand_current_frame_queue.empty()) {
@@ -284,7 +293,6 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                 << " LM_id is " << tok->lm_state
                 << " .And shadowing_token HCLG_id is " << shadowing_tok->hclg_state
                 << " LM_id is " << shadowing_tok->lm_state << std::endl;
-    }
     */
 
     for (ForwardLink *link = shadowing_tok->links; link != NULL; link = link->next) {
@@ -310,6 +318,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
 
       // prepare to store a new token in the current / next frame
       int32 new_frame_index = link->ilabel ? frame+1 : frame; 
+      if (tot_cost > cutoff_(new_frame_index)) continue;
       Token *&toks = link->ilabel ? active_toks_[frame+1].toks : active_toks_[frame].toks;
       assert(toks);
 
@@ -347,8 +356,16 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
       if (exist_flag && tot_cost <
           (*toks_backfill_pair_[new_frame_index])[new_pair]->tot_cost) {
         // Update the destination token
-        ProcessBetterExistingToken(new_frame_index, new_pair, tot_cost);
+        //ProcessBetterExistingToken(new_frame_index, new_pair, tot_cost);
+        // TODO:
+        if (link->ilabel == 0) {
+          expand_current_frame_queue.push(new_pair);
+        }
+      } 
+      if (!exist_flag && link->ilabel == 0) {
+        expand_current_frame_queue.push(new_pair);
       }
+
       
       /*
       if (exist_flag && tot_cost <
@@ -391,12 +408,13 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
             (*toks_backfill_hclg_[new_frame_index])[new_hclg_state];
         }
 
-        // Still a shadowed token. Push into queue.
-        if (link->ilabel == 0 && new_tok->shadowing_tok) {
-          expand_current_frame_queue.push(new_pair);
-        }
       } else {  // An existing token
         new_tok = (*toks_backfill_pair_[new_frame_index])[new_pair];
+        if (new_tok->tot_cost > tot_cost) {
+          new_tok->tot_cost = tot_cost;
+          new_tok->backward_cost = backward_cost;
+          new_tok->extra_cost = extra_cost;
+        }
       }
 
       // create lattice arc
@@ -461,6 +479,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
       }
     }
   */
+  KALDI_VLOG(1) << "expand fr num: " << frame << " " << ToksNum(frame);
 }
 
  
@@ -968,6 +987,10 @@ void Lattice2BiglmFasterDecoder::ProcessEmitting(DecodableInterface *decodable,
   // TODO PossiblyResizeHash for toks_shadowing_
   KALDI_VLOG(6) << "Adaptive beam on frame " << frame << "\t" << NumFramesDecoded() << " is "
                 << adaptive_beam << "\t" << cur_cutoff;
+  if (cutoff_.Dim()<=frame) {
+    cutoff_.Resize(frame+1,kCopyData);
+    cutoff_.Data()[frame]=cur_cutoff;
+  }
 
   
   BaseFloat next_cutoff = std::numeric_limits<BaseFloat>::infinity();
@@ -1340,6 +1363,7 @@ void Lattice2BiglmFasterDecoder::ProcessBetterExistingToken(
       // "tot_cost"
       BaseFloat new_tot_cost = ori_tok->tot_cost + link->acoustic_cost +
                                link->graph_cost;
+      if (new_tot_cost > cutoff_(new_frame_index)) continue;
       if (new_tot_cost < next_tok->tot_cost) {  // lead to a better token
         ProcessBetterExistingToken(new_frame_index, next_pair_id, new_tot_cost);
       }
@@ -1395,6 +1419,8 @@ void Lattice2BiglmFasterDecoder::ProcessBetterExistingToken(
                                             next_tok->lm_state);
         BaseFloat new_tot_cost = ori_tok->tot_cost + link->acoustic_cost +
                                  link->graph_cost;
+        int32 new_frame_index = link->ilabel ? cur_frame + 1 : cur_frame;
+        if (new_tot_cost > cutoff_(new_frame_index)) continue;
         if (new_tot_cost < next_tok->tot_cost) {  // lead to a better token
           ProcessBetterExistingToken(cur_frame, next_pair_id,
                                      new_tot_cost);
@@ -1475,6 +1501,7 @@ void Lattice2BiglmFasterDecoder::ProcessBetterHCLGToken(int32 cur_frame,
     }
     // prepare to store a new token in the current / next frame
     int32 new_frame_index = link->ilabel ? cur_frame+1 : cur_frame; 
+    if (tot_cost > cutoff_(new_frame_index)) continue;
     Token *&toks = active_toks_[new_frame_index].toks;
     assert(toks);
         

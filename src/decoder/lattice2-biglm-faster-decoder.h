@@ -399,6 +399,11 @@ class Lattice2BiglmFasterDecoder {
 
 
   std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
+  int32 ToksNum(int32 f) {
+    int32 c=0;
+    for (Token *t=active_toks_[f].toks; t; t=t->next) c++;
+    return c;
+  }
   // frame (members of TokenList are toks, must_prune_forward_links,
   // must_prune_tokens).
   std::vector<PairId> queue_;  // temp variable used in ProcessNonemitting,
