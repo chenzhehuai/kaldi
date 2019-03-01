@@ -252,6 +252,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                                        // is the best one in this HCLG state
                                        // in the frame. Skip it.
     // Decide which token should be expanded
+    // if (tok->tot_cost + tok->backward_cost < best_fb_cost + config_.beam) {
     if (tok->tot_cost <= cur_cutoff) {
       expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
                                                     tok->lm_state));
@@ -266,7 +267,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
                  toks_backfill_pair_[frame]->end());
   
     Token* tok = (*toks_backfill_pair_[frame])[cur_id];
-    //if (tok->tot_cost > best_forward_cost + config_.expand_beam) continue;
+    //if (tok->tot_cost + tok->backward_cost > best_fb_cost + config_.expand_beam) continue;
     if (tok->tot_cost > cur_cutoff) continue;
 
     Token* shadowing_tok = tok->shadowing_tok;
