@@ -102,6 +102,7 @@ if [ $stage -le 7 ]; then
   utils/subset_data_dir.sh data/train_clean_100 5000 data/train_5k
   utils/subset_data_dir.sh data/train_clean_100 10000 data/train_10k
 fi
+exit 0
 
 if [ $stage -le 8 ]; then
   # train a monophone system
