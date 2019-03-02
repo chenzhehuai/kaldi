@@ -338,6 +338,7 @@ class Lattice2BiglmFasterDecoder {
     if (arc->olabel == 0) {
       return lm_state; // no change in LM state if no word crossed.
     } else { // Propagate in the LM-diff FST.
+      propage_lm_num_++;
       Arc lm_arc;
       bool ans = lm_diff_fst_->GetArc(lm_state, arc->olabel, &lm_arc);
       if (!ans) { // this case is unexpected for statistical LMs.
@@ -482,6 +483,7 @@ class Lattice2BiglmFasterDecoder {
   void UpdateBackwardCost(int32 cur_frame, BaseFloat delta);
 
   Vector<BaseFloat> cutoff_;
+  uint64 propage_lm_num_;
 };
 
 } // end namespace kaldi.

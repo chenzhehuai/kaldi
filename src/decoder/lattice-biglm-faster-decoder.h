@@ -101,6 +101,7 @@ class LatticeBiglmFasterDecoder {
     active_toks_[0].toks = start_tok;
     toks_.Insert(start_pair, start_tok);
     num_toks_++;
+    propage_lm_num_=0;
     ProcessNonemitting(0);
     
     // We use 1-based indexing for frames in this decoder (if you view it in
@@ -118,6 +119,7 @@ class LatticeBiglmFasterDecoder {
       else if (frame % config_.prune_interval == 0)
         PruneActiveTokens(frame, config_.lattice_beam * 0.1); // use larger delta.        
     }
+    KALDI_VLOG(1) << "propage_lm_num_: " << propage_lm_num_;
     // Returns true if we have any kind of traceback available (not necessarily
     // to the end state; query ReachedFinal() for that).
     return !final_costs_.empty();
@@ -678,6 +680,7 @@ class LatticeBiglmFasterDecoder {
     if (arc->olabel == 0) {
       return lm_state; // no change in LM state if no word crossed.
     } else { // Propagate in the LM-diff FST.
+      propage_lm_num_++;
       Arc lm_arc;
       bool ans = lm_diff_fst_->GetArc(lm_state, arc->olabel, &lm_arc);
       if (!ans) { // this case is unexpected for statistical LMs.
@@ -899,6 +902,7 @@ class LatticeBiglmFasterDecoder {
     active_toks_.clear();
     KALDI_ASSERT(num_toks_ == 0);
   }
+  uint64 propage_lm_num_;
 };
 
 } // end namespace kaldi.
