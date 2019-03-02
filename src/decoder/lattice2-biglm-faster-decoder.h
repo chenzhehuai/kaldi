@@ -205,20 +205,21 @@ class Lattice2BiglmFasterDecoder {
                          // will be expanded. In another word, if we prune the
                          // lattice on each frame rather than prune it periodly,
                          // we only expand the survived tokens after pruning.
+    bool in_queue;
    
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
                  Token *next, StateId lm_state, StateId hclg_state):
                  tot_cost(tot_cost), extra_cost(extra_cost), links(links),
                  next(next), shadowing_tok(NULL), lm_state(lm_state),
                  hclg_state(hclg_state),
-                 backward_cost(std::numeric_limits<BaseFloat>::infinity()) {}
+                 backward_cost(std::numeric_limits<BaseFloat>::infinity()), in_queue(0) {}
 
     inline Token(BaseFloat tot_cost, BaseFloat extra_cost, ForwardLink *links,
                  Token *next, StateId lm_state, StateId hclg_state,
                  BaseFloat backward_cost):
                  tot_cost(tot_cost), extra_cost(extra_cost), links(links),
                  next(next), shadowing_tok(NULL), lm_state(lm_state),
-                 hclg_state(hclg_state), backward_cost(backward_cost) {}
+                 hclg_state(hclg_state), backward_cost(backward_cost), in_queue(0) {}
 
 
     inline void DeleteForwardLinks() {

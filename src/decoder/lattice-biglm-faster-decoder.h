@@ -570,7 +570,12 @@ class LatticeBiglmFasterDecoder {
       }
     }
   }
-  
+  int32 ToksNum(int32 f) {
+    int32 c=0;
+    for (Token *t=active_toks_[f].toks; t; t=t->next) c++;
+    return c;
+  }
+
   // Go backwards through still-alive tokens, pruning them.  note: cur_frame is
   // where hash toks_ are (so we do not want to mess with it because these tokens
   // don't yet have forward pointers), but we do all previous frames, unless we
@@ -602,6 +607,7 @@ class LatticeBiglmFasterDecoder {
     }
     KALDI_VLOG(3) << "PruneActiveTokens: pruned tokens from " << num_toks_begin
                   << " to " << num_toks_;
+  KALDI_VLOG(1) << "expand fr num: " << cur_frame-config_.prune_interval << " " << ToksNum(cur_frame-config_.prune_interval);
   }
 
   // Version of PruneActiveTokens that we call on the final frame.
