@@ -148,7 +148,6 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable,
   // terms of features), but note that the decodable object uses zero-based
   // numbering, which we have to correct for when we call it.
   for (int32 frame = 1; !decodable->IsLastFrame(frame-2); frame++) {
-    std::cout << "Exploration " << frame << std::endl;
     active_toks_.resize(frame+1); // new column
 
     ProcessEmitting(decodable, frame);
@@ -163,7 +162,6 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable,
     //else if (frame % config_.prune_interval == 0)
     //  PruneActiveTokens(frame, config_.lattice_beam * 0.1); // use larger delta.
     if (frame % config_.prune_interval == 0) {
-      std::cout << "Prune " << frame << std::endl;
       PruneActiveTokens(frame, config_.lattice_beam * 0.1); // use larger delta.
     }
 
@@ -192,19 +190,17 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable,
 void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
   assert(frame >= 0);
     
-  std::cout << "Expand frame " << frame << std::endl;
   BuildBackfillMap(frame);
   if ( (frame + 1) <= active_toks_.size()) {
     BuildBackfillMap(frame+1);
   }
 
-  //std::cout << "BackfillMap size is " << toks_backfill_pair_.size() << std::endl;
 
   if (active_toks_[frame].toks == NULL) {
     KALDI_WARN << "ExpandShadowTokens: no tokens active on frame " << frame;
   }
 
-  BaseFloat cur_cutoff = cutoff_(frame);
+  BaseFloat cur_cutoff = cutoff_(frame+1);
 
   /*
   / Find the minimum backward cost in this frame
@@ -317,7 +313,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
 
       // prepare to store a new token in the current / next frame
       int32 new_frame_index = link->ilabel ? frame+1 : frame; 
-      if (tot_cost > cutoff_(new_frame_index)) continue;
+      if (tot_cost > cutoff_(new_frame_index+1)) continue;
       if (extra_cost > config_.lattice_beam) continue;
       Token *&toks = link->ilabel ? active_toks_[frame+1].toks : active_toks_[frame].toks;
       assert(toks);
@@ -1136,7 +1132,6 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame) {
   if (active_toks_[frame].toks == NULL) {
     KALDI_WARN << "BuildBackfillMap: no tokens active on frame " << frame;
   }
-  std::cout << "Build Map " << frame << std::endl;
 
   // Initialize
   std::unordered_map<PairId, Token*> *pair_map =
