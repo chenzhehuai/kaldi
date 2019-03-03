@@ -93,14 +93,14 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
     if (frame-config_.prune_interval >= 0) ExpandShadowTokens(frame-config_.prune_interval);
   }
 
+  PruneActiveTokens(NumFramesDecoded(), config_.lattice_beam * 0.1);
   // Process the last few frames lm passing
   for (int32 frame = std::max(0, NumFramesDecoded() - config_.prune_interval + 1); // final expand
        frame < NumFramesDecoded() + 1; frame++) {
     //if (frame % 5 == 0) UpdateBackwardCost(frame, config_.lattice_beam * 0.1);
     ExpandShadowTokens(frame);
   }
-    
-  PruneActiveTokensFinal(NumFramesDecoded());
+  PruneActiveTokensFinal(NumFramesDecoded(), true); // with sanity check
   KALDI_VLOG(1) << "propage_lm_num_: " << propage_lm_num_;
 
   // Returns true if we have any kind of traceback available (not necessarily
@@ -265,7 +265,9 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
       expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
                                                     tok->lm_state));
       tok->in_queue=true;
-    } // else is possible since the next_tok is explored according to next_cutoff
+    } else {// else is possible since the next_tok is explored according to next_cutoff
+      tok->shadowing_tok=NULL;
+    }
   }
 
   while (!expand_current_frame_queue.empty()) {
@@ -278,21 +280,22 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
     Token* tok = (*toks_backfill_pair_[frame])[cur_id];
     tok->in_queue=false;
     //if (tok->tot_cost + tok->backward_cost > best_fb_cost + config_.expand_beam) continue;
-    if (tok->tot_cost > cur_cutoff) continue;
-
     Token* shadowing_tok = tok->shadowing_tok;
     // There are two cases which lead the "shadowing_tok" points to NULL.
     // a) The token was processed by ProcessBetterHCLGToken() so that its 
     // shadowing_tok pointer is NULL.
     // b) When the token was generated, it didn't have a corresponding item in
     // backfill_hclg_map.
-    if (shadowing_tok == NULL) continue;
+    if (tok->tot_cost > cur_cutoff||shadowing_tok == NULL) {
+      tok->shadowing_tok = NULL;  // already expand
+      continue;
+    }
+
 
     for (ForwardLink *link = shadowing_tok->links; link != NULL; link = link->next) {
       Token *next_tok = link->next_tok;
       if (next_tok->shadowing_tok) next_tok=next_tok->shadowing_tok;
       KALDI_ASSERT(!next_tok->shadowing_tok);
-      //if (next_tok == NULL) continue;
       
       Arc arc(link->ilabel, link->olabel, link->graph_cost_ori, 0);
       StateId new_hclg_state = next_tok->hclg_state;
@@ -533,7 +536,7 @@ bool Lattice2BiglmFasterDecoder::GetLattice(
 void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
                                                    bool *extra_costs_changed,
                                                    bool *links_pruned,
-                                                   BaseFloat delta) {
+                                                   BaseFloat delta, bool is_expand=false) {
   // delta is the amount by which the extra_costs must change
   // If delta is larger,  we'll tend to go back less far
   //    toward the beginning of the file.
@@ -561,10 +564,12 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
       // will recompute tok_extra_cost for tok.
       BaseFloat tok_extra_cost = std::numeric_limits<BaseFloat>::infinity();
       // tok_extra_cost is the best (min) of link_extra_cost of outgoing links
+      if (tok->shadowing_tok) KALDI_ASSERT(!tok->links);
       for (link = tok->links; link != NULL; ) {
         // See if we need to excise this link...
         Token *next_tok = link->next_tok;
         BaseFloat link_extra_cost = 0.0;
+        if (is_expand) KALDI_ASSERT(!next_tok->shadowing_tok);
         if (next_tok->shadowing_tok) {
           link_extra_cost = next_tok->shadowing_tok->extra_cost +
             ((tok->tot_cost + link->acoustic_cost + link->graph_cost)
@@ -574,31 +579,6 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
             ((tok->tot_cost + link->acoustic_cost + link->graph_cost)
              - next_tok->tot_cost); // difference in brackets is >= 0
         }
-        /*
-          Token *next_tok = link->next_tok;
-          if (next_tok->shadowing_tok) {  // excise this link depend on the
-                                          // extra_cost of the shadowing token
-            if (next_tok->shadowing_tok->extra_cost ==
-                std::numeric_limits<BaseFloat>::infinity()) {  // The next_tok
-                                                               // will be deleted
-              ForwardLink *next_link = link->next;
-              if (prev_link != NULL) prev_link->next = link->next;
-              else tok->links = link->next;
-              delete link;
-              link = next_link; // advance link but leave prev_link the same.
-              *links_pruned = true;
-              continue;
-            } else {
-              prev_link = link; // move to next link
-              link = link->next;
-              continue;
-            }
-          }
-          
-          BaseFloat link_extra_cost = next_tok->extra_cost +
-              ((tok->tot_cost + link->acoustic_cost + link->graph_cost)
-               - next_tok->tot_cost); // difference in brackets is >= 0
-        */
         // link_exta_cost is the difference in score between the best paths
         // through link source state and through link destination state
         KALDI_ASSERT(link_extra_cost == link_extra_cost); // check for NaN
@@ -607,26 +587,26 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
           if (prev_link != NULL) prev_link->next = next_link;
           else tok->links = next_link;
           delete link;
-          link = next_link; // advance link but leave prev_link the same.
+          link = next_link;  // advance link but leave prev_link the same.
           *links_pruned = true;
-        } else { // keep the link and update the tok_extra_cost if needed.
-          if (link_extra_cost < 0.0) { // this is just a precaution.
+        } else {   // keep the link and update the tok_extra_cost if needed.
+          if (link_extra_cost < 0.0) {  // this is just a precaution.
             if (link_extra_cost < -0.01)
               //KALDI_WARN << "Negative extra_cost: " << link_extra_cost;
             link_extra_cost = 0.0;
           }
           if (link_extra_cost < tok_extra_cost)
             tok_extra_cost = link_extra_cost;
-          prev_link = link; // move to next link
+          prev_link = link;  // move to next link
           link = link->next;
         }
-      } // for all outgoing links
+      }  // for all outgoing links
       if (fabs(tok_extra_cost - tok->extra_cost) > delta)
-        changed = true;  // difference new minus old is bigger than delta
+        changed = true;   // difference new minus old is bigger than delta
       tok->extra_cost = tok_extra_cost;
       // will be +infinity or <= lattice_beam_.
       // infinity indicates, that no forward link survived pruning
-    } // for all Token on active_toks_[frame]
+    }  // for all Token on active_toks_[frame]
     if (changed) *extra_costs_changed = true;
 
     // Note: it's theoretically possible that aggressive compiler
@@ -744,7 +724,7 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinksFinal(int32 frame) {
 }
 
 
-void Lattice2BiglmFasterDecoder::PruneTokensForFrame(int32 frame) {
+void Lattice2BiglmFasterDecoder::PruneTokensForFrame(int32 frame, bool is_expand=false) {
   KALDI_ASSERT(frame >= 0 && frame < active_toks_.size());
   Token *&toks = active_toks_[frame].toks;
   if (toks == NULL)
@@ -753,6 +733,7 @@ void Lattice2BiglmFasterDecoder::PruneTokensForFrame(int32 frame) {
   // proc shadowed token at first as it needs info from shadowing token
   for (tok = toks; tok != NULL; tok = next_tok) {
     next_tok = tok->next;
+    if (is_expand) KALDI_ASSERT(!tok->shadowing_tok);
     if (tok->shadowing_tok) {// shadowed token
       if (tok->shadowing_tok->extra_cost == std::numeric_limits<BaseFloat>::infinity()) {
         // token is unreachable from end of graph; (no forward links survived)
@@ -833,7 +814,7 @@ void Lattice2BiglmFasterDecoder::PruneActiveTokens(int32 cur_frame,
     if (frame+1 < cur_frame &&      // except for last frame (no forward links)
        active_toks_[frame+1].must_prune_tokens) {
       PruneTokensForFrame(frame+1);
-      // Check
+      // Check TODO
       for (Token *tok = active_toks_[frame+1].toks; tok != NULL; tok = tok->next) {
         KALDI_ASSERT(tok->extra_cost != std::numeric_limits<BaseFloat>::infinity());
       }
@@ -845,7 +826,7 @@ void Lattice2BiglmFasterDecoder::PruneActiveTokens(int32 cur_frame,
 }
 
 
-void Lattice2BiglmFasterDecoder::PruneActiveTokensFinal(int32 cur_frame) {
+void Lattice2BiglmFasterDecoder::PruneActiveTokensFinal(int32 cur_frame, bool is_expand) {
   // returns true if there were final states active
   // else returns false and treats all states as final while doing the pruning
   // (this can be useful if you want partial lattice output,
@@ -858,10 +839,10 @@ void Lattice2BiglmFasterDecoder::PruneActiveTokensFinal(int32 cur_frame) {
   for (int32 frame = cur_frame-1; frame >= 0; frame--) {
     bool b1, b2; // values not used.
     BaseFloat dontcare = 0.0; // delta of zero means we must always update
-    PruneForwardLinks(frame, &b1, &b2, dontcare);
-    PruneTokensForFrame(frame+1);
+    PruneForwardLinks(frame, &b1, &b2, dontcare, is_expand);
+    PruneTokensForFrame(frame+1, is_expand);
   }
-  PruneTokensForFrame(0); 
+  PruneTokensForFrame(0, is_expand);
   KALDI_VLOG(3) << "PruneActiveTokensFinal: pruned tokens from " << num_toks_begin
                 << " to " << num_toks_;
 }
@@ -1118,7 +1099,7 @@ void Lattice2BiglmFasterDecoder::ProcessNonemitting(int32 frame) {
     } else {
       cur_tok->shadowing_tok = elem->val;
       cur_tok->extra_cost=std::numeric_limits<BaseFloat>::infinity();
-
+      cur_tok->DeleteForwardLinks(); // since some tok could be shadowed after exploring in the same decoding step
     }
   }
 }

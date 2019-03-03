@@ -303,7 +303,7 @@ class Lattice2BiglmFasterDecoder {
   // it's called by PruneActiveTokens
   // all links, that have link_extra_cost > lattice_beam are pruned
   void PruneForwardLinks(int32 frame, bool *extra_costs_changed,
-                         bool *links_pruned, BaseFloat delta);
+                         bool *links_pruned, BaseFloat delta, bool is_expand);
 
   // PruneForwardLinksFinal is a version of PruneForwardLinks that we call
   // on the final frame.  If there are final tokens active, it uses
@@ -314,7 +314,7 @@ class Lattice2BiglmFasterDecoder {
   // [we don't do this in PruneForwardLinks because it would give us
   // a problem with dangling pointers].
   // It's called by PruneActiveTokens if any forward links have been pruned
-  void PruneTokensForFrame(int32 frame);
+  void PruneTokensForFrame(int32 frame, bool is_expand);
 
   // Go backwards through still-alive tokens, pruning them.  note: cur_frame is
   // where hash toks_ are (so we do not want to mess with it because these tokens
@@ -327,7 +327,7 @@ class Lattice2BiglmFasterDecoder {
 
   // Version of PruneActiveTokens that we call on the final frame.
   // Takes into account the final-prob of tokens.
-  void PruneActiveTokensFinal(int32 cur_frame);
+  void PruneActiveTokensFinal(int32 cur_frame, bool is_expand=false);
 
   /// Gets the weight cutoff.  Also counts the active tokens.
   BaseFloat GetCutoff(Elem *list_head, size_t *tok_count,
