@@ -472,7 +472,7 @@ class Lattice2BiglmFasterDecoder {
   // Actually, we only build the two maps for each frame once. Otherwise, in
   // ExpandShadowTokens(), it will be increased. In PruneTokenForFrame(), it
   // will be decreased.
-  void BuildBackfillMap(int32 frame);
+  void BuildBackfillMap(int32 frame, bool append=true);
 
   // A recursive function. This can happen when LM histories merge, if a 
   // previously un-promising path became better.  Before further exploration, 
