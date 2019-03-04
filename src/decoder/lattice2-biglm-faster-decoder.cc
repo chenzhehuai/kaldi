@@ -170,15 +170,17 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable,
     if (frame-config_.prune_interval >= 0) ExpandShadowTokens(frame-config_.prune_interval);
   }
 
+  PruneActiveTokens(NumFramesDecoded(), config_.lattice_beam * 0.1);
   // Process the last few frames lm passing
   for (int32 frame = std::max(0, NumFramesDecoded() - config_.prune_interval + 1); // final expand
        frame < NumFramesDecoded() + 1; frame++) {
     //if (frame % 5 == 0) UpdateBackwardCost(frame, config_.lattice_beam * 0.1);
     ExpandShadowTokens(frame);
   }
-    
   PruneActiveTokensFinal(NumFramesDecoded());
   KALDI_VLOG(1) << "propage_lm_num_: " << propage_lm_num_;
+
+  KALDI_ASSERT(active_toks_.size() == toks_backfill_pair_.size());
 
   // Returns true if we have any kind of traceback available (not necessarily
   // to the end state; query ReachedFinal() for that).
@@ -187,38 +189,34 @@ bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable,
 
 
 
-void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
-  assert(frame >= 0);
-    
-  BuildBackfillMap(frame);
-  if ( (frame + 1) <= active_toks_.size()) {
-    BuildBackfillMap(frame+1);
+void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame) {
+  assert(cur_frame >= 0);
+
+  BuildBackfillMap(cur_frame);
+  if ( (cur_frame + 1) <= active_toks_.size()) {
+    BuildBackfillMap(cur_frame+1);
   }
 
-
-  if (active_toks_[frame].toks == NULL) {
-    KALDI_WARN << "ExpandShadowTokens: no tokens active on frame " << frame;
+  if (active_toks_[cur_frame].toks == NULL) {
+    KALDI_WARN << "ExpandShadowTokens: no tokens active on frame " << cur_frame;
   }
-
-  BaseFloat cur_cutoff = cutoff_(frame+1);
-
 
   // When we expand, if the arc.ilabel == 0, there maybe a new token is
   // created in current frame. The queue "expand_current_frame_queue" is used
   // to deal with all tokens in current frame in loop.
-  std::queue<PairId> expand_current_frame_queue;
+  typedef std::pair<Token*, int32> QElem;
+  std::queue<QElem> expand_current_frame_queue;
   // Initialize the "expand_current_frame_queue" with current tokens.
-  for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
+  for (Token *tok = active_toks_[cur_frame].toks; tok != NULL; tok = tok->next) {
+    BaseFloat cur_cutoff = cutoff_(cur_frame+1);
     if (!tok->shadowing_tok) continue; // shadowing token
                                        // If shadowing_tok == NULL, it means
                                        // this token has been processed. Or it
                                        // is the best one in this HCLG state
                                        // in the frame. Skip it.
     // Decide which token should be expanded
-    // if (tok->tot_cost + tok->backward_cost < best_fb_cost + config_.beam) {
-    if (tok->tot_cost <= cur_cutoff) {
-      expand_current_frame_queue.push(ConstructPair(tok->hclg_state,
-                                                    tok->lm_state));
+    if (tok->tot_cost < cur_cutoff) {
+      expand_current_frame_queue.push(QElem(tok, cur_frame));
       tok->in_queue=true;
     } else {// else is possible since the next_tok is explored according to next_cutoff
       tok->shadowing_tok=NULL;
@@ -226,28 +224,43 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
   }
 
   while (!expand_current_frame_queue.empty()) {
-    PairId cur_id = expand_current_frame_queue.front();
+    auto q_elem= expand_current_frame_queue.front();
     expand_current_frame_queue.pop();
-
-    KALDI_ASSERT(toks_backfill_pair_[frame]->find(cur_id) !=
-                 toks_backfill_pair_[frame]->end());
-  
-    Token* tok = (*toks_backfill_pair_[frame])[cur_id];
+    Token* tok = q_elem.first;
     tok->in_queue=false;
-    //if (tok->tot_cost + tok->backward_cost > best_fb_cost + config_.expand_beam) continue;
-    Token* shadowing_tok = tok->shadowing_tok;
-    // There are two cases which lead the "shadowing_tok" points to NULL.
-    // a) The token was processed by ProcessBetterHCLGToken() so that its 
-    // shadowing_tok pointer is NULL.
-    // b) When the token was generated, it didn't have a corresponding item in
-    // backfill_hclg_map.
-    if (tok->tot_cost > cur_cutoff||shadowing_tok == NULL) {
+    int32 frame = q_elem.second;
+    BaseFloat cur_cutoff = cutoff_(frame+1);
+   
+    BuildBackfillMap(frame);
+    if ( (frame + 1) <= active_toks_.size()) {
+      BuildBackfillMap(frame+1);
+    }
+
+    // sanity check:
+    // KALDI_ASSERT(toks_backfill_pair_[frame]->find(ConstructPair(tok->hclg_state, tok->lm_state))->second==tok);
+    
+    if (tok->tot_cost > cur_cutoff) {
       tok->shadowing_tok = NULL;  // already expand
       continue;
     }
 
+    ForwardLink *link=NULL, *links_to_clear=NULL;
+    if (tok->shadowing_tok == NULL) {
+      //continue; // TODO
+      // if we need to update a shadowing token itself
+      link=tok->links;
+      tok->links=NULL; // we firstly un-hook it from shadowing token
+      links_to_clear=link; // we will reconstruct it and delete the original one later
+    } else {
+      // otherwise, we are updating a shadowed token
+      // we obtain template links from shadowing token
+      link = tok->shadowing_tok->links;
+      // sanity check:
+      //KALDI_ASSERT(toks_backfill_hclg_[frame]->find(tok->hclg_state)->second==tok->shadowing_tok);
+      KALDI_ASSERT(!tok->shadowing_tok->shadowing_tok);
+    }
 
-    for (ForwardLink *link = shadowing_tok->links; link != NULL; link = link->next) {
+    for (; link != NULL; link = link->next) {
       Token *next_tok = link->next_tok;
       if (next_tok->shadowing_tok) next_tok=next_tok->shadowing_tok;
       KALDI_ASSERT(!next_tok->shadowing_tok);
@@ -283,17 +296,6 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
         tok_found = iter->second;
       }
 
-      // Special case: An arc that we expand in backfill reaches an existing
-      // state but it gives that state a better forward cost than before.
-      
-      if (tok_found && tot_cost <
-          tok_found->tot_cost) {
-        // Update the destination token
-        // TODO:
-        //ProcessBetterExistingToken(new_frame_index, new_pair, tot_cost);
-      } 
-
-     
       // There will be four kinds of links need to be processed.
       // 1. Go to next frame and the corresponding "next_tok" is shadowed
       // 2. Go to next frame and the corresponding "next_tok" is the processed
@@ -305,7 +307,20 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
       // processed.(Under most circumstances, it is the best one and processed
       // in explore step)
       // However, the way to deal with them is similar.
+      bool better_hclg=false;
+      auto iter_hclg = (*toks_backfill_hclg_[new_frame_index]).find(new_hclg_state);
+      if (iter_hclg != (*toks_backfill_hclg_[new_frame_index]).end()) {
+        KALDI_ASSERT(!iter_hclg->second->shadowing_tok);
+        if (tot_cost < iter_hclg->second->tot_cost) {
+          // ProcessBetterHCLGToken(new_frame_index, new_tok);
+          // better_hclg=true;
+        } // although it is better hclg, we still keep its shadowing token for expanding in the next iter
+      } else {
+        KALDI_ASSERT(0);
+      }
+
       Token* new_tok;
+      bool update_tok=false;
       if (!tok_found) {  // A new token.
         // Construct the new token.
         new_tok = new Token(tot_cost, extra_cost, NULL, toks, new_lm_state,
@@ -315,55 +330,55 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 frame) {
 
         // Add the new token to "backfill" map.
         (*toks_backfill_pair_[new_frame_index])[new_pair] = new_tok;
-
-        if (!new_tok->in_queue && link->ilabel == 0) {
-          expand_current_frame_queue.push(new_pair);
-          new_tok->in_queue=true;
-        }
+        new_tok->shadowing_tok = iter_hclg->second; // by default
+        update_tok=true;
       } else {  // An existing token
         new_tok = tok_found;
         if (new_tok->tot_cost > tot_cost) {
           new_tok->tot_cost = tot_cost;
           new_tok->backward_cost = backward_cost;
           new_tok->extra_cost = extra_cost;
-          if (!new_tok->in_queue && link->ilabel == 0) {
-            expand_current_frame_queue.push(new_pair);
-            new_tok->in_queue=true;
-          }
-
+          update_tok=true;
         }
       }
-
       // create lattice arc
       tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
                                    graph_cost, ac_cost, tok->links,
                                    link->graph_cost_ori);
-
-
-      auto iter_hclg = (*toks_backfill_hclg_[new_frame_index]).find(new_hclg_state);
-      if (iter_hclg != (*toks_backfill_hclg_[new_frame_index]).end()) {
-        if (tot_cost < iter_hclg->second->tot_cost) {
-          ProcessBetterHCLGToken(new_frame_index, new_tok);
-          // The token has been processed along previous-best-HCLG token
-          new_tok->shadowing_tok = NULL;
-        } else {
-          if (!tok_found) {
-            new_tok->shadowing_tok = iter_hclg->second;
-          }
-        }
-      } else {
-        KALDI_ASSERT(0);
-      }
       
+      if (update_tok && !new_tok->in_queue) {
+        if (link->ilabel == 0 || // still current frame
+            better_hclg) { // better hclg
+          new_tok->shadowing_tok = iter_hclg->second; // by default
+          if (new_tok->shadowing_tok == new_tok) { 
+            // if new_tok is the shadowing token
+            // search the comments above regarding to:
+            // "we need to update a shadowing token itself"
+            new_tok->shadowing_tok = NULL; 
+          } else if (new_tok->shadowing_tok) { // prepare for forwardlinks updating
+            KALDI_ASSERT(new_tok->shadowing_tok == iter_hclg->second);
+            new_tok->DeleteForwardLinks();
+          } else { // new_tok is the shadowing token
+            KALDI_ASSERT(new_tok == iter_hclg->second); 
+          }
+          expand_current_frame_queue.push(QElem(new_tok, new_frame_index));
+          new_tok->in_queue=true;
+        }
+      }
     }  // end of for loop
+    while (links_to_clear) {
+      ForwardLink* link_delete=links_to_clear;
+      links_to_clear=links_to_clear->next;
+      delete link_delete;
+    }
     tok->shadowing_tok = NULL;  // already expand
   }
 
   // Clean the backfill map
-  toks_backfill_pair_[frame]->clear();
-  toks_backfill_hclg_[frame]->clear();
+  toks_backfill_pair_[cur_frame]->clear();
+  toks_backfill_hclg_[cur_frame]->clear();
     
-  KALDI_VLOG(1) << "expand fr num: " << frame << " " << ToksNum(frame);
+  KALDI_VLOG(1) << "expand fr num: " << cur_frame << " " << ToksNum(cur_frame);
 }
 
  
@@ -602,7 +617,7 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinksFinal(int32 frame) {
         // See if we need to excise this link...
         Token *next_tok = link->next_tok;
         if (next_tok->shadowing_tok) { // TODO
-          prev_link = link; // move to next link
+          prev_link = link; // move to next link, we will prune it in the final
           link = link->next;
           continue;
         }
@@ -683,6 +698,10 @@ void Lattice2BiglmFasterDecoder::PruneTokensForFrame(int32 frame, bool is_expand
         if ((*toks_backfill_hclg_[frame])[hclg_state] == tok)
           toks_backfill_hclg_[frame]->erase(hclg_state);
         */
+        if (toks_backfill_pair_.size()>frame) { // the map has been built
+          toks_backfill_pair_[frame]->erase(ConstructPair(tok->hclg_state, tok->lm_state));
+          toks_backfill_hclg_[frame]->erase(tok->hclg_state);
+        }
         delete tok;
         num_toks_--;
       } else { // fetch next Token
@@ -747,10 +766,6 @@ void Lattice2BiglmFasterDecoder::PruneActiveTokens(int32 cur_frame,
     if (frame+1 < cur_frame &&      // except for last frame (no forward links)
        active_toks_[frame+1].must_prune_tokens) {
       PruneTokensForFrame(frame+1);
-      // Check TODO
-      for (Token *tok = active_toks_[frame+1].toks; tok != NULL; tok = tok->next) {
-        KALDI_ASSERT(tok->extra_cost != std::numeric_limits<BaseFloat>::infinity());
-      }
       active_toks_[frame+1].must_prune_tokens = false;
     }
   }
@@ -893,7 +908,7 @@ void Lattice2BiglmFasterDecoder::ProcessEmitting(DecodableInterface *decodable,
     StateId state = PairToState(state_pair),
          lm_state = PairToLmState(state_pair);
     Token *tok = e->val;
-    if (tok->tot_cost <=  cur_cutoff) {
+    if (tok->tot_cost <  cur_cutoff) {
       ElemShadow *elem = toks_shadowing_check.Find(state);
       assert(elem);
       if (elem->val == tok) { // explore
@@ -918,8 +933,9 @@ void Lattice2BiglmFasterDecoder::ProcessEmitting(DecodableInterface *decodable,
             Token *next_tok = FindOrAddToken(next_pair, frame, tot_cost, true, NULL);
             // true: emitting, NULL: no change indicator needed
             ElemShadow *elem = toks_shadowing_mod.Find(arc.nextstate);
-            if (elem && elem->val->tot_cost > tot_cost) {
-              elem->val = next_tok; // update it
+            if (elem) {
+              if ((*elem->val) > *next_tok) 
+                elem->val = next_tok; // update it
             } else {
               toks_shadowing_mod.Insert(arc.nextstate, next_tok);
             }
@@ -1003,8 +1019,9 @@ void Lattice2BiglmFasterDecoder::ProcessNonemitting(int32 frame) {
             Token *new_tok = FindOrAddToken(next_pair, frame, tot_cost,
                                             false, &changed); // false: non-emit
             ElemShadow *elem = toks_shadowing_mod.Find(arc.nextstate);
-            if (elem && elem->val->tot_cost > tot_cost) {
-              elem->val = new_tok; // update it
+            if (elem) {
+              if ((*elem->val) > *new_tok) 
+                elem->val = new_tok; // update it
             } else {
               toks_shadowing_mod.Insert(arc.nextstate, new_tok);
             }
@@ -1041,7 +1058,7 @@ void Lattice2BiglmFasterDecoder::ProcessNonemitting(int32 frame) {
 void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame) {
   KALDI_ASSERT(toks_backfill_pair_.size() == toks_backfill_hclg_.size());
   // We have already construct the map when we previous special case.
-  if (toks_backfill_pair_.size() != frame ||
+  if (toks_backfill_pair_.size() > frame ||
       active_toks_.size() == toks_backfill_pair_.size()) { return; }
   if (active_toks_[frame].toks == NULL) {
     KALDI_WARN << "BuildBackfillMap: no tokens active on frame " << frame;
@@ -1061,13 +1078,18 @@ std::unordered_map<StateId, Token*> *hclg_map =
       (*pair_map)[cur_pair_id] = tok;
     }
     if (hclg_map->find(cur_hclg_id) != hclg_map->end()) {  // already exist
-      if (tok->tot_cost < (*hclg_map)[cur_hclg_id]->tot_cost) {  // better
+      if (*tok < *(*hclg_map)[cur_hclg_id]) {  // better
         (*hclg_map)[cur_hclg_id] = tok;
       }
     } else {  // new
       (*hclg_map)[cur_hclg_id] = tok;
     }
   }
+  // sanity check
+  /*
+  for (auto i:(*hclg_map)) 
+    KALDI_ASSERT(!i.second->shadowing_tok);
+    */
 
   toks_backfill_pair_.push_back(pair_map);
   toks_backfill_hclg_.push_back(hclg_map);
@@ -1199,7 +1221,6 @@ void Lattice2BiglmFasterDecoder::ProcessBetterExistingToken(
     }
   }
 }
-#endif
 
 void Lattice2BiglmFasterDecoder::ProcessBetterHCLGToken(int32 cur_frame,
                                                         Token *better_token) {
@@ -1321,6 +1342,7 @@ void Lattice2BiglmFasterDecoder::ProcessBetterHCLGToken(int32 cur_frame,
   (*toks_backfill_hclg_[cur_frame])[better_token->hclg_state] = better_token;
   better_token->shadowing_tok = NULL;  // already expand
 }
+#endif
 
 #if 0
 void Lattice2BiglmFasterDecoder::UpdateBackwardCost(int32 cur_frame,

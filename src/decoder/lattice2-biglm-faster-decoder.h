@@ -231,6 +231,12 @@ class Lattice2BiglmFasterDecoder {
       }
       links = NULL;
     }
+    inline bool operator < (const Token &other) const {
+      if (tot_cost == other.tot_cost) // this is important to garrenttee a single shadowing token
+        return lm_state < other.lm_state;
+      else return tot_cost < other.tot_cost;
+    }
+    inline bool operator > (const Token &other) const { return other < (*this); }
   };
   
   // head and tail of per-frame list of Tokens (list is in topological order),
