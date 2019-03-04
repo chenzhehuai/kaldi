@@ -383,8 +383,10 @@ class Lattice2BiglmFasterDecoder {
   // The following variables are used to check the existing tokens and best
   // token in certain frame. It will build in function ExpandShadowTokens()
   // Each element in the vector corresponds to a frame(t).
-  std::vector<std::unordered_map<PairId, Token*>* > toks_backfill_pair_;
-  std::vector<std::unordered_map<StateId, Token*>* > toks_backfill_hclg_;
+  typedef std::unordered_map<StateId, Token*> StateHash;
+  typedef std::unordered_map<PairId, Token*> PairHash;
+  std::vector<PairHash* > toks_backfill_pair_;
+  std::vector<StateHash* > toks_backfill_hclg_;
 
   // temp variable used to process special case. The pair is (t, state_id).
   // As we want to process the token which has smaller t index at first,
