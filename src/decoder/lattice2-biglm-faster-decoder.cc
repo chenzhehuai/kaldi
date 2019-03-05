@@ -242,8 +242,8 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
       // KALDI_ASSERT(toks_backfill_hclg_[frame]->find(tok->hclg_state)->second==tok->shadowing_tok);
       KALDI_ASSERT(!tok->links);
       Token* shadowing_tok = tok;
-      // TODO: a better method
-      while (shadowing_tok->shadowing_tok && !shadowing_tok->links && shadowing_tok->shadowing_tok!=tok) shadowing_tok = shadowing_tok->shadowing_tok;
+      if (shadowing_tok->shadowing_tok) shadowing_tok = shadowing_tok->shadowing_tok;
+      KALDI_ASSERT(!shadowing_tok->shadowing_tok);
       // Update toks_shadowing_mod for better_hclg here
       // Notice that we only update if it reaches NumFramesDecoded(), since it will affect explore
       if (frame == NumFramesDecoded() && *tok > *shadowing_tok) {
@@ -287,7 +287,8 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
     // However, the way to deal with them is similar.
     for (; link != NULL; link = link->next) {
       Token *next_tok = link->next_tok;
-      while (next_tok->shadowing_tok && !next_tok->links) next_tok=next_tok->shadowing_tok;
+      if (next_tok->shadowing_tok) next_tok=next_tok->shadowing_tok;
+      KALDI_ASSERT(!next_tok->shadowing_tok);
       int32 new_frame_index = link->ilabel ? frame+1 : frame; 
       if (new_frame_index<NumFramesDecoded() && !next_tok->links) continue; // this link should be pruned
       
