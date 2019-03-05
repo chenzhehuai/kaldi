@@ -186,11 +186,9 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame, bool is_las
     KALDI_WARN << "ExpandShadowTokens: no tokens active on frame " << cur_frame;
   }
 
-  // When we expand, if the arc.ilabel == 0, there maybe a new token is
-  // created in current frame. The queue "expand_current_frame_queue" is used
-  // to deal with all tokens in current frame in loop.
   typedef std::pair<Token*, int32> QElem;
   std::queue<QElem> expand_current_frame_queue;
+
   // Initialize the "expand_current_frame_queue" with current tokens.
   for (Token *tok = active_toks_[cur_frame].toks; tok != NULL; tok = tok->next) {
     BaseFloat cur_cutoff = (cur_frame+1 < cutoff_.Dim())?
@@ -234,7 +232,6 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
 
     ForwardLink *link=NULL, *links_to_clear=NULL;
     if (tok->shadowing_tok == NULL) {
-      //continue; // TODO
       // if we need to update a shadowing token itself
       link=tok->links;
       tok->links=NULL; // we firstly un-hook it from shadowing token
@@ -247,13 +244,15 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
       Token* shadowing_tok = tok;
       // TODO: a better method
       while (shadowing_tok->shadowing_tok && !shadowing_tok->links && shadowing_tok->shadowing_tok!=tok) shadowing_tok = shadowing_tok->shadowing_tok;
-      if (frame == NumFramesDecoded() && *tok > *shadowing_tok) { // better_hclg
+      // Update toks_shadowing_mod for better_hclg here
+      // Notice that we only update if it reaches NumFramesDecoded(), since it will affect explore
+      if (frame == NumFramesDecoded() && *tok > *shadowing_tok) {
         HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[frame%2];
         ElemShadow *elem = toks_shadowing_mod.Find(tok->hclg_state);
         assert(elem);
         if (*tok < *elem->val) {
           elem->val = tok;
-          update_backfill_for_better_hclg = true;
+          update_backfill_for_better_hclg = true; // we will update backfill table in the final
         }
       }
       link = shadowing_tok->links;
@@ -274,6 +273,17 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
       }
     }
 
+    // There will be four kinds of links need to be processed.
+    // 1. Go to next frame and the corresponding "next_tok" is shadowed
+    // 2. Go to next frame and the corresponding "next_tok" is the processed
+    // (Under most circumstances, it is the best one and processed in
+    // explore step)
+    // 3. Still in current frame and the corresponding "next_tok" is
+    // shadowed
+    // 4. Still in current frame and the corresponding "next_tok" is
+    // processed.(Under most circumstances, it is the best one and processed
+    // in explore step)
+    // However, the way to deal with them is similar.
     for (; link != NULL; link = link->next) {
       Token *next_tok = link->next_tok;
       while (next_tok->shadowing_tok && *next_tok > *next_tok->shadowing_tok) next_tok=next_tok->shadowing_tok;
@@ -311,26 +321,13 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
         tok_found = iter->second;
       }
 
-      // There will be four kinds of links need to be processed.
-      // 1. Go to next frame and the corresponding "next_tok" is shadowed
-      // 2. Go to next frame and the corresponding "next_tok" is the processed
-      // (Under most circumstances, it is the best one and processed in
-      // explore step)
-      // 3. Still in current frame and the corresponding "next_tok" is
-      // shadowed
-      // 4. Still in current frame and the corresponding "next_tok" is
-      // processed.(Under most circumstances, it is the best one and processed
-      // in explore step)
-      // However, the way to deal with them is similar.
       bool better_hclg=false;
       KALDI_ASSERT(toks_backfill_hclg_.size() > new_frame_index);
       auto iter_hclg = (*toks_backfill_hclg_[new_frame_index]).find(new_hclg_state);
       if (iter_hclg != (*toks_backfill_hclg_[new_frame_index]).end()) {
         // KALDI_ASSERT(!iter_hclg->second->shadowing_tok); // it is possible since better_hclg
-        //iter_hclg->second->links is possible to be NULL since it is possible hasnt been pruned
         if (tot_cost < iter_hclg->second->tot_cost) {
-          // ProcessBetterHCLGToken(new_frame_index, new_tok);
-          if (config_.better_hclg) better_hclg=true; // TODO: update toks_backfill_hclg_ & all shadowing_tok pointers
+          if (config_.better_hclg) better_hclg=true; // search: "Update toks_shadowing_mod for better_hclg" 
         } // although it is better hclg, we still keep its shadowing token for expanding in the next iter
       } else {
         KALDI_ASSERT(0);
