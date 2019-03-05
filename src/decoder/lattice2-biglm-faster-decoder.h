@@ -32,8 +32,66 @@
 
 namespace kaldi {
 
-// The options are the same as for lattice-faster-decoder.h for now.
-typedef LatticeFasterDecoderConfig Lattice2BiglmFasterDecoderConfig;
+struct Lattice2BiglmFasterDecoderConfig{
+  BaseFloat beam;
+  int32 max_active;
+  int32 min_active;
+  BaseFloat lattice_beam;
+  int32 prune_interval;
+  bool determinize_lattice; // not inspected by this class... used in
+                            // command-line program.
+  BaseFloat beam_delta; // has nothing to do with beam_ratio
+  BaseFloat hash_ratio;
+  BaseFloat expand_beam;
+  BaseFloat prune_scale;   // Note: we don't make this configurable on the command line,
+                           // it's not a very important parameter.  It affects the
+                           // algorithm that prunes the tokens as we go.
+  // Most of the options inside det_opts are not actually queried by the
+  // LatticeFasterDecoder class itself, but by the code that calls it, for
+  // example in the function DecodeUtteranceLatticeFaster.
+  fst::DeterminizeLatticePhonePrunedOptions det_opts;
+  bool better_hclg;
+
+  Lattice2BiglmFasterDecoderConfig(): beam(16.0),
+                                max_active(std::numeric_limits<int32>::max()),
+                                min_active(200),
+                                lattice_beam(10.0),
+                                prune_interval(25),
+                                determinize_lattice(true),
+                                beam_delta(0.5),
+                                hash_ratio(2.0),
+                                expand_beam(16.0),
+                                prune_scale(0.1),
+  better_hclg(false) { }
+  void Register(OptionsItf *opts) {
+    det_opts.Register(opts);
+    opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
+    opts->Register("max-active", &max_active, "Decoder max active states.  Larger->slower; "
+                   "more accurate");
+    opts->Register("min-active", &min_active, "Decoder minimum #active states.");
+    opts->Register("lattice-beam", &lattice_beam, "Lattice generation beam.  Larger->slower, "
+                   "and deeper lattices");
+    opts->Register("prune-interval", &prune_interval, "Interval (in frames) at "
+                   "which to prune tokens");
+    opts->Register("determinize-lattice", &determinize_lattice, "If true, "
+                   "determinize the lattice (lattice-determinization, keeping only "
+                   "best pdf-sequence for each word-sequence).");
+    opts->Register("beam-delta", &beam_delta, "Increment used in decoding-- this "
+                   "parameter is obscure and relates to a speedup in the way the "
+                   "max-active constraint is applied.  Larger is more accurate.");
+    opts->Register("hash-ratio", &hash_ratio, "Setting used in decoder to "
+                   "control hash behavior");
+    opts->Register("expand-beam", &expand_beam, "Expanding beam.");
+    opts->Register("better-hclg", &better_hclg, "Expanding better HCLG states.");
+  }
+  void Check() const {
+    KALDI_ASSERT(beam > 0.0 && max_active > 1 && lattice_beam > 0.0
+                 && prune_interval > 0 && beam_delta > 0.0 && hash_ratio >= 1.0
+                 && prune_scale > 0.0 && prune_scale < 1.0);
+  }
+};
+
+
 
 /** This is as LatticeFasterDecoder, but does online composition between
     HCLG and the "difference language model", which is a deterministic
@@ -107,7 +165,7 @@ class Lattice2BiglmFasterDecoder {
   // Furthermore, the expanding will be related to current frame and next frame.
   // For judging the token has better cost or reaching existing token, we build
   // the backfill maps.
-  void ExpandShadowTokens(int32 frame);
+  void ExpandShadowTokens(int32 frame, bool is_last=false);
 
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
