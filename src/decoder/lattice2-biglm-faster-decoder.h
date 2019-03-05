@@ -1,7 +1,6 @@
 // decoder/lattice2-biglm-faster-decoder.h
 
-// Copyright      2018  Zhehuai Chen
-//                      Hang Lyu
+// Copyright      2018  Hang Lyu  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -531,23 +530,6 @@ class Lattice2BiglmFasterDecoder {
   // ExpandShadowTokens(), it will be increased. In PruneTokenForFrame(), it
   // will be decreased.
   void BuildBackfillMap(int32 frame, bool append=true);
-
-  // A recursive function. This can happen when LM histories merge, if a 
-  // previously un-promising path became better.  Before further exploration, 
-  // propagate the change in cost forward through the lattice until it reaches
-  // the current frame, so that we can decode with up-to-date alphas.
-  void ProcessBetterExistingToken(int32 cur_frame, PairId new_pair_id,
-                                  BaseFloat new_tot_cost);
-
-  // A recursive function. Propagate this state and its successors untill
-  // current frame.
-  void ProcessBetterHCLGToken(int32 cur_frame, Token *better_token);
-
-  // Update the Backward cost of each token. Assume the current frame is the
-  // fake final frame. Iterator frame-1 to 0. For each token, the formula is
-  // tok->backward_cost = min(next_tok->backward_cost + link->graph +
-  // link->acoustic)
-  void UpdateBackwardCost(int32 cur_frame, BaseFloat delta);
 
   Vector<BaseFloat> cutoff_;
   uint64 propage_lm_num_;
