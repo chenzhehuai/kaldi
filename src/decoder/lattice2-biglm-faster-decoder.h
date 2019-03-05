@@ -530,6 +530,7 @@ class Lattice2BiglmFasterDecoder {
   // ExpandShadowTokens(), it will be increased. In PruneTokenForFrame(), it
   // will be decreased.
   void BuildBackfillMap(int32 frame, bool append=true);
+  void BuildHCLGMapFromHash(int32 frame, bool append=true);
 
   Vector<BaseFloat> cutoff_;
   uint64 propage_lm_num_;
