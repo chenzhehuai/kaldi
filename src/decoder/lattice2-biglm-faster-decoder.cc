@@ -280,7 +280,7 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
 
     for (; link != NULL; link = link->next) {
       Token *next_tok = link->next_tok;
-      if (next_tok->shadowing_tok) next_tok=next_tok->shadowing_tok;
+      while (next_tok->shadowing_tok) next_tok=next_tok->shadowing_tok;
       KALDI_ASSERT(!next_tok->shadowing_tok);
       
       Arc arc(link->ilabel, link->olabel, link->graph_cost_ori, 0);
