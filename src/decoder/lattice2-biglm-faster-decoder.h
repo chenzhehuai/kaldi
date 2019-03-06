@@ -49,7 +49,7 @@ struct Lattice2BiglmFasterDecoderConfig{
   // LatticeFasterDecoder class itself, but by the code that calls it, for
   // example in the function DecodeUtteranceLatticeFaster.
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
-  bool better_hclg;
+  int better_hclg;
 
   Lattice2BiglmFasterDecoderConfig(): beam(16.0),
                                 max_active(std::numeric_limits<int32>::max()),
@@ -446,6 +446,7 @@ class Lattice2BiglmFasterDecoder {
   // The following variables are used to check the existing tokens and best
   // token in certain frame. It will build in function ExpandShadowTokens()
   // Each element in the vector corresponds to a frame(t).
+  // TODO: add comments: we only update toks_shadowing_ but not toks_backfill_hclg_
   typedef std::unordered_map<StateId, Token*> StateHash;
   typedef std::unordered_map<PairId, Token*> PairHash;
   std::vector<PairHash* > toks_backfill_pair_;
