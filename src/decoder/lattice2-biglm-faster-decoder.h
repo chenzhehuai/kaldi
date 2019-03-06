@@ -50,6 +50,7 @@ struct Lattice2BiglmFasterDecoderConfig{
   // example in the function DecodeUtteranceLatticeFaster.
   fst::DeterminizeLatticePhonePrunedOptions det_opts;
   int better_hclg;
+  int explore_interval;
 
   Lattice2BiglmFasterDecoderConfig(): beam(16.0),
                                 max_active(std::numeric_limits<int32>::max()),
@@ -61,7 +62,7 @@ struct Lattice2BiglmFasterDecoderConfig{
                                 hash_ratio(2.0),
                                 expand_beam(16.0),
                                 prune_scale(0.1),
-  better_hclg(false) { }
+  better_hclg(false), explore_interval(0) { }
   void Register(OptionsItf *opts) {
     det_opts.Register(opts);
     opts->Register("beam", &beam, "Decoding beam.  Larger->slower, more accurate.");
@@ -82,6 +83,7 @@ struct Lattice2BiglmFasterDecoderConfig{
                    "control hash behavior");
     opts->Register("expand-beam", &expand_beam, "Expanding beam.");
     opts->Register("better-hclg", &better_hclg, "Expanding better HCLG states.");
+    opts->Register("explore-interval", &explore_interval, "the interval between explore and expand.");
   }
   void Check() const {
     KALDI_ASSERT(beam > 0.0 && max_active > 1 && lattice_beam > 0.0
@@ -128,7 +130,6 @@ class Lattice2BiglmFasterDecoder {
     ClearActiveTokens();
     // Clean up backfill map
     for (int32 frame = NumFramesDecoded(); frame >= 0; frame--) {
-      delete toks_backfill_pair_[frame];
       delete toks_backfill_hclg_[frame];
     }
   }
@@ -164,7 +165,7 @@ class Lattice2BiglmFasterDecoder {
   // Furthermore, the expanding will be related to current frame and next frame.
   // For judging the token has better cost or reaching existing token, we build
   // the backfill maps.
-  void ExpandShadowTokens(int32 frame, bool is_last=false);
+  void ExpandShadowTokens(int32 frame, int32 frame_stop_expand, bool first=false);
 
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
@@ -403,6 +404,7 @@ class Lattice2BiglmFasterDecoder {
       return lm_state; // no change in LM state if no word crossed.
     } else { // Propagate in the LM-diff FST.
       propage_lm_num_++;
+      if (expanding_) propage_lm_expand_num_++;
       Arc lm_arc;
       bool ans = lm_diff_fst_->GetArc(lm_state, arc->olabel, &lm_arc);
       if (!ans) { // this case is unexpected for statistical LMs.
@@ -449,8 +451,13 @@ class Lattice2BiglmFasterDecoder {
   // TODO: add comments: we only update toks_shadowing_ but not toks_backfill_hclg_
   typedef std::unordered_map<StateId, Token*> StateHash;
   typedef std::unordered_map<PairId, Token*> PairHash;
-  std::vector<PairHash* > toks_backfill_pair_;
+  PairHash toks_backfill_pair_[2];
   std::vector<StateHash* > toks_backfill_hclg_;
+  typedef std::pair<Token*, int32> QElem;
+  std::queue<QElem> expand_current_frame_queue_[2];
+  std::queue<QElem>& GetExpandQueue(int32 frame) { return expand_current_frame_queue_[frame%2]; }
+  PairHash& GetBackfillMap(int32 frame) { return toks_backfill_pair_[frame%2]; }
+  void InitDecoding();
 
   // temp variable used to process special case. The pair is (t, state_id).
   // As we want to process the token which has smaller t index at first,
@@ -530,11 +537,13 @@ class Lattice2BiglmFasterDecoder {
   // Actually, we only build the two maps for each frame once. Otherwise, in
   // ExpandShadowTokens(), it will be increased. In PruneTokenForFrame(), it
   // will be decreased.
-  void BuildBackfillMap(int32 frame, bool append=true);
+  void BuildBackfillMap(int32 frame, int32 frame_stop_expand, bool clear=false);
   void BuildHCLGMapFromHash(int32 frame, bool append=true);
 
   Vector<BaseFloat> cutoff_;
   uint64 propage_lm_num_;
+  uint64 propage_lm_expand_num_;
+  bool expanding_;
 };
 
 } // end namespace kaldi.
