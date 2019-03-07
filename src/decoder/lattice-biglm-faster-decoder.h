@@ -61,7 +61,6 @@ class LatticeBiglmFasterDecoder {
       fst_(fst), lm_diff_fst_(lm_diff_fst), config_(config),
       warned_noarc_(false), num_toks_(0) {
     config.Check();
-    cutoff_per_frame_.clear();
     KALDI_ASSERT(fst.Start() != fst::kNoStateId &&
                  lm_diff_fst->Start() != fst::kNoStateId);
     toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
@@ -73,22 +72,10 @@ class LatticeBiglmFasterDecoder {
     ClearActiveTokens();
   }
 
-  // Get Cutoff
-  void GetExactCutoffPerFrame(Vector<BaseFloat> *cutoff) {
-    cutoff->Resize(cutoff_per_frame_.size());
-    for (int32 i = 0; i < cutoff_per_frame_.size(); i++) {
-      (*cutoff)(i) = cutoff_per_frame_[i];
-    }
-    cutoff_per_frame_.clear();
-  }
-
-
-  inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
   // Returns true if any kind of traceback is available (not necessarily from
   // a final state).
   bool Decode(DecodableInterface *decodable) {
     // clean up from last time:
-    cutoff_per_frame_.clear();
     DeleteElems(toks_.Clear());
     ClearActiveTokens();
     warned_ = false;
@@ -101,7 +88,6 @@ class LatticeBiglmFasterDecoder {
     active_toks_[0].toks = start_tok;
     toks_.Insert(start_pair, start_tok);
     num_toks_++;
-    propage_lm_num_=0;
     ProcessNonemitting(0);
     
     // We use 1-based indexing for frames in this decoder (if you view it in
@@ -119,7 +105,6 @@ class LatticeBiglmFasterDecoder {
       else if (frame % config_.prune_interval == 0)
         PruneActiveTokens(frame, config_.lattice_beam * 0.1); // use larger delta.        
     }
-    KALDI_VLOG(1) << "propage_lm_num_: " << propage_lm_num_;
     // Returns true if we have any kind of traceback available (not necessarily
     // to the end state; query ReachedFinal() for that).
     return !final_costs_.empty();
@@ -570,12 +555,7 @@ class LatticeBiglmFasterDecoder {
       }
     }
   }
-  int32 ToksNum(int32 f) {
-    int32 c=0;
-    for (Token *t=active_toks_[f].toks; t; t=t->next) c++;
-    return c;
-  }
-
+  
   // Go backwards through still-alive tokens, pruning them.  note: cur_frame is
   // where hash toks_ are (so we do not want to mess with it because these tokens
   // don't yet have forward pointers), but we do all previous frames, unless we
@@ -607,7 +587,6 @@ class LatticeBiglmFasterDecoder {
     }
     KALDI_VLOG(3) << "PruneActiveTokens: pruned tokens from " << num_toks_begin
                   << " to " << num_toks_;
-  KALDI_VLOG(2) << "expand fr num: " << cur_frame-config_.prune_interval << " " << ToksNum(cur_frame-config_.prune_interval);
   }
 
   // Version of PruneActiveTokens that we call on the final frame.
@@ -686,7 +665,6 @@ class LatticeBiglmFasterDecoder {
     if (arc->olabel == 0) {
       return lm_state; // no change in LM state if no word crossed.
     } else { // Propagate in the LM-diff FST.
-      propage_lm_num_++;
       Arc lm_arc;
       bool ans = lm_diff_fst_->GetArc(lm_state, arc->olabel, &lm_arc);
       if (!ans) { // this case is unexpected for statistical LMs.
@@ -714,12 +692,7 @@ class LatticeBiglmFasterDecoder {
     size_t tok_cnt;
     BaseFloat cur_cutoff = GetCutoff(last_toks, &tok_cnt, &adaptive_beam, &best_elem);
     PossiblyResizeHash(tok_cnt);  // This makes sure the hash is always big enough.    
-    KALDI_VLOG(6) << "Adaptive beam on frame " << frame << "\t" << NumFramesDecoded() << " is "
-                << adaptive_beam << "\t" << cur_cutoff;
-
-  
-    KALDI_ASSERT(cutoff_per_frame_.size() == frame - 1);
-    cutoff_per_frame_.push_back(cur_cutoff);
+    
     BaseFloat next_cutoff = std::numeric_limits<BaseFloat>::infinity();
     // pruning "online" before having seen all tokens
 
@@ -875,9 +848,6 @@ class LatticeBiglmFasterDecoder {
   // on the last frame.
   std::map<Token*, BaseFloat> final_costs_; // A cache of final-costs
   // of tokens on the last frame-- it's just convenient to store it this way.
-  //
-  // Get cutoff
-  std::vector<BaseFloat> cutoff_per_frame_;
   
   // It might seem unclear why we call DeleteElems(toks_.Clear()).
   // There are two separate cleanup tasks we need to do at when we start a new file.
@@ -908,7 +878,6 @@ class LatticeBiglmFasterDecoder {
     active_toks_.clear();
     KALDI_ASSERT(num_toks_ == 0);
   }
-  uint64 propage_lm_num_;
 };
 
 } // end namespace kaldi.
