@@ -28,6 +28,7 @@
 #include "fstext/fstext-lib.h"
 #include "lat/kaldi-lattice.h"
 #include "decoder/lattice-faster-decoder.h" // for options.
+#include "base/timer.h"
 
 namespace kaldi {
 
@@ -132,6 +133,7 @@ class Lattice2BiglmFasterDecoder {
     for (int32 frame = NumFramesDecoded(); frame >= 0; frame--) {
       delete toks_backfill_hclg_[frame];
     }
+    KALDI_VLOG(1) << "time: " << expand_time_ << " " << propage_time_<< " " << ta_ << " " << tb_;
   }
 
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
@@ -316,6 +318,8 @@ class Lattice2BiglmFasterDecoder {
     if (new_sz > toks_.Size()) {
       toks_.SetSize(new_sz);
     }
+    HashList<StateId, Token*> &h = toks_shadowing_[NumFramesDecoded()%2];
+    if (new_sz > h.Size()) h.SetSize(new_sz);
   }
 
   // FindOrAddToken either locates a token in hash of toks_,
@@ -403,10 +407,12 @@ class Lattice2BiglmFasterDecoder {
     if (arc->olabel == 0) {
       return lm_state; // no change in LM state if no word crossed.
     } else { // Propagate in the LM-diff FST.
+      Timer timer;
       propage_lm_num_++;
       if (expanding_) propage_lm_expand_num_++;
       Arc lm_arc;
       bool ans = lm_diff_fst_->GetArc(lm_state, arc->olabel, &lm_arc);
+      propage_time_+=timer.Elapsed();
       if (!ans) { // this case is unexpected for statistical LMs.
         if (!warned_noarc_) {
           warned_noarc_ = true;
@@ -449,8 +455,12 @@ class Lattice2BiglmFasterDecoder {
   // token in certain frame. It will build in function ExpandShadowTokens()
   // Each element in the vector corresponds to a frame(t).
   // TODO: add comments: we only update toks_shadowing_ but not toks_backfill_hclg_
-  typedef std::unordered_map<StateId, Token*> StateHash;
-  typedef std::unordered_map<PairId, Token*> PairHash;
+  typedef std::unordered_map<StateId, Token*,
+          std::hash<StateId>, std::equal_to<StateId>,
+          fst::PoolAllocator<std::pair<const StateId, Token*> > > StateHash;
+  typedef std::unordered_map<PairId, Token*,
+          std::hash<PairId>, std::equal_to<PairId>,
+          fst::PoolAllocator<std::pair<const PairId, Token*> > > PairHash;
   PairHash toks_backfill_pair_[2];
   std::vector<StateHash* > toks_backfill_hclg_;
   typedef std::pair<Token*, int32> QElem;
@@ -544,6 +554,9 @@ class Lattice2BiglmFasterDecoder {
   uint64 propage_lm_num_;
   uint64 propage_lm_expand_num_;
   bool expanding_;
+  double expand_time_;
+  double propage_time_;
+  double ta_, tb_;
 };
 
 } // end namespace kaldi.

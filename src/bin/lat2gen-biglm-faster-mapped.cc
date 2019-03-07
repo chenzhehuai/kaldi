@@ -221,6 +221,7 @@ int main(int argc, char *argv[]) {
     double tot_like = 0.0;
     kaldi::int64 frame_count = 0;
     int num_success = 0, num_fail = 0;
+    double elapsed = 0;
 
 
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
@@ -255,13 +256,13 @@ int main(int argc, char *argv[]) {
             num_success++;
           } else num_fail++;
         }
+        elapsed = timer.Elapsed();
       }
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
       assert(0);
     }
       
-    double elapsed = timer.Elapsed();
     KALDI_LOG << "Time taken "<< elapsed
               << "s: real-time factor assuming 100 frames/sec is "
               << (elapsed*100.0/frame_count);

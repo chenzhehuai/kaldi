@@ -607,7 +607,7 @@ class LatticeBiglmFasterDecoder {
     }
     KALDI_VLOG(3) << "PruneActiveTokens: pruned tokens from " << num_toks_begin
                   << " to " << num_toks_;
-  KALDI_VLOG(1) << "expand fr num: " << cur_frame-config_.prune_interval << " " << ToksNum(cur_frame-config_.prune_interval);
+  KALDI_VLOG(2) << "expand fr num: " << cur_frame-config_.prune_interval << " " << ToksNum(cur_frame-config_.prune_interval);
   }
 
   // Version of PruneActiveTokens that we call on the final frame.
