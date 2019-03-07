@@ -25,6 +25,7 @@
 #include "fstext/fstext-lib.h"
 #include "decoder/decoder-wrappers.h"
 #include "decoder/decodable-matrix.h"
+#include "lm/const-arpa-lm.h"
 #include "base/timer.h"
 #include "decoder/lattice-biglm-faster-decoder.h"
 
@@ -160,6 +161,7 @@ int main(int argc, char *argv[]) {
     bool allow_partial = false;
     BaseFloat acoustic_scale = 0.1;
     LatticeBiglmFasterDecoderConfig config;
+    bool use_carpa = false;
     
     std::string word_syms_filename;
     config.Register(&po);
@@ -167,7 +169,10 @@ int main(int argc, char *argv[]) {
 
     po.Register("word-symbol-table", &word_syms_filename, "Symbol table for words [for debug output]");
     po.Register("allow-partial", &allow_partial, "If true, produce output even if end state was not reached.");
-    
+    po.Register("use-const-arpa", &use_carpa, "If true, read the old-LM file "
+             "as a const-arpa file as opposed to an FST file");
+
+ 
     po.Read(argc, argv);
 
     if (po.NumArgs() < 6 || po.NumArgs() > 8) {
@@ -187,17 +192,29 @@ int main(int argc, char *argv[]) {
     TransitionModel trans_model;
     ReadKaldiObject(model_in_filename, &trans_model);
 
-    VectorFst<StdArc> *old_lm_fst = fst::CastOrConvertToVectorFst(
-        fst::ReadFstKaldiGeneric(old_lm_fst_rxfilename));
-    ApplyProbabilityScale(-1.0, old_lm_fst); // Negate old LM probs...
-    
-    VectorFst<StdArc> *new_lm_fst = fst::CastOrConvertToVectorFst(
-        fst::ReadFstKaldiGeneric(new_lm_fst_rxfilename));
-
+    VectorFst<StdArc> *old_lm_fst = fst::ReadAndPrepareLmFst(
+        old_lm_fst_rxfilename);
     fst::BackoffDeterministicOnDemandFst<StdArc> old_lm_dfst(*old_lm_fst);
-    fst::BackoffDeterministicOnDemandFst<StdArc> new_lm_dfst(*new_lm_fst);
-    fst::ComposeDeterministicOnDemandFst<StdArc> compose_dfst(&old_lm_dfst,
-                                                              &new_lm_dfst);
+    fst::ScaleDeterministicOnDemandFst old_lm_sdfst(-1,
+                                                  &old_lm_dfst);
+
+    fst::DeterministicOnDemandFst<StdArc>* new_lm_dfst = NULL;
+    VectorFst<StdArc> *new_lm_fst = NULL; 
+    ConstArpaLm* const_arpa = NULL;
+
+    if (use_carpa) {
+      const_arpa = new ConstArpaLm();
+      ReadKaldiObject(new_lm_fst_rxfilename, const_arpa);
+      new_lm_dfst = new ConstArpaLmDeterministicFst(*const_arpa);
+    } else {
+      new_lm_fst = fst::ReadAndPrepareLmFst(
+          new_lm_fst_rxfilename);
+      new_lm_dfst =
+        new fst::BackoffDeterministicOnDemandFst<StdArc>(*new_lm_fst);
+    }
+
+    fst::ComposeDeterministicOnDemandFst<StdArc> compose_dfst(&old_lm_sdfst,
+                                                              new_lm_dfst);
     fst::CacheDeterministicOnDemandFst<StdArc> cache_dfst(&compose_dfst, 1e7);
 
     bool determinize = config.determinize_lattice;
@@ -221,6 +238,7 @@ int main(int argc, char *argv[]) {
     double tot_like = 0.0;
     kaldi::int64 frame_count = 0;
     int num_success = 0, num_fail = 0;
+    double elapsed = 0;
 
 
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
@@ -255,13 +273,13 @@ int main(int argc, char *argv[]) {
             num_success++;
           } else num_fail++;
         }
+        elapsed = timer.Elapsed();
       }
       delete decode_fst; // delete this only after decoder goes out of scope.
     } else { // We have different FSTs for different utterances.
       assert(0);
     }
       
-    double elapsed = timer.Elapsed();
     KALDI_LOG << "Time taken "<< elapsed
               << "s: real-time factor assuming 100 frames/sec is "
               << (elapsed*100.0/frame_count);
@@ -271,6 +289,11 @@ int main(int argc, char *argv[]) {
               << frame_count<<" frames.";
 
     delete word_syms;
+
+    delete const_arpa;
+    delete new_lm_fst;
+    delete new_lm_dfst;
+
     if (num_success != 0) return 0;
     else return 1;
   } catch(const std::exception &e) {
