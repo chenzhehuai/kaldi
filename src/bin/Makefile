@@ -28,7 +28,7 @@ BINFILES = align-equal align-equal-compiled acc-tree-stats \
 
 OBJFILES =
 
-ADDLIBS = ../decoder/kaldi-decoder.a ../lat/kaldi-lat.a ../lm/kaldi-lm.a \
+ADDLIBS = ../cudamatrix/kaldi-cudamatrix.a ../nnet3/kaldi-nnet3.a ../rnnlm/kaldi-rnnlm.a ../decoder/kaldi-decoder.a ../lat/kaldi-lat.a ../lm/kaldi-lm.a \
           ../fstext/kaldi-fstext.a ../hmm/kaldi-hmm.a \
           ../transform/kaldi-transform.a ../gmm/kaldi-gmm.a \
           ../tree/kaldi-tree.a ../util/kaldi-util.a \

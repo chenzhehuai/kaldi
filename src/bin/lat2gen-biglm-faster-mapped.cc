@@ -26,6 +26,7 @@
 #include "decoder/decoder-wrappers.h"
 #include "decoder/decodable-matrix.h"
 #include "lm/const-arpa-lm.h"
+#include "rnnlm/rnnlm-lattice-rescoring.h"
 #include "base/timer.h"
 #include "decoder/lattice2-biglm-faster-decoder.h"
 
@@ -161,16 +162,24 @@ int main(int argc, char *argv[]) {
     bool allow_partial = false;
     BaseFloat acoustic_scale = 0.1;
     Lattice2BiglmFasterDecoderConfig config;
+    int32 max_ngram_order = 4;
+    rnnlm::RnnlmComputeStateComputationOptions rnn_opts;
     bool use_carpa = false;
     
-    std::string word_syms_filename;
+    std::string word_syms_filename, word_embedding_rxfilename;
     config.Register(&po);
+    rnn_opts.Register(&po);
     po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
 
     po.Register("word-symbol-table", &word_syms_filename, "Symbol table for words [for debug output]");
     po.Register("allow-partial", &allow_partial, "If true, produce output even if end state was not reached.");
     po.Register("use-const-arpa", &use_carpa, "If true, read the old-LM file "
              "as a const-arpa file as opposed to an FST file");
+    po.Register("word-embedding-rxfilename", &word_embedding_rxfilename, "If set, use rnnlm");
+    po.Register("max-ngram-order", &max_ngram_order,
+        "If positive, allow RNNLM histories longer than this to be identified "
+        "with each other for rescoring purposes (an approximation that "
+        "saves time and reduces output lattice size).");
 
  
     po.Read(argc, argv);
@@ -201,8 +210,18 @@ int main(int argc, char *argv[]) {
     fst::DeterministicOnDemandFst<StdArc>* new_lm_dfst = NULL;
     VectorFst<StdArc> *new_lm_fst = NULL; 
     ConstArpaLm* const_arpa = NULL;
+    CuMatrix<BaseFloat>* word_embedding_mat = NULL;
+    kaldi::nnet3::Nnet *rnnlm = NULL;
+    const rnnlm::RnnlmComputeStateInfo *info = NULL;
 
-    if (use_carpa) {
+    if (word_embedding_rxfilename!="") {
+      rnnlm = new kaldi::nnet3::Nnet();
+      word_embedding_mat = new CuMatrix<BaseFloat>();
+      ReadKaldiObject(word_embedding_rxfilename, word_embedding_mat);
+      ReadKaldiObject(new_lm_fst_rxfilename, rnnlm);
+      info = new rnnlm::RnnlmComputeStateInfo(rnn_opts, *rnnlm, *word_embedding_mat);
+      new_lm_dfst = new rnnlm::KaldiRnnlmDeterministicFst(max_ngram_order, *info);
+    } else if (use_carpa) {
       const_arpa = new ConstArpaLm();
       ReadKaldiObject(new_lm_fst_rxfilename, const_arpa);
       new_lm_dfst = new ConstArpaLmDeterministicFst(*const_arpa);
@@ -293,6 +312,9 @@ int main(int argc, char *argv[]) {
     delete const_arpa;
     delete new_lm_fst;
     delete new_lm_dfst;
+    delete word_embedding_mat;
+    delete rnnlm;
+    delete info;
 
     if (num_success != 0) return 0;
     else return 1;
