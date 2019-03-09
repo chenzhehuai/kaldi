@@ -260,7 +260,7 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
                                    link->graph_cost_ori);
       
       if (update_tok && !new_tok->in_queue) {
-        if (is_last || better_hclg) {
+        if (is_last || better_hclg || new_frame_index == frame) {
           new_tok->shadowing_tok = iter_hclg->second; // by default
           if (new_tok->shadowing_tok == new_tok) { 
             // if new_tok is the shadowing token
