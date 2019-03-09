@@ -167,7 +167,7 @@ class Lattice2BiglmFasterDecoder {
   // Furthermore, the expanding will be related to current frame and next frame.
   // For judging the token has better cost or reaching existing token, we build
   // the backfill maps.
-  void ExpandShadowTokens(int32 frame, int32 frame_stop_expand, bool first=false);
+  void ExpandShadowTokens(int32 frame, int32 frame_stop_expand, DecodableInterface *decodable, bool first=false);
 
   /// says whether a final-state was active on the last frame.  If it was not, the
   /// lattice (or traceback) will end with states that are not final-states.
@@ -549,6 +549,10 @@ class Lattice2BiglmFasterDecoder {
   // will be decreased.
   void BuildBackfillMap(int32 frame, int32 frame_stop_expand, bool clear=false);
   void BuildHCLGMapFromHash(int32 frame, bool append=true);
+  Token *ExpandShadowTokensSub(StateId ilabel, 
+    StateId new_hclg_state, StateId new_lm_state, int32 frame, 
+    int32 new_frame_index, BaseFloat tot_cost, BaseFloat extra_cost, BaseFloat backward_cost,
+    bool is_last);
 
   Vector<BaseFloat> cutoff_;
   uint64 propage_lm_num_;
