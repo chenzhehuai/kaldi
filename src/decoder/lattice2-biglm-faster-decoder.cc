@@ -144,7 +144,7 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
       while (shadowing_tok->shadowing_tok && !shadowing_tok->links) shadowing_tok = shadowing_tok->shadowing_tok;
       // Update toks_shadowing_mod for better_hclg here
       // Notice that we only update if it reaches NumFramesDecoded(), since it will affect explore
-      if (frame == NumFramesDecoded() && *tok > *shadowing_tok) {
+      if (frame == NumFramesDecoded() && *tok < *shadowing_tok) {
         HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[frame%2];
         ElemShadow *elem = toks_shadowing_mod.Find(tok->hclg_state);
         if (elem) {
@@ -173,7 +173,7 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
       }
     }
 
-    if (cur_better_hclg && config_.better_hclg==2) {
+    if (cur_better_hclg && config_.better_hclg>=2) {
       for (fst::ArcIterator<fst::Fst<Arc> > aiter(fst_, tok->hclg_state);
            !aiter.Done();
            aiter.Next()) {
@@ -196,7 +196,7 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
         // prepare to store a new token in the current / next frame
         if (new_frame_index+1 < cutoff_.Dim() &&
             tot_cost > cutoff_(new_frame_index+1)) continue;
-        if (extra_cost > config_.lattice_beam) continue;
+        if (extra_cost > config_.beam) continue;
         Token* new_tok = ExpandShadowTokensSub(ilabel, new_hclg_state, new_lm_state, frame, new_frame_index, tot_cost, extra_cost, backward_cost, is_last);
         // create lattice arc
         tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
@@ -241,7 +241,7 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
         // prepare to store a new token in the current / next frame
         if (new_frame_index+1 < cutoff_.Dim() &&
             tot_cost > cutoff_(new_frame_index+1)) continue;
-        if (extra_cost > config_.lattice_beam) continue;
+        if (extra_cost > config_.beam) continue;
         Token* new_tok = ExpandShadowTokensSub(ilabel, new_hclg_state, new_lm_state, frame, new_frame_index, tot_cost, extra_cost, backward_cost, is_last);
         // create lattice arc
         tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
@@ -423,7 +423,7 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
         // link_exta_cost is the difference in score between the best paths
         // through link source state and through link destination state
         KALDI_ASSERT(link_extra_cost == link_extra_cost); // check for NaN
-        if (link_extra_cost > config_.lattice_beam) { // excise link
+        if (link_extra_cost > config_.beam) { // excise link
           ForwardLink *next_link = link->next;
           if (prev_link != NULL) prev_link->next = next_link;
           else tok->links = next_link;
@@ -785,7 +785,7 @@ Lattice2BiglmFasterDecoder::Token* Lattice2BiglmFasterDecoder::ExpandShadowToken
         // KALDI_ASSERT(!new_tok->shadowing_tok->shadowing_tok || new_tok->shadowing_tok->shadowing_tok != new_tok);
         new_tok->DeleteForwardLinks();
       } 
-      next_q.push(QElem(new_tok, better_hclg));
+      next_q.push(QElem(new_tok, better_hclg || (config_.better_hclg==3 && update_tok)));
       new_tok->in_queue=true;
     }
   }
