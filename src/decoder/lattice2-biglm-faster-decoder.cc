@@ -99,7 +99,9 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame, int32 frame
   Timer timer;
   
   expanding_=true;
+  HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[cur_frame%2];
   bool is_last = cur_frame <= frame_stop_expand; // the last time we do expand in this frame
+  bool update_last = 0;
   KALDI_ASSERT(cur_frame >= 0);
   auto& cur_q = GetExpandQueue(cur_frame);
   auto& cur_h = GetBackfillMap(cur_frame);
@@ -145,11 +147,11 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
       // Update toks_shadowing_mod for better_hclg here
       // Notice that we only update if it reaches NumFramesDecoded(), since it will affect explore
       if (frame == NumFramesDecoded() && *tok < *shadowing_tok) {
-        HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[frame%2];
         ElemShadow *elem = toks_shadowing_mod.Find(tok->hclg_state);
         if (elem) {
-          if (*tok < *elem->val) {
+          if (*tok < *elem->val && tok!=elem->val) {
             elem->val = tok;
+            update_last = 1;
             // sanity check
             // KALDI_ASSERT(!(*toks_backfill_hclg_[frame]).find(tok->hclg_state)->second->shadowing_tok);
           }
@@ -260,6 +262,23 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
   // Clean the backfill map
   cur_h.clear();
   if (is_last) toks_backfill_hclg_[cur_frame]->clear();
+  if (update_last && !decodable->IsLastFrame(cur_frame-1)) { // do not need to do it for the final decoding step since we will never expand any more
+    for(Token *cur_tok = active_toks_[cur_frame].toks; cur_tok != NULL; cur_tok = cur_tok->next) {
+      // toks_shadowing_mod stores the best record in each HCLG state
+      ElemShadow *elem = toks_shadowing_mod.Find(cur_tok->hclg_state);
+      if (!elem) continue;
+      if (cur_tok == elem->val){
+        cur_tok->shadowing_tok = NULL;
+      } else {
+        cur_tok->shadowing_tok = elem->val;
+        // sanity check
+        KALDI_ASSERT(!cur_tok->shadowing_tok->shadowing_tok || cur_tok->shadowing_tok->shadowing_tok != cur_tok);
+        cur_tok->extra_cost=std::numeric_limits<BaseFloat>::infinity();
+        cur_tok->DeleteForwardLinks(); // since some tok could be shadowed after exploring in the same decoding step
+      }
+    }
+
+  }
     
   KALDI_VLOG(2) << "expand fr num: " << cur_frame << " " << is_last << " " << GetExpandQueue(cur_frame+1).size() << " " << ToksNum(cur_frame);
   expanding_=false;
