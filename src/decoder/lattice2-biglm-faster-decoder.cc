@@ -101,7 +101,6 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame, int32 frame
   expanding_=true;
   HashList<StateId, Token*> &toks_shadowing_mod=toks_shadowing_[cur_frame%2];
   bool is_last = cur_frame <= frame_stop_expand; // the last time we do expand in this frame
-  bool update_last = 0;
   KALDI_ASSERT(cur_frame >= 0);
   auto& cur_q = GetExpandQueue(cur_frame);
   auto& cur_h = GetBackfillMap(cur_frame);
@@ -151,12 +150,12 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
         if (elem) {
           if (*tok < *elem->val && tok!=elem->val) {
             elem->val = tok;
-            update_last = 1;
             // sanity check
             // KALDI_ASSERT(!(*toks_backfill_hclg_[frame]).find(tok->hclg_state)->second->shadowing_tok);
           }
-        } else // from better_hclg
+        } else {// from better_hclg
           toks_shadowing_mod.Insert(tok->hclg_state, tok);
+        }
       }
       link = shadowing_tok->links;
       if (!link) {
@@ -260,25 +259,33 @@ cutoff_(frame+1) : std::numeric_limits<BaseFloat>::infinity();
   }
 
   // Clean the backfill map
-  cur_h.clear();
   if (is_last) toks_backfill_hclg_[cur_frame]->clear();
-  if (update_last && !decodable->IsLastFrame(cur_frame-1)) { // do not need to do it for the final decoding step since we will never expand any more
+  if (cur_frame == NumFramesDecoded()) { 
     for(Token *cur_tok = active_toks_[cur_frame].toks; cur_tok != NULL; cur_tok = cur_tok->next) {
-      // toks_shadowing_mod stores the best record in each HCLG state
-      ElemShadow *elem = toks_shadowing_mod.Find(cur_tok->hclg_state);
-      if (!elem) continue;
-      if (cur_tok == elem->val){
-        cur_tok->shadowing_tok = NULL;
-      } else {
-        cur_tok->shadowing_tok = elem->val;
-        // sanity check
-        KALDI_ASSERT(!cur_tok->shadowing_tok->shadowing_tok || cur_tok->shadowing_tok->shadowing_tok != cur_tok);
-        cur_tok->extra_cost=std::numeric_limits<BaseFloat>::infinity();
-        cur_tok->DeleteForwardLinks(); // since some tok could be shadowed after exploring in the same decoding step
+      PairId pair = ConstructPair(cur_tok->hclg_state, cur_tok->lm_state);
+      auto elem_main = toks_.Find(pair);
+      if (!elem_main) toks_.Insert(pair, cur_tok);
+      if (!decodable->IsLastFrame(cur_frame-1)) {// do not need to do it for the final decoding step since we will never expand any more
+        // toks_shadowing_mod stores the best record in each HCLG state
+        ElemShadow *elem = toks_shadowing_mod.Find(cur_tok->hclg_state);
+        if (!elem) {
+          toks_shadowing_mod.Insert(cur_tok->hclg_state, cur_tok); // from better_hclg
+          cur_tok->shadowing_tok = NULL;
+        } else if (cur_tok == elem->val){
+          cur_tok->shadowing_tok = NULL;
+        } else {
+          cur_tok->shadowing_tok = elem->val;
+          cur_tok->extra_cost=std::numeric_limits<BaseFloat>::infinity();
+          cur_tok->DeleteForwardLinks(); // since some tok could be shadowed after exploring in the same decoding step
+        }
       }
     }
-
+    // sanity check
+    KALDI_ASSERT(ToksNum(cur_frame) == cur_h.size());
+    if (!decodable->IsLastFrame(cur_frame-1)) 
+      BuildHCLGMapFromHash(cur_frame, false);
   }
+  cur_h.clear();
     
   KALDI_VLOG(2) << "expand fr num: " << cur_frame << " " << is_last << " " << GetExpandQueue(cur_frame+1).size() << " " << ToksNum(cur_frame);
   expanding_=false;
@@ -442,7 +449,7 @@ void Lattice2BiglmFasterDecoder::PruneForwardLinks(int32 frame,
         // link_exta_cost is the difference in score between the best paths
         // through link source state and through link destination state
         KALDI_ASSERT(link_extra_cost == link_extra_cost); // check for NaN
-        if (link_extra_cost > config_.beam) { // excise link
+        if (link_extra_cost > config_.lattice_beam) { // excise link
           ForwardLink *next_link = link->next;
           if (prev_link != NULL) prev_link->next = next_link;
           else tok->links = next_link;
