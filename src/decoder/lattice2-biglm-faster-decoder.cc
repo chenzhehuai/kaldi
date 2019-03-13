@@ -32,8 +32,8 @@ Lattice2BiglmFasterDecoder::Lattice2BiglmFasterDecoder(
                lm_diff_fst->Start() != fst::kNoStateId);
   toks_.SetSize(1000);  // just so on the first frame we do something reasonable.
   for (int i = 0; i < 2; i++) toks_shadowing_[i].SetSize(1000);  // just so on the first frame we do something reasonable.
-    toks_backfill_hclg_.resize(0);
-  }
+  ClearHCLGMap();
+}
 
 
 bool Lattice2BiglmFasterDecoder::Decode(DecodableInterface *decodable) {
@@ -1047,7 +1047,7 @@ void Lattice2BiglmFasterDecoder::InitDecoding() {
   num_toks_ = 0;
 
   // At the beginning of an utterance, initialize.
-  toks_backfill_hclg_.resize(0);
+  ClearHCLGMap();
   PairId start_pair = ConstructPair(fst_.Start(), lm_diff_fst_->Start());
   active_toks_.resize(1);
   Token *start_tok = new Token(0.0, 0.0, NULL, NULL, lm_diff_fst_->Start(), fst_.Start());

@@ -123,16 +123,18 @@ class Lattice2BiglmFasterDecoder {
   
   Lattice2BiglmFasterDecoderConfig GetOptions() { return config_; } 
   
+  // Clean up backfill map
+  void ClearHCLGMap() {
+    for (auto e:toks_backfill_hclg_) delete e;
+    toks_backfill_hclg_.resize(0);
+  }
   // Releases the HashList and Backfill Maps which are created by 
   // BuildBackfillMap()
   ~Lattice2BiglmFasterDecoder() {
     DeleteElems(toks_.Clear());
     for (int i = 0; i < 2; i++) DeleteElemsShadow(toks_shadowing_[i]);
     ClearActiveTokens();
-    // Clean up backfill map
-    for (int32 frame = NumFramesDecoded(); frame >= 0; frame--) {
-      delete toks_backfill_hclg_[frame];
-    }
+    ClearHCLGMap();
     KALDI_VLOG(1) << "time: " << expand_time_ << " " << propage_time_<< " " << ta_ << " " << tb_;
   }
 
