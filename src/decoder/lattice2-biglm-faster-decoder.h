@@ -443,6 +443,9 @@ class Lattice2BiglmFasterDecoder {
   // more than one list (e.g. for current and previous frames), but only one of
   // them at a time can be indexed by StateId.
   HashList<PairId, Token*> toks_;
+  // toks_shadowing_ is used in exploration stage. They record the best hclg
+  // token for each state (i.e. the key is StateId rather than PairId) on 
+  // previous and current frame. 
   HashList<StateId, Token*> toks_shadowing_[2];
 
   // When do expanding, we have two special cases need to be processed.
@@ -467,7 +470,9 @@ class Lattice2BiglmFasterDecoder {
   std::vector<StateHash* > toks_backfill_hclg_;
   typedef std::pair<Token*, int32> QElem;
   std::queue<QElem> expand_current_frame_queue_[2];
-  std::queue<QElem>& GetExpandQueue(int32 frame) { return expand_current_frame_queue_[frame%2]; }
+  std::queue<QElem>& GetExpandQueue(int32 frame) {
+    return expand_current_frame_queue_[frame%2];
+  }
   PairHash& GetBackfillMap(int32 frame) { return toks_backfill_pair_[frame%2]; }
   void InitDecoding();
 
