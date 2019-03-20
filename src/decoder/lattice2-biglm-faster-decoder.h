@@ -559,7 +559,8 @@ class Lattice2BiglmFasterDecoder {
   Token *ExpandShadowTokensSub(StateId ilabel, 
     StateId new_hclg_state, StateId new_lm_state, int32 frame, 
     int32 new_frame_index, BaseFloat tot_cost, BaseFloat extra_cost, BaseFloat backward_cost,
-    bool is_last);
+    bool is_last,
+    Token* shadowing_tok = NULL);
 
   Vector<BaseFloat> cutoff_;
   uint64 propage_lm_num_;

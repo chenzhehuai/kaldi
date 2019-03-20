@@ -253,7 +253,8 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame,
         if (extra_cost > config_.lattice_beam) continue;
         Token* new_tok = ExpandShadowTokensSub(ilabel, new_hclg_state, 
             new_lm_state, frame, new_frame_index, tot_cost, extra_cost,
-            backward_cost, is_last);
+            backward_cost, is_last,
+            next_tok);
         // create lattice arc
         tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
                                      graph_cost, ac_cost, tok->links,
@@ -747,7 +748,8 @@ BaseFloat Lattice2BiglmFasterDecoder::GetCutoff(Elem *list_head,
 Lattice2BiglmFasterDecoder::Token* Lattice2BiglmFasterDecoder::ExpandShadowTokensSub(
     StateId ilabel, StateId new_hclg_state, StateId new_lm_state, int32 frame, 
     int32 new_frame_index, BaseFloat tot_cost, BaseFloat extra_cost,
-    BaseFloat backward_cost, bool is_last) {
+    BaseFloat backward_cost, bool is_last,
+    Token* shadowing_tok) {
   Token *&toks = ilabel ? active_toks_[frame+1].toks : active_toks_[frame].toks;
   assert(toks);
 
@@ -790,7 +792,9 @@ Lattice2BiglmFasterDecoder::Token* Lattice2BiglmFasterDecoder::ExpandShadowToken
       better_hclg=true; // search: "Update toks_shadowing_mod for better_hclg" 
       // although it is better hclg, we still keep its shadowing token for expanding in the next iter
   } else {
-    (*toks_backfill_hclg_[new_frame_index])[new_hclg_state] = new_tok;
+    // if shadowing_tok==NULL, this call is from cur_better_hclg=true; 
+    // otherwise, we have a shadowing_tok for the current token
+    (*toks_backfill_hclg_[new_frame_index])[new_hclg_state] = shadowing_tok?shadowing_tok:new_tok;
     iter_hclg = (*toks_backfill_hclg_[new_frame_index]).find(new_hclg_state);
   }
 
@@ -1046,7 +1050,7 @@ void Lattice2BiglmFasterDecoder::ProcessNonemitting(int32 frame) {
                                      // exploring in the same decoding step
     }
   }
-  tb_+=timer.Elapsed();
+  //tb_+=timer.Elapsed();
 }
 
 void Lattice2BiglmFasterDecoder::BuildHCLGMapFromHash(int32 frame, bool append) {
@@ -1114,7 +1118,7 @@ void Lattice2BiglmFasterDecoder::InitDecoding() {
 void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
                                                   int32 frame_stop_expand,
                                                   bool clear) {
-
+  Timer timer;
   PairHash *pair_map = &GetBackfillMap(frame);
   std::queue<QElem>& q = GetExpandQueue(frame);
   if (clear) 
@@ -1128,7 +1132,15 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
   if (frame >= toks_backfill_hclg_.size()) {
     KALDI_ASSERT(frame == toks_backfill_hclg_.size());
     hclg_map = new StateHash();
-  }
+    for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
+      if (tok->tot_cost > cur_cutoff) continue;
+      auto r = hclg_map->insert({tok->hclg_state, tok});
+      bool ok = r.second;
+      if (!ok && *r.first->second > *tok) // with this tok before
+        r.first->second = tok;
+    }
+    toks_backfill_hclg_.push_back(hclg_map);
+  } else hclg_map = toks_backfill_hclg_[frame];
 
   for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
     if (tok->tot_cost > cur_cutoff) {
@@ -1138,9 +1150,14 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
     }
     PairId cur_pair_id = ConstructPair(tok->hclg_state, tok->lm_state);
 
+    /*
+    Token* shadowing_tok = (*toks_backfill_hclg_[frame])[tok->hclg_state];
+    if (tok==shadowing_tok) tok->shadowing_tok = NULL;
+    else tok->shadowing_tok = shadowing_tok;
+    */
+
     // If this is a new pair id, insert it to pair_map
     bool ok = pair_map->insert({cur_pair_id, tok}).second;
-
     // Build the expand queue.
     if (frame <= frame_stop_expand) { // need to expand
       if (ok) { // without this tok before
@@ -1151,14 +1168,8 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
       } else KALDI_ASSERT(tok->in_queue); // tok has been pushed by
                                           // ExpandShadowTokens
     }
-    if (hclg_map) {
-      auto r = hclg_map->insert({tok->hclg_state, tok});
-      bool ok = r.second;
-      if (!ok && *r.first->second > *tok) // with this tok before
-        r.first->second = tok;
-    }
   }
-  if (hclg_map) toks_backfill_hclg_.push_back(hclg_map);
+  tb_+=timer.Elapsed();
 }
 
 }
