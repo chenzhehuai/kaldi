@@ -164,7 +164,8 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame,
           if (*iter.second > *tok) // better_hclg
             tok->shadowing_tok = NULL;
           else
-            KALDI_ASSERT(tok->shadowing_tok == iter.second); 
+            tok->shadowing_tok = iter.second; // TODO: check this one
+            //KALDI_ASSERT(tok->shadowing_tok == iter.second); 
         } // for normal shadowed token is_last==false, we process it later
         continue; 
       }
@@ -883,6 +884,7 @@ void Lattice2BiglmFasterDecoder::ProcessEmitting(DecodableInterface *decodable,
          lm_state = PairToLmState(state_pair);
     Token *tok = e->val;
     if (tok->tot_cost <  cur_cutoff) {  // cur_cutoff is used to limit prev_toks
+
       ElemShadow *elem = toks_shadowing_check.Find(state);
       if (!elem || // better_hclg
           elem->val == tok || // explore
@@ -1044,7 +1046,6 @@ void Lattice2BiglmFasterDecoder::ProcessNonemitting(int32 frame) {
                                      // exploring in the same decoding step
     }
   }
-  BuildHCLGMapFromHash(frame); // do it here to make it consistent
   tb_+=timer.Elapsed();
 }
 
@@ -1123,6 +1124,12 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
                          cutoff_(frame+1) :
                          std::numeric_limits<BaseFloat>::infinity();
 
+  StateHash *hclg_map = NULL;
+  if (frame >= toks_backfill_hclg_.size()) {
+    KALDI_ASSERT(frame == toks_backfill_hclg_.size());
+    hclg_map = new StateHash();
+  }
+
   for (Token *tok = active_toks_[frame].toks; tok != NULL; tok = tok->next) {
     if (tok->tot_cost > cur_cutoff) {
       tok->shadowing_tok = NULL;  // useless token, will not be expanded
@@ -1144,7 +1151,14 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
       } else KALDI_ASSERT(tok->in_queue); // tok has been pushed by
                                           // ExpandShadowTokens
     }
+    if (hclg_map) {
+      auto r = hclg_map->insert({tok->hclg_state, tok});
+      bool ok = r.second;
+      if (!ok && *r.first->second > *tok) // with this tok before
+        r.first->second = tok;
+    }
   }
+  if (hclg_map) toks_backfill_hclg_.push_back(hclg_map);
 }
 
 }

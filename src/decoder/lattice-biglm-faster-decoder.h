@@ -29,6 +29,7 @@
 #include "fstext/fstext-lib.h"
 #include "lat/kaldi-lattice.h"
 #include "decoder/lattice-faster-decoder.h" // for options.
+#include "base/timer.h"
 
 
 namespace kaldi {
@@ -71,6 +72,7 @@ class LatticeBiglmFasterDecoder {
   ~LatticeBiglmFasterDecoder() {
     DeleteElems(toks_.Clear());    
     ClearActiveTokens();
+    KALDI_VLOG(1) << "time: " << expand_time_ << " " << propage_time_<< " " << ta_ << " " << tb_;
   }
 
   // Get Cutoff
@@ -686,9 +688,11 @@ class LatticeBiglmFasterDecoder {
     if (arc->olabel == 0) {
       return lm_state; // no change in LM state if no word crossed.
     } else { // Propagate in the LM-diff FST.
+      Timer timer;
       propage_lm_num_++;
       Arc lm_arc;
       bool ans = lm_diff_fst_->GetArc(lm_state, arc->olabel, &lm_arc);
+      propage_time_+=timer.Elapsed();
       if (!ans) { // this case is unexpected for statistical LMs.
         if (!warned_noarc_) {
           warned_noarc_ = true;
@@ -708,6 +712,7 @@ class LatticeBiglmFasterDecoder {
   
   void ProcessEmitting(DecodableInterface *decodable, int32 frame) {
     // Processes emitting arcs for one frame.  Propagates from prev_toks_ to cur_toks_.
+    Timer timer;
     Elem *last_toks = toks_.Clear(); // swapping prev_toks_ / cur_toks_
     Elem *best_elem = NULL;
     BaseFloat adaptive_beam;
@@ -783,9 +788,11 @@ class LatticeBiglmFasterDecoder {
       e_tail = e->tail;
       toks_.Delete(e); // delete Elem
     }
+    ta_+=timer.Elapsed();
   }
 
   void ProcessNonemitting(int32 frame) {
+    Timer timer;
     // note: "frame" is the same as emitting states just processed.
     
     // Processes nonemitting arcs for one frame.  Propagates within toks_.
@@ -852,6 +859,7 @@ class LatticeBiglmFasterDecoder {
         }
       } // for all arcs
     } // while queue not empty
+    tb_+=timer.Elapsed();
   }
 
 
@@ -909,6 +917,9 @@ class LatticeBiglmFasterDecoder {
     KALDI_ASSERT(num_toks_ == 0);
   }
   uint64 propage_lm_num_;
+  double expand_time_;
+  double propage_time_;
+  double ta_, tb_;
 };
 
 } // end namespace kaldi.
