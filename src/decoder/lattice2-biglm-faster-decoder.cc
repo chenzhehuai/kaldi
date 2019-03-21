@@ -198,6 +198,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame,
         Token* new_tok = ExpandShadowTokensSub(ilabel, new_hclg_state, 
             new_lm_state, frame, new_frame_index, tot_cost, extra_cost,
             backward_cost, is_last);
+        if (!new_tok) continue;
         // create lattice arc
         tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
                                      graph_cost, ac_cost, tok->links,
@@ -255,6 +256,7 @@ void Lattice2BiglmFasterDecoder::ExpandShadowTokens(int32 cur_frame,
             new_lm_state, frame, new_frame_index, tot_cost, extra_cost,
             backward_cost, is_last,
             next_tok);
+        if (!new_tok) continue;
         // create lattice arc
         tok->links = new ForwardLink(new_tok, arc.ilabel, arc.olabel, 
                                      graph_cost, ac_cost, tok->links,
@@ -794,7 +796,10 @@ Lattice2BiglmFasterDecoder::Token* Lattice2BiglmFasterDecoder::ExpandShadowToken
   } else {
     // if shadowing_tok==NULL, this call is from cur_better_hclg=true; 
     // otherwise, we have a shadowing_tok for the current token
-    (*toks_backfill_hclg_[new_frame_index])[new_hclg_state] = shadowing_tok?shadowing_tok:new_tok;
+    if (shadowing_tok)
+      (*toks_backfill_hclg_[new_frame_index])[new_hclg_state] = shadowing_tok;
+    else // we cannot garrentee new_tok is the best one in toks_backfill_hclg_ (it is the first one)
+      (*toks_backfill_hclg_[new_frame_index])[new_hclg_state] = new_tok;
     iter_hclg = (*toks_backfill_hclg_[new_frame_index]).find(new_hclg_state);
   }
 
@@ -806,7 +811,9 @@ Lattice2BiglmFasterDecoder::Token* Lattice2BiglmFasterDecoder::ExpandShadowToken
       // search the comments above regarding to:
       // "we need to update a shadowing token itself"
       new_tok->shadowing_tok = NULL; 
-    }
+    } else if (new_tok->shadowing_tok->shadowing_tok == new_tok)  // this loop is from "we cannot garrentee new_tok" above
+      new_tok->shadowing_tok->shadowing_tok=NULL;
+
     if (is_last || better_hclg || new_frame_index == frame) {
       if (new_tok->shadowing_tok) { // prepare for forwardlinks updating
         // sanity check
