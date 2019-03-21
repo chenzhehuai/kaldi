@@ -628,9 +628,12 @@ void Lattice2BiglmFasterDecoder::PruneTokensForFrame(int32 frame, bool is_expand
       if (tok->extra_cost == std::numeric_limits<BaseFloat>::infinity()) { 
         // token is unreachable from end of graph; (no forward links survived)
         // excise tok from list and delete tok.
-        if (toks_backfill_hclg_.size()>frame && frame >= NumFramesDecoded()-config_.prune_interval) { // the map has been built 
-          if (toks_backfill_hclg_[frame]->erase(tok->hclg_state))
-            ; //for (Token* t=toks; t; t=t->next) KALDI_ASSERT(t->shadowing_tok!=tok); // sanity check
+        if (toks_backfill_hclg_.size()>frame && 
+            frame >= NumFramesDecoded()-config_.prune_interval-config_.explore_interval) { // the map has been built 
+          auto r=toks_backfill_hclg_[frame]->find(tok->hclg_state);
+          // r==end() is from we didn't update toks_backfill_hclg_ in pne            
+          if (r!=toks_backfill_hclg_[frame]->end() && r->second==tok)
+            toks_backfill_hclg_[frame]->erase(tok->hclg_state);
         }
         if (prev_tok != NULL) prev_tok->next = tok->next;
         else toks = tok->next;
@@ -811,8 +814,7 @@ Lattice2BiglmFasterDecoder::Token* Lattice2BiglmFasterDecoder::ExpandShadowToken
       // search the comments above regarding to:
       // "we need to update a shadowing token itself"
       new_tok->shadowing_tok = NULL; 
-    } else if (new_tok->shadowing_tok->shadowing_tok == new_tok)  // this loop is from "we cannot garrentee new_tok" above
-      new_tok->shadowing_tok->shadowing_tok=NULL;
+    } else KALDI_ASSERT(new_tok->shadowing_tok->shadowing_tok != new_tok); 
 
     if (is_last || better_hclg || new_frame_index == frame) {
       if (new_tok->shadowing_tok) { // prepare for forwardlinks updating
@@ -1157,7 +1159,7 @@ void Lattice2BiglmFasterDecoder::BuildBackfillMap(int32 frame,
     }
     PairId cur_pair_id = ConstructPair(tok->hclg_state, tok->lm_state);
 
-    /*
+    /* // TODO: we do not do it since we didn't update toks_backfill_hclg_
     Token* shadowing_tok = (*toks_backfill_hclg_[frame])[tok->hclg_state];
     if (tok==shadowing_tok) tok->shadowing_tok = NULL;
     else tok->shadowing_tok = shadowing_tok;
