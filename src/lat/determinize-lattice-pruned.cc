@@ -1041,35 +1041,28 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
 
     // they are forward_costs for extra_cost calculation(fake forward costs), 
     // real forward costs and extra costs (the same as lattice pruning)
-    std::vector<double> forward_costs_extra_costs, forward_costs, extra_costs;
+    std::vector<double> forward_costs, extra_costs;
     KALDI_ASSERT(ifst_->NumStates());
     // initialization
     forward_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
-    forward_costs_extra_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
     backward_costs_.resize(ifst_->NumStates());
     extra_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
     forward_costs[0]=0;
-    forward_costs_extra_costs[0]=0;
     KALDI_ASSERT(ifst_->Start() == 0);
     double tot_cost=std::numeric_limits<double>::max();
     // Only handle the toplogically sorted case.
-    // forward pass to obtain forward_costs_extra_costs and forward_costs
+    // forward pass to obtain forward_costs
     for (StateId s = 0; s < ifst_->NumStates(); s++) {
       for (ArcIterator<ExpandedFst<Arc> > aiter(*ifst_, s);
            !aiter.Done(); aiter.Next()) {
         const Arc &arc = aiter.Value();
         double cost_update = forward_costs[s] + ConvertToCost(arc.weight);
-        double cost_update_extra = forward_costs_extra_costs[s];
         if (ifst_->Final(arc.nextstate) != Weight::Zero()) {
           cost_update += ConvertToCost(ifst_->Final(arc.nextstate));
           tot_cost = std::min(tot_cost, cost_update);
-        } else {
-          cost_update_extra += ConvertToCost(arc.weight);
-        }
+        } 
         double &next_cost = forward_costs[arc.nextstate];
         next_cost = std::min(next_cost, cost_update);
-        double &next_cost_extra = forward_costs_extra_costs[arc.nextstate];
-        next_cost_extra = std::min(next_cost_extra, cost_update_extra);
       }
     }
 
@@ -1086,14 +1079,19 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
       for (ArcIterator<ExpandedFst<Arc> > aiter(*ifst_, s);
            !aiter.Done(); aiter.Next()) {
         const Arc &arc = aiter.Value();
+        if (ifst_->Final(arc.nextstate) != Weight::Zero()) {
+          extra_cost =  0;
+          continue;
+        }
         double next_extra_cost = extra_costs[arc.nextstate];
         // special proc final arcs
-        double arc_cost = ifst_->Final(arc.nextstate) == Weight::Zero() ? ConvertToCost(arc.weight) : 0;
-        double arc_extra_cost = next_extra_cost+forward_costs_extra_costs[s]+ arc_cost - forward_costs_extra_costs[arc.nextstate];
+        double arc_cost = ConvertToCost(arc.weight);
+        double arc_extra_cost = next_extra_cost+forward_costs[s]+ arc_cost - forward_costs[arc.nextstate];
         KALDI_ASSERT(arc_extra_cost > -0.1);
         extra_cost = std::min(extra_cost, arc_extra_cost);
       }
       // beta_cost = extra_cost + tot_cost - alpha_cost
+      KALDI_ASSERT(extra_cost <= beam_+0.1);
       cost = extra_cost + tot_cost - forward_costs[s];
     }
 
