@@ -534,7 +534,8 @@ class LatticeIncrementalDeterminizer {
   // needed. Otherwise, it keeps the resultant lattice in lat_
   bool ProcessChunk(Lattice &raw_fst, int32 first_frame, int32 last_frame,
                     const unordered_map<int32, BaseFloat> &state_label_initial_cost,
-                    const unordered_map<int32, BaseFloat> &state_label_final_cost);
+                    const unordered_map<int32, BaseFloat> &state_label_final_cost,
+                    bool se_final_probs);
 
   // Step 3 of incremental determinization,
   // which is to append the new chunk in clat to the old one in lat_

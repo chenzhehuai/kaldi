@@ -969,7 +969,8 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(bool use_final_probs,
     // step 2-3
     ret = determinizer_.ProcessChunk(raw_fst, last_get_lattice_frame_,
                                      last_frame_of_chunk, state_label_initial_cost_,
-                                     state_label_final_cost_);
+                                     state_label_final_cost_,
+                                     use_final_probs);
     last_get_lattice_frame_ = last_frame_of_chunk;
   } else if (last_get_lattice_frame_ > last_frame_of_chunk)
     KALDI_WARN << "Call GetLattice up to frame: " << last_frame_of_chunk
@@ -1167,7 +1168,8 @@ template <typename FST>
 bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(
     Lattice &raw_fst, int32 first_frame, int32 last_frame,
     const unordered_map<int32, BaseFloat> &state_label_initial_cost,
-    const unordered_map<int32, BaseFloat> &state_label_final_cost) {
+    const unordered_map<int32, BaseFloat> &state_label_final_cost,
+    bool use_final_probs) {
   bool not_first_chunk = first_frame != 0;
   bool ret = true;
   // step 2: Determinize the chunk
@@ -1182,9 +1184,12 @@ bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(
   // LatticeFasterDecoder, we need to use a slightly larger beam here
   // than the lattice_beam used PruneActiveTokens. Hence the beam we use is
   // (config_.determinize_beam_offset + config_.lattice_beam)
+  auto det_opts(config_.det_opts);
+  if (use_final_probs)
+    det_opts.fake_beta = false;
   ret &= DeterminizeLatticePhonePrunedWrapper(
       trans_model_, &raw_fst, config_.determinize_beam_offset + 
-      config_.lattice_beam, &clat, config_.det_opts);
+      config_.lattice_beam, &clat, det_opts);
 
   final_arc_list_.swap(final_arc_list_prev_);
   final_arc_list_.clear();

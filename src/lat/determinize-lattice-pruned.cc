@@ -1035,6 +1035,74 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
     cutoff_ = best_cost + beam_;
   }
 
+  void ComputeFakeBackwardWeight() {
+    //Sets up the backward_costs_ array, and the cutoff_ variable.
+    KALDI_ASSERT(beam_ > 0);
+
+    // they are forward_costs for extra_cost calculation(fake forward costs), 
+    // real forward costs and extra costs (the same as lattice pruning)
+    std::vector<double> forward_costs_extra_costs, forward_costs, extra_costs;
+    KALDI_ASSERT(ifst_->NumStates());
+    // initialization
+    forward_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
+    forward_costs_extra_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
+    backward_costs_.resize(ifst_->NumStates());
+    extra_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
+    forward_costs[0]=0;
+    forward_costs_extra_costs[0]=0;
+    KALDI_ASSERT(ifst_->Start() == 0);
+    double tot_cost=std::numeric_limits<double>::max();
+    // Only handle the toplogically sorted case.
+    // forward pass to obtain forward_costs_extra_costs and forward_costs
+    for (StateId s = 0; s < ifst_->NumStates(); s++) {
+      for (ArcIterator<ExpandedFst<Arc> > aiter(*ifst_, s);
+           !aiter.Done(); aiter.Next()) {
+        const Arc &arc = aiter.Value();
+        double cost_update = forward_costs[s] + ConvertToCost(arc.weight);
+        double cost_update_extra = forward_costs_extra_costs[s];
+        if (ifst_->Final(arc.nextstate) != Weight::Zero()) {
+          cost_update += ConvertToCost(ifst_->Final(arc.nextstate));
+          tot_cost = std::min(tot_cost, cost_update);
+        } else {
+          cost_update_extra += ConvertToCost(arc.weight);
+        }
+        double &next_cost = forward_costs[arc.nextstate];
+        next_cost = std::min(next_cost, cost_update);
+        double &next_cost_extra = forward_costs_extra_costs[arc.nextstate];
+        next_cost_extra = std::min(next_cost_extra, cost_update_extra);
+      }
+    }
+
+    // backward pass to obtain extra_costs and backward_costs_
+    for (StateId s = ifst_->NumStates() - 1; s >= 0; s--) {
+      double &cost = backward_costs_[s];
+      double &extra_cost=extra_costs[s];
+      // special proc final state
+      if (ifst_->Final(s) != Weight::Zero()) {
+        extra_costs[s] = 0;
+        cost = 0;
+        continue;
+      }
+      for (ArcIterator<ExpandedFst<Arc> > aiter(*ifst_, s);
+           !aiter.Done(); aiter.Next()) {
+        const Arc &arc = aiter.Value();
+        double next_extra_cost = extra_costs[arc.nextstate];
+        // special proc final arcs
+        double arc_cost = ifst_->Final(arc.nextstate) == Weight::Zero() ? ConvertToCost(arc.weight) : 0;
+        double arc_extra_cost = next_extra_cost+forward_costs_extra_costs[s]+ arc_cost - forward_costs_extra_costs[arc.nextstate];
+        KALDI_ASSERT(arc_extra_cost > -0.1);
+        extra_cost = std::min(extra_cost, arc_extra_cost);
+      }
+      // beta_cost = extra_cost + tot_cost - alpha_cost
+      cost = extra_cost + tot_cost - forward_costs[s];
+    }
+
+
+    if (ifst_->Start() == kNoStateId) return; // we'll be returning
+    // an empty FST.
+
+    cutoff_ = tot_cost + beam_;
+  }
   void InitializeDeterminization() {
     // We insist that the input lattice be topologically sorted.  This is not a
     // fundamental limitation of the algorithm (which in principle should be
@@ -1042,7 +1110,10 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
     // compute the backward_costs_ array.  There may be some other reason we
     // require this, that escapes me at the moment.
     KALDI_ASSERT(ifst_->Properties(kTopSorted, true) != 0);
-    ComputeBackwardWeight();
+    if (opts_.fake_beta)
+      ComputeFakeBackwardWeight();
+    else
+      ComputeBackwardWeight();
 #if !(__GNUC__ == 4 && __GNUC_MINOR__ == 0)
     if(ifst_->Properties(kExpanded, false) != 0) { // if we know the number of
       // states in ifst_, it might be a bit more efficient
@@ -1432,6 +1503,7 @@ bool DeterminizeLatticePhonePruned(
   DeterminizeLatticePrunedOptions det_opts;
   det_opts.delta = opts.delta;
   det_opts.max_mem = opts.max_mem;
+  det_opts.fake_beta = opts.fake_beta;
 
   // If --phone-determinize is true, do the determinization on phone + word
   // lattices.

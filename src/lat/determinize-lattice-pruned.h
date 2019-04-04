@@ -118,12 +118,14 @@ struct DeterminizeLatticePrunedOptions {
   int max_states;
   int max_arcs;
   float retry_cutoff;
+  bool fake_beta;
   DeterminizeLatticePrunedOptions(): delta(kDelta),
                                      max_mem(-1),
                                      max_loop(-1),
                                      max_states(-1),
                                      max_arcs(-1),
-                                     retry_cutoff(0.5) { }
+                                     retry_cutoff(0.5),
+  fake_beta(false) { }
   void Register (kaldi::OptionsItf *opts) {
     opts->Register("delta", &delta, "Tolerance used in determinization");
     opts->Register("max-mem", &max_mem, "Maximum approximate memory usage in "
@@ -155,11 +157,13 @@ struct DeterminizeLatticePhonePrunedOptions {
   bool word_determinize;
   // minimize: if true, push and minimize after determinization.
   bool minimize;
+  bool fake_beta;
   DeterminizeLatticePhonePrunedOptions(): delta(kDelta),
                                           max_mem(50000000),
                                           phone_determinize(true),
                                           word_determinize(true),
-                                          minimize(false) {}
+                                          minimize(false),
+  fake_beta(false) {}
   void Register (kaldi::OptionsItf *opts) {
     opts->Register("delta", &delta, "Tolerance used in determinization");
     opts->Register("max-mem", &max_mem, "Maximum approximate memory usage in "
@@ -172,6 +176,8 @@ struct DeterminizeLatticePhonePrunedOptions {
                    "--phone-determinize)");
     opts->Register("minimize", &minimize, "If true, push and minimize after "
                    "determinization.");
+    opts->Register("fake-beta", &fake_beta, "If true, use fake beta for incremental determinization");
+
   }
 };
 
