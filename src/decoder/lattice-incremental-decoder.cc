@@ -949,6 +949,8 @@ BaseFloat best_cost_in_chunk_;
 std::vector<BaseFloat> g_cost_offsets_; // This contains, for each
 unordered_set<int32> initial_state_in_chunk_; // for sanity check
 unordered_set<int32> final_state_in_chunk_; // for sanity check
+std::vector<double> g_backward_costs_;
+double g_tot_cost;
 
 template <typename FST, typename Token>
 bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(bool use_final_probs,
@@ -972,6 +974,7 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(bool use_final_probs,
                        last_frame_of_chunk, not_first_chunk, !decoding_finalized_))
       KALDI_ERR << "Unexpected problem when getting lattice";
     // step 2-3
+    Connect(&raw_fst); // TODO
     {
       // sanity check
       g_cost_offsets_.swap(cost_offsets_);
@@ -1030,7 +1033,16 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetIncrementalRawLattice(
     ComputeFinalCosts(&final_costs_local, NULL, NULL);
 
   ofst->DeleteStates();
-  if (create_initial_state) ofst->AddState(); // initial-state for the chunk
+  g_backward_costs_.clear();
+  BaseFloat best_cost = std::numeric_limits<BaseFloat>::max();
+  for (Token *tok = active_toks_[frame_end].toks; tok != NULL; tok = tok->next) 
+    best_cost = std::min(best_cost, tok->tot_cost); // TODO
+
+  if (create_initial_state) {
+    ofst->AddState(); // initial-state for the chunk
+    g_backward_costs_.push_back(best_cost);
+  }
+  g_tot_cost = best_cost;
   // num-frames plus one (since frames are one-based, and we have
   // an extra frame for the start-state).
   KALDI_ASSERT(frame_end > 0);
@@ -1046,7 +1058,10 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetIncrementalRawLattice(
     }
     TopSortTokens(active_toks_[f].toks, &token_list);
     for (size_t i = 0; i < token_list.size(); i++)
-      if (token_list[i] != NULL) tok_map[token_list[i]] = ofst->AddState();
+      if (token_list[i] != NULL) {
+        tok_map[token_list[i]] = ofst->AddState();
+        g_backward_costs_.push_back(token_list[i]->extra_cost + best_cost - token_list[i]->tot_cost); 
+      }
   }
   // The next statement sets the start state of the output FST.
   // No matter create_initial_state or not , state zero must be the start-state.
@@ -1095,7 +1110,7 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetIncrementalRawLattice(
         KALDI_ASSERT(iter != tok_map.end());
         StateId nextstate = iter->second;
         BaseFloat cost_offset = 0.0;
-        if (l->ilabel != 0) { // emitting..
+        if (0&&l->ilabel != 0) { // emitting..
           KALDI_ASSERT(f >= 0 && f < cost_offsets_.size());
           cost_offset = cost_offsets_[f];
         }
@@ -1133,6 +1148,8 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetIncrementalRawLattice(
   if (create_final_state) {
     final_state_in_chunk_.clear();
     StateId end_state = ofst->AddState(); // final-state for the chunk
+    // the extra_cost and alpha_cost of initial state are 0 and best_cost
+    g_backward_costs_.push_back(0); 
     ofst->SetFinal(end_state, Weight::One());
 
     state_label_map_.clear();
@@ -1212,8 +1229,12 @@ bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(
   auto det_opts(config_.det_opts);
   if (use_final_probs)
     det_opts.fake_beta = false;
+  else {
+    det_opts.backward_costs = &g_backward_costs_;
+    det_opts.tot_cost = g_tot_cost;
+  }
   BaseFloat beam = use_final_probs?config_.lattice_beam:config_.determinize_beam_offset + 
-      config_.lattice_beam;
+      config_.lattice_beam + 0.1;
 #if 1
   ret &= DeterminizeLatticePhonePrunedWrapper(
       trans_model_, &raw_fst, beam, &clat, det_opts);
@@ -1247,8 +1268,9 @@ bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(
     for (int32 i = 1; i < last_frame; i++) offset_sum += g_cost_offsets_[i];
     KALDI_ASSERT(alignment.size() == last_frame);
     // TODO: the following KALDI_ASSERT will fail some time, which is unexpected
+        // for sanity check
     //KALDI_ASSERT(std::abs(best_cost_in_chunk_ - (weight.Value1() +
-    //  weight.Value2()+offset_sum)) < 1e-1);
+    //  weight.Value2())) < 1e-1);
   }
   return ret;
 }

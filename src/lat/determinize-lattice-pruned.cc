@@ -756,6 +756,10 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
     }
     if (is_final &&
         ConvertToCost(final_weight) + state.forward_cost <= cutoff_) {
+      if (opts_.fake_beta) {
+        KALDI_ASSERT(state.forward_cost >= backward_costs_[0]-0.1);
+        KALDI_ASSERT(final_weight == Weight::One());
+      }
       // store final weights in TempArc structure, just like a transition.
       // Note: we only store the final-weight if it's inside the pruning beam, hence
       // the stuff with Compare.
@@ -959,6 +963,7 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
       // note: we represent it just as a double.
       task->priority_cost += output_states_[output_state_id]->forward_cost;
 
+      KALDI_ASSERT(task->priority_cost >= backward_costs_[0]-0.1);
       if (task->priority_cost > cutoff_) {
         // This task would never get done as it's past the pruning cutoff.
         delete task;
@@ -1038,6 +1043,12 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
   void ComputeFakeBackwardWeight() {
     //Sets up the backward_costs_ array, and the cutoff_ variable.
     KALDI_ASSERT(beam_ > 0);
+    if (opts_.backward_costs) {
+      KALDI_ASSERT(opts_.backward_costs->size() == ifst_->NumStates());
+      backward_costs_=*opts_.backward_costs;
+      cutoff_ = backward_costs_[0] + beam_;
+      return;
+    }
 
     // they are forward_costs for extra_cost calculation(fake forward costs), 
     // real forward costs and extra costs (the same as lattice pruning)
@@ -1502,6 +1513,8 @@ bool DeterminizeLatticePhonePruned(
   det_opts.delta = opts.delta;
   det_opts.max_mem = opts.max_mem;
   det_opts.fake_beta = opts.fake_beta;
+  det_opts.tot_cost = opts.tot_cost;
+  det_opts.backward_costs = opts.backward_costs;
 
   // If --phone-determinize is true, do the determinization on phone + word
   // lattices.
