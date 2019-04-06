@@ -119,8 +119,7 @@ struct DeterminizeLatticePrunedOptions {
   int max_arcs;
   float retry_cutoff;
   bool fake_beta;
-  double tot_cost;
-  std::vector<double> *backward_costs;
+  const std::vector<double> *backward_costs;
   DeterminizeLatticePrunedOptions(): delta(kDelta),
                                      max_mem(-1),
                                      max_loop(-1),
@@ -128,7 +127,6 @@ struct DeterminizeLatticePrunedOptions {
                                      max_arcs(-1),
                                      retry_cutoff(0.5),
   fake_beta(false),
-  tot_cost(0),
   backward_costs(NULL) { }
   void Register (kaldi::OptionsItf *opts) {
     opts->Register("delta", &delta, "Tolerance used in determinization");
@@ -162,15 +160,13 @@ struct DeterminizeLatticePhonePrunedOptions {
   // minimize: if true, push and minimize after determinization.
   bool minimize;
   bool fake_beta;
-  double tot_cost;
-  std::vector<double> *backward_costs;
+  const std::vector<double> *backward_costs;
   DeterminizeLatticePhonePrunedOptions(): delta(kDelta),
                                           max_mem(50000000),
                                           phone_determinize(true),
                                           word_determinize(true),
                                           minimize(false),
   fake_beta(false),
-  tot_cost(0),
   backward_costs(NULL) {}
   void Register (kaldi::OptionsItf *opts) {
     opts->Register("delta", &delta, "Tolerance used in determinization");

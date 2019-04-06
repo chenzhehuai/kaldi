@@ -756,10 +756,6 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
     }
     if (is_final &&
         ConvertToCost(final_weight) + state.forward_cost <= cutoff_) {
-      if (opts_.fake_beta) {
-        KALDI_ASSERT(state.forward_cost >= backward_costs_[0]-0.1);
-        KALDI_ASSERT(final_weight == Weight::One());
-      }
       // store final weights in TempArc structure, just like a transition.
       // Note: we only store the final-weight if it's inside the pruning beam, hence
       // the stuff with Compare.
@@ -963,7 +959,6 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
       // note: we represent it just as a double.
       task->priority_cost += output_states_[output_state_id]->forward_cost;
 
-      KALDI_ASSERT(task->priority_cost >= backward_costs_[0]-0.1);
       if (task->priority_cost > cutoff_) {
         // This task would never get done as it's past the pruning cutoff.
         delete task;
@@ -1043,74 +1038,12 @@ template<class Weight, class IntType> class LatticeDeterminizerPruned {
   void ComputeFakeBackwardWeight() {
     //Sets up the backward_costs_ array, and the cutoff_ variable.
     KALDI_ASSERT(beam_ > 0);
-    if (opts_.backward_costs) {
-      KALDI_ASSERT(opts_.backward_costs->size() == ifst_->NumStates());
-      backward_costs_=*opts_.backward_costs;
-      cutoff_ = backward_costs_[0] + beam_;
-      return;
-    }
-
-    // they are forward_costs for extra_cost calculation(fake forward costs), 
-    // real forward costs and extra costs (the same as lattice pruning)
-    std::vector<double> forward_costs, extra_costs;
-    KALDI_ASSERT(ifst_->NumStates());
-    // initialization
-    forward_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
-    backward_costs_.resize(ifst_->NumStates());
-    extra_costs.resize(ifst_->NumStates(), std::numeric_limits<double>::max());
-    forward_costs[0]=0;
+    KALDI_ASSERT(opts_.backward_costs);
+    KALDI_ASSERT(opts_.backward_costs->size() == ifst_->NumStates());
     KALDI_ASSERT(ifst_->Start() == 0);
-    double tot_cost=std::numeric_limits<double>::max();
-    // Only handle the toplogically sorted case.
-    // forward pass to obtain forward_costs
-    for (StateId s = 0; s < ifst_->NumStates(); s++) {
-      for (ArcIterator<ExpandedFst<Arc> > aiter(*ifst_, s);
-           !aiter.Done(); aiter.Next()) {
-        const Arc &arc = aiter.Value();
-        double cost_update = forward_costs[s] + ConvertToCost(arc.weight);
-        if (ifst_->Final(arc.nextstate) != Weight::Zero()) {
-          cost_update += ConvertToCost(ifst_->Final(arc.nextstate));
-          tot_cost = std::min(tot_cost, cost_update);
-        } 
-        double &next_cost = forward_costs[arc.nextstate];
-        next_cost = std::min(next_cost, cost_update);
-      }
-    }
-
-    // backward pass to obtain extra_costs and backward_costs_
-    for (StateId s = ifst_->NumStates() - 1; s >= 0; s--) {
-      double &cost = backward_costs_[s];
-      double &extra_cost=extra_costs[s];
-      // special proc final state
-      if (ifst_->Final(s) != Weight::Zero()) {
-        extra_costs[s] = 0;
-        cost = 0;
-        continue;
-      }
-      for (ArcIterator<ExpandedFst<Arc> > aiter(*ifst_, s);
-           !aiter.Done(); aiter.Next()) {
-        const Arc &arc = aiter.Value();
-        if (ifst_->Final(arc.nextstate) != Weight::Zero()) {
-          extra_cost =  0;
-          continue;
-        }
-        double next_extra_cost = extra_costs[arc.nextstate];
-        // special proc final arcs
-        double arc_cost = ConvertToCost(arc.weight);
-        double arc_extra_cost = next_extra_cost+forward_costs[s]+ arc_cost - forward_costs[arc.nextstate];
-        KALDI_ASSERT(arc_extra_cost > -0.1);
-        extra_cost = std::min(extra_cost, arc_extra_cost);
-      }
-      // beta_cost = extra_cost + tot_cost - alpha_cost
-      KALDI_ASSERT(extra_cost <= beam_+0.1);
-      cost = extra_cost + tot_cost - forward_costs[s];
-    }
-
-
-    if (ifst_->Start() == kNoStateId) return; // we'll be returning
-    // an empty FST.
-
-    cutoff_ = tot_cost + beam_;
+    backward_costs_=*opts_.backward_costs;
+    cutoff_ = backward_costs_[0] + beam_;
+    return;
   }
   void InitializeDeterminization() {
     // We insist that the input lattice be topologically sorted.  This is not a
@@ -1513,7 +1446,6 @@ bool DeterminizeLatticePhonePruned(
   det_opts.delta = opts.delta;
   det_opts.max_mem = opts.max_mem;
   det_opts.fake_beta = opts.fake_beta;
-  det_opts.tot_cost = opts.tot_cost;
   det_opts.backward_costs = opts.backward_costs;
 
   // If --phone-determinize is true, do the determinization on phone + word

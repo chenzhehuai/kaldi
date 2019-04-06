@@ -490,7 +490,8 @@ class LatticeIncrementalDecoderTpl {
   // the first chunk, and we do not create the final state in the last chunk
   bool GetIncrementalRawLattice(Lattice *ofst, bool use_final_probs, 
                      int32 frame_begin, int32 frame_end, 
-                     bool create_initial_state, bool create_final_state);
+                     bool create_initial_state, bool create_final_state,
+                     std::vector<double> *backward_costs);
   // Get the number of tokens in each frame
   // It is useful, e.g. in using config_.determinize_max_active
   int32 GetNumToksForFrame(int32 frame);
@@ -535,7 +536,8 @@ class LatticeIncrementalDeterminizer {
   bool ProcessChunk(Lattice &raw_fst, int32 first_frame, int32 last_frame,
                     const unordered_map<int32, BaseFloat> &state_label_initial_cost,
                     const unordered_map<int32, BaseFloat> &state_label_final_cost,
-                    bool se_final_probs);
+                    bool last_chunk,
+                    const std::vector<double>& backward_costs);
 
   // Step 3 of incremental determinization,
   // which is to append the new chunk in clat to the old one in lat_
