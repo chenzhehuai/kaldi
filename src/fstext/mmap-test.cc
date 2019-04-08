@@ -69,6 +69,16 @@ end:
 }
 
 template <typename Arc>
+void PreloadFst(const Fst<Arc>& fst) {
+  size_t narcs = 0;
+  for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
+    const auto s = siter.Value();
+    // TODO
+  }
+  return;
+}
+
+template <typename Arc>
 size_t LoadFst(const Fst<Arc>& fst, bool change_seq = false) {
   size_t narcs = 0;
   for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
@@ -104,6 +114,7 @@ size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", i
   auto m1 = get_mem2();
   Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags);
   auto m2 = get_mem2();
+  PreloadFst(*decode_fst);
   auto t1 = timer.Elapsed();
   auto r1 = LoadFst(*decode_fst);
   auto t2 = timer.Elapsed();
@@ -137,7 +148,7 @@ int main() {
   using namespace kaldi;
   using namespace fst;
 
-  for (int i = 0;i < 2;i++) {  // We would need more iterations to check
+  for (int i = 0;i < 1;i++) {  // We would need more iterations to check
     // this properly.
     //TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali");
     TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali", true);
