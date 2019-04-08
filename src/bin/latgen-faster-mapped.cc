@@ -29,6 +29,7 @@
 #include "decoder/decodable-matrix.h"
 #include "base/timer.h"
 
+#include <sys/mman.h> //for MAP_SHARED
 
 int main(int argc, char *argv[]) {
   try {
@@ -50,11 +51,13 @@ int main(int argc, char *argv[]) {
     LatticeFasterDecoderConfig config;
 
     std::string word_syms_filename;
+    int mmap_mode=0;
     config.Register(&po);
     po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
 
     po.Register("word-symbol-table", &word_syms_filename, "Symbol table for words [for debug output]");
     po.Register("allow-partial", &allow_partial, "If true, produce output even if end state was not reached.");
+    po.Register("mmap-mode", &mmap_mode, "0 read 1 mmap(MAP_SHARED) 2 mmap(MAP_SHARED|MAP_POPULATE) ");
 
     po.Read(argc, argv);
 
@@ -98,7 +101,17 @@ int main(int argc, char *argv[]) {
     if (ClassifyRspecifier(fst_in_str, NULL, NULL) == kNoRspecifier) {
       SequentialBaseFloatMatrixReader loglike_reader(feature_rspecifier);
       // Input FST is just one FST, not a table of FSTs.
-      Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
+      std::string map="";
+      int mmap_flags=0;
+      if (mmap_mode == 2) {
+        map="map";
+        mmap_flags=MAP_SHARED|MAP_POPULATE;
+      } else if (mmap_mode == 1) {
+        map="map";
+        mmap_flags=MAP_SHARED;
+      }
+      FLAGS_v=1;
+      Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags);
       timer.Reset();
 
       {
