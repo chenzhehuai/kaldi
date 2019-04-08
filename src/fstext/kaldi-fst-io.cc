@@ -42,7 +42,7 @@ VectorFst<StdArc> *ReadFstKaldi(std::string rxfilename) {
   return fst;
 }
 
-Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err) {
+Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err, std::string mode, int mmap_flags) {
   if (rxfilename == "") rxfilename = "-"; // interpret "" as stdin,
   // for compatibility with OpenFst conventions.
   kaldi::Input ki(rxfilename);
@@ -70,12 +70,18 @@ Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err) {
     }
   }
   // Read the FST
-  FstReadOptions ropts("<unspecified>", &hdr);
+  FstReadOptions ropts(rxfilename, &hdr);
+  if (mode != "") 
+    ropts.mode = ropts.ReadMode(mode);
+  if (mmap_flags)
+    ropts.mmap_flags = mmap_flags;
   Fst<StdArc> *fst = NULL;
   if (hdr.FstType() == "const") {
     fst = ConstFst<StdArc>::Read(ki.Stream(), ropts);
   } else if (hdr.FstType() == "vector") {
     fst = VectorFst<StdArc>::Read(ki.Stream(), ropts);
+  } else {
+    fst = Fst<StdArc>::Read(ki.Stream(), ropts);
   }
   if (!fst) {
     if(throw_on_err) {

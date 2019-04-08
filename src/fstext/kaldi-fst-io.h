@@ -48,7 +48,7 @@ VectorFst<StdArc> *ReadFstKaldi(std::string rxfilename);
 // This version currently supports ConstFst<StdArc> or VectorFst<StdArc>
 // (const-fst can give better performance for decoding).
 Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename,
-                                 bool throw_on_err = true);
+                                 bool throw_on_err = true, std::string mode = "", int mmap_flags = 0);
 
 // This function attempts to dynamic_cast the pointer 'fst' (which will likely
 // have been returned by ReadFstGeneric()), to the more derived

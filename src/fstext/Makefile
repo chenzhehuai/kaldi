@@ -15,6 +15,7 @@ TESTFILES = determinize-star-test \
       context-fst-test factor-test table-matcher-test fstext-utils-test \
       remove-eps-local-test lattice-weight-test  \
       determinize-lattice-test lattice-utils-test deterministic-fst-test \
+			mmap-test \
       push-special-test epsilon-property-test prune-special-test
 
 OBJFILES = push-special.o kaldi-fst-io.o context-fst.o grammar-context-fst.o

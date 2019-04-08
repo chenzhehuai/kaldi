@@ -11,7 +11,8 @@ OPENFST_VERSION ?= 1.6.7
 CUB_VERSION ?= 1.8.0
 
 # Default features configured for OpenFST; can be overridden in the make command line.
-OPENFST_CONFIGURE ?= --enable-static --enable-shared --enable-far --enable-ngram-fsts
+OPENFST_CONFIGURE ?= --enable-static --enable-shared --enable-far --enable-ngram-fsts --enable-const-fsts --enable-compact-fsts --enable-compress
+# the above openfst should be modified to accept mmap_flags, see here: https://github.com/chenzhehuai/openfst
 
 OPENFST_VER_NUM := $(shell echo $(OPENFST_VERSION) | sed 's/\./ /g' | xargs printf "%d%02d%02d")
 ifeq ("$(shell expr $(OPENFST_VER_NUM) \< 10600)","1")
