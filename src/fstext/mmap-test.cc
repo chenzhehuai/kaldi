@@ -164,8 +164,8 @@ size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", i
   auto m1 = get_mem2();
   auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
   auto m2 = get_mem2();
+  ThreadPool pool(nthreads); // try nthreads/2 later
   if (nthreads) {
-    ThreadPool pool(nthreads); // try nthreads/2 later
     ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads);
   }
   auto t1 = timer.Elapsed();
