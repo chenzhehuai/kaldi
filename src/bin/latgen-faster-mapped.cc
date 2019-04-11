@@ -31,6 +31,63 @@
 
 #include <sys/mman.h> //for MAP_SHARED
 
+#include "../fstext/ThreadPool.h"
+#include "time.h"
+
+using namespace fst;
+
+template <typename Arc>
+size_t LoadFstState(const Fst<Arc>& fst, size_t s, bool change_seq = false) {
+  size_t narcs = 0;
+  for (ArcIterator<Fst<Arc>> aiter(fst, s); !aiter.Done(); aiter.Next()) {
+    const auto &arc = aiter.Value();
+    Arc arc_new;
+    arc_new.nextstate = arc.nextstate;
+    arc_new.weight = arc.weight;
+    arc_new.ilabel = arc.ilabel;
+    arc_new.olabel = arc.olabel;
+    narcs++;
+    if (change_seq) {
+      for (ArcIterator<Fst<Arc>> aiter(fst, arc_new.nextstate); !aiter.Done(); aiter.Next()) {
+        const auto &arc = aiter.Value();
+        Arc arc_new;
+        arc_new.nextstate = arc.nextstate;
+        arc_new.weight = arc.weight;
+        arc_new.ilabel = arc.ilabel;
+        arc_new.olabel = arc.olabel;
+      }
+    }
+  }
+  return narcs;
+}
+void PreloadFst2(ConstFst<StdArc> *decode_fst, size_t start, size_t end) {
+  KALDI_ASSERT(start>=0);
+  KALDI_ASSERT(end <= decode_fst->NumStates());
+  KALDI_LOG<<"loading_start ( "<<start<<" , "<<end<<" ) "<<time(NULL);
+  size_t narcs = 0;
+  for (size_t i = start; i < end; i++) {
+    narcs += LoadFstState(*decode_fst, i);
+  }
+  KALDI_LOG<<"loading_end ( "<<start<<" , "<<end<<" ) "<<narcs<<" "<<time(NULL);
+}
+void PreloadFst(string fst_in_str, size_t start, size_t end) {
+  auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, "map", MAP_SHARED));
+  KALDI_ASSERT(start>=0);
+  KALDI_ASSERT(end <= decode_fst->NumStates());
+  KALDI_LOG<<"loading_start ( "<<start<<" , "<<end<<" ) "<<time(NULL);
+  size_t narcs = 0;
+  for (size_t i = start; i < end; i++) {
+    narcs += LoadFstState(*decode_fst, i);
+  }
+  KALDI_LOG<<"loading_end ( "<<start<<" , "<<end<<" ) "<<narcs<<" "<<time(NULL);
+}
+void ParaPreloadFst(string fst_in_str, size_t num_states, ThreadPool& pool, int nthreads) {
+  int num_states_per_thread = num_states/nthreads+1;
+  for(int i = 0; i < nthreads; ++i) { // TODO
+    pool.enqueue(&PreloadFst, fst_in_str, i*num_states_per_thread, std::min(num_states, (size_t)(i+1)*num_states_per_thread));
+  }
+  return;
+}
 int main(int argc, char *argv[]) {
   try {
     using namespace kaldi;
@@ -52,12 +109,14 @@ int main(int argc, char *argv[]) {
 
     std::string word_syms_filename;
     int mmap_mode=0;
+    int nthreads=0;
     config.Register(&po);
     po.Register("acoustic-scale", &acoustic_scale, "Scaling factor for acoustic likelihoods");
 
     po.Register("word-symbol-table", &word_syms_filename, "Symbol table for words [for debug output]");
     po.Register("allow-partial", &allow_partial, "If true, produce output even if end state was not reached.");
     po.Register("mmap-mode", &mmap_mode, "0 read 1 mmap(MAP_SHARED) 2 mmap(MAP_SHARED|MAP_POPULATE) ");
+    po.Register("nthreads", &nthreads, "num threads to load fst");
 
     po.Read(argc, argv);
 
@@ -111,9 +170,15 @@ int main(int argc, char *argv[]) {
         mmap_flags=MAP_SHARED;
       }
       FLAGS_v=1;
-      Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags);
-      timer.Reset();
+      auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
 
+      if (nthreads) {
+        ThreadPool pool(nthreads); // try nthreads/2 later
+        //ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads); // TODO: no improvement
+        pool.enqueue(&PreloadFst2, decode_fst, 0, decode_fst->NumStates());
+      }
+
+      timer.Reset();
       {
         LatticeFasterDecoder decoder(*decode_fst, config);
 
@@ -180,7 +245,7 @@ int main(int argc, char *argv[]) {
     KALDI_LOG << "Done " << num_success << " utterances, failed for "
               << num_fail;
     KALDI_LOG << "Overall log-likelihood per frame is " << (tot_like/frame_count) << " over "
-              << frame_count<<" frames.";
+              << frame_count<<" frames. "<<time(NULL);
 
     delete word_syms;
     if (num_success != 0) return 0;
