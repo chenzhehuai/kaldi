@@ -95,24 +95,52 @@ size_t LoadFstState(const Fst<Arc>& fst, size_t s, bool change_seq = false) {
   }
   return narcs;
 }
+#if 0
 template <typename FST>
 size_t LoadFst(const FST& fst, bool change_seq = false) {
   typedef typename FST::Arc Arc;
   KALDI_LOG << "main_load "<<time(NULL);
   size_t narcs = 0;
-#if 0
   for (StateIterator<FST> siter(fst); !siter.Done(); siter.Next()) {
     const auto s = siter.Value();
     narcs += LoadFstState(fst, s, change_seq);
   }
-#else
   for (int s=0; s<fst.NumStates(); s++) {
     narcs += LoadFstState(fst, s, change_seq);
   }
-#endif
   return narcs;
 }
-
+#else
+template <typename Arc>
+size_t LoadFst(const Fst<Arc>& fst, bool change_seq = false) {
+  size_t narcs = 0;
+  KALDI_LOG << "main_load "<<time(NULL);
+  for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
+    const auto s = siter.Value();
+    for (ArcIterator<Fst<Arc>> aiter(fst, s); !aiter.Done(); aiter.Next()) {
+      const auto &arc = aiter.Value();
+      Arc arc_new;
+      arc_new.nextstate = arc.nextstate;
+      arc_new.weight = arc.weight;
+      arc_new.ilabel = arc.ilabel;
+      arc_new.olabel = arc.olabel;
+      narcs++;
+      if (change_seq) {
+        for (ArcIterator<Fst<Arc>> aiter(fst, arc_new.nextstate); !aiter.Done(); aiter.Next()) {
+          const auto &arc = aiter.Value();
+          Arc arc_new;
+          arc_new.nextstate = arc.nextstate;
+          arc_new.weight = arc.weight;
+          arc_new.ilabel = arc.ilabel;
+          arc_new.olabel = arc.olabel;
+        }
+      }
+    }
+  }
+  KALDI_LOG << "main_load end "<<time(NULL);
+  return narcs;
+}
+#endif
 void PreloadFst(string fst_in_str, size_t start, size_t end) {
   auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, "map", MAP_SHARED));
   KALDI_ASSERT(start>=0);
@@ -124,10 +152,9 @@ void PreloadFst(string fst_in_str, size_t start, size_t end) {
   }
   KALDI_LOG<<"loading_end ( "<<start<<" , "<<end<<" ) "<<narcs<<" "<<time(NULL);
 }
-void ParaPreloadFst(string fst_in_str, size_t num_states, int nthreads) {
+void ParaPreloadFst(string fst_in_str, size_t num_states, ThreadPool& pool, int nthreads) {
   int num_states_per_thread = num_states/nthreads+1;
-  ThreadPool pool(nthreads); // try nthreads/2 later
-  for(int i = 0; i < nthreads; ++i) {
+  for(int i = nthreads-1; i < nthreads; ++i) { // TODO
     pool.enqueue(&PreloadFst, fst_in_str, i*num_states_per_thread, std::min(num_states, (size_t)(i+1)*num_states_per_thread));
   }
   return;
@@ -137,8 +164,10 @@ size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", i
   auto m1 = get_mem2();
   auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
   auto m2 = get_mem2();
-  if (nthreads)
-    ParaPreloadFst(fst_in_str, decode_fst->NumStates(), nthreads);
+  if (nthreads) {
+    ThreadPool pool(nthreads); // try nthreads/2 later
+    ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads);
+  }
   auto t1 = timer.Elapsed();
   auto r1 = LoadFst(*decode_fst);
   auto t2 = timer.Elapsed();
@@ -181,7 +210,7 @@ int main() {
     //TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali", true);
     //TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst.const2.ali", true);
     
-    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst4.const.ali", false, 1);
+    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst4.const.ali", false, 3);
     
   }
 }
