@@ -26,6 +26,9 @@
 #include <sys/mman.h> //for MAP_SHARED
 #include <sys/resource.h> // get_mem
 
+#include "ThreadPool.h"
+#include "time.h"
+
 namespace fst
 {
 using namespace kaldi;
@@ -69,52 +72,73 @@ end:
 }
 
 template <typename Arc>
-void PreloadFst(const Fst<Arc>& fst) {
+size_t LoadFstState(const Fst<Arc>& fst, size_t s, bool change_seq = false) {
   size_t narcs = 0;
-  for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
-    const auto s = siter.Value();
-    // TODO
-  }
-  return;
-}
-
-template <typename Arc>
-size_t LoadFst(const Fst<Arc>& fst, bool change_seq = false) {
-  size_t narcs = 0;
-  for (StateIterator<Fst<Arc>> siter(fst); !siter.Done(); siter.Next()) {
-    const auto s = siter.Value();
-    for (ArcIterator<Fst<Arc>> aiter(fst, s); !aiter.Done(); aiter.Next()) {
-      const auto &arc = aiter.Value();
-      Arc arc_new;
-      arc_new.nextstate = arc.nextstate;
-      arc_new.weight = arc.weight;
-      arc_new.ilabel = arc.ilabel;
-      arc_new.olabel = arc.olabel;
-      narcs++;
-      if (change_seq) {
-        for (ArcIterator<Fst<Arc>> aiter(fst, arc_new.nextstate); !aiter.Done(); aiter.Next()) {
-          const auto &arc = aiter.Value();
-          Arc arc_new;
-          arc_new.nextstate = arc.nextstate;
-          arc_new.weight = arc.weight;
-          arc_new.ilabel = arc.ilabel;
-          arc_new.olabel = arc.olabel;
-        }
+  for (ArcIterator<Fst<Arc>> aiter(fst, s); !aiter.Done(); aiter.Next()) {
+    const auto &arc = aiter.Value();
+    Arc arc_new;
+    arc_new.nextstate = arc.nextstate;
+    arc_new.weight = arc.weight;
+    arc_new.ilabel = arc.ilabel;
+    arc_new.olabel = arc.olabel;
+    narcs++;
+    if (change_seq) {
+      for (ArcIterator<Fst<Arc>> aiter(fst, arc_new.nextstate); !aiter.Done(); aiter.Next()) {
+        const auto &arc = aiter.Value();
+        Arc arc_new;
+        arc_new.nextstate = arc.nextstate;
+        arc_new.weight = arc.weight;
+        arc_new.ilabel = arc.ilabel;
+        arc_new.olabel = arc.olabel;
       }
     }
   }
   return narcs;
 }
-size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", int mmap_flags=0) {
-  if (0) {
-    Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst.const2.ali.bak", true, "map", MAP_SHARED|MAP_POPULATE);
-    delete decode_fst;
+template <typename FST>
+size_t LoadFst(const FST& fst, bool change_seq = false) {
+  typedef typename FST::Arc Arc;
+  KALDI_LOG << "main_load "<<time(NULL);
+  size_t narcs = 0;
+#if 0
+  for (StateIterator<FST> siter(fst); !siter.Done(); siter.Next()) {
+    const auto s = siter.Value();
+    narcs += LoadFstState(fst, s, change_seq);
   }
+#else
+  for (int s=0; s<fst.NumStates(); s++) {
+    narcs += LoadFstState(fst, s, change_seq);
+  }
+#endif
+  return narcs;
+}
+
+void PreloadFst(string fst_in_str, size_t start, size_t end) {
+  auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, "map", MAP_SHARED));
+  KALDI_ASSERT(start>=0);
+  KALDI_ASSERT(end <= decode_fst->NumStates());
+  KALDI_LOG<<"loading_start ( "<<start<<" , "<<end<<" ) "<<time(NULL);
+  size_t narcs = 0;
+  for (size_t i = start; i < end; i++) {
+    narcs += LoadFstState(*decode_fst, i);
+  }
+  KALDI_LOG<<"loading_end ( "<<start<<" , "<<end<<" ) "<<narcs<<" "<<time(NULL);
+}
+void ParaPreloadFst(string fst_in_str, size_t num_states, int nthreads) {
+  int num_states_per_thread = num_states/nthreads+1;
+  ThreadPool pool(nthreads); // try nthreads/2 later
+  for(int i = 0; i < nthreads; ++i) {
+    pool.enqueue(&PreloadFst, fst_in_str, i*num_states_per_thread, std::min(num_states, (size_t)(i+1)*num_states_per_thread));
+  }
+  return;
+}
+size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", int mmap_flags=0, int nthreads=0) {
   Timer timer;
   auto m1 = get_mem2();
-  Fst<StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags);
+  auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
   auto m2 = get_mem2();
-  PreloadFst(*decode_fst);
+  if (nthreads)
+    ParaPreloadFst(fst_in_str, decode_fst->NumStates(), nthreads);
   auto t1 = timer.Elapsed();
   auto r1 = LoadFst(*decode_fst);
   auto t2 = timer.Elapsed();
@@ -129,11 +153,11 @@ size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", i
 }
 
 
-void TestLoadFst(string fst_in_str, bool change_seq = false) {
+void TestLoadFst(string fst_in_str, bool change_seq = false, int nthreads=0) {
   // TODO: assert align
   FLAGS_v = 0;
 
-  auto r2=TestLoadFstSub(fst_in_str, change_seq, "map", MAP_SHARED); // test in this sequence will get the worst result for map + no MAP_POPULATE
+  auto r2=TestLoadFstSub(fst_in_str, change_seq, "map", MAP_SHARED, nthreads); // test in this sequence will get the worst result for map + no MAP_POPULATE
   auto r3=TestLoadFstSub(fst_in_str, change_seq, "map", MAP_SHARED|MAP_POPULATE);
   auto r1=TestLoadFstSub(fst_in_str, change_seq, "", 0);
 
@@ -151,12 +175,13 @@ int main() {
   for (int i = 0;i < 1;i++) {  // We would need more iterations to check
     // this properly.
     //TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali");
-    TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali", true);
     //TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst.const2.ali");
-    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst.const2.ali", true);
-    
-    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst4.const.ali", true);
-    
     //TestLoadFst("/home/resources/zhc00/asr_test/data_ai/zhc01/kaldi_sf/graph_decode_sf/HCLG.fst.const.ali", true);
+    //
+    //TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali", true);
+    //TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst.const2.ali", true);
+    
+    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst4.const.ali", false, 1);
+    
   }
 }
