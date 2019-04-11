@@ -154,7 +154,7 @@ void PreloadFst(string fst_in_str, size_t start, size_t end) {
 }
 void ParaPreloadFst(string fst_in_str, size_t num_states, ThreadPool& pool, int nthreads) {
   int num_states_per_thread = num_states/nthreads+1;
-  for(int i = nthreads-1; i < nthreads; ++i) { // TODO
+  for(int i = 0; i < nthreads; ++i) { // TODO
     pool.enqueue(&PreloadFst, fst_in_str, i*num_states_per_thread, std::min(num_states, (size_t)(i+1)*num_states_per_thread));
   }
   return;
@@ -164,8 +164,8 @@ size_t TestLoadFstSub(string fst_in_str, bool change_seq=false, string map="", i
   auto m1 = get_mem2();
   auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
   auto m2 = get_mem2();
-  ThreadPool pool(nthreads); // try nthreads/2 later
   if (nthreads) {
+    ThreadPool pool(nthreads); // try nthreads/2 later
     ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads);
   }
   auto t1 = timer.Elapsed();
@@ -210,7 +210,7 @@ int main() {
     //TestLoadFst("/home/resources/zhc00/egs/mini_librispeech/s5/data/lang_test_tgsmall/HCLG.fst.ali", true);
     //TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst.const2.ali", true);
     
-    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst4.const.ali", false, 3);
+    TestLoadFst("/home/resources/zhc00/asr_test/data_ai/lang_sf_prune.graph/HCLG.fst4.const.ali", false, 1);
     
   }
 }
