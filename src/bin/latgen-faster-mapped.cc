@@ -71,7 +71,8 @@ void PreloadFst2(ConstFst<StdArc> *decode_fst, size_t start, size_t end) {
   KALDI_LOG<<"loading_end ( "<<start<<" , "<<end<<" ) "<<narcs<<" "<<time(NULL);
 }
 void PreloadFst(string fst_in_str, size_t start, size_t end) {
-  auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, "map", MAP_SHARED));
+  auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, "map", MAP_SHARED|MAP_POPULATE));
+  return;
   KALDI_ASSERT(start>=0);
   KALDI_ASSERT(end <= decode_fst->NumStates());
   KALDI_LOG<<"loading_start ( "<<start<<" , "<<end<<" ) "<<time(NULL);
@@ -172,10 +173,10 @@ int main(int argc, char *argv[]) {
       FLAGS_v=1;
       auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
 
+      ThreadPool pool(nthreads); // try nthreads/2 later
       if (nthreads) {
-        ThreadPool pool(nthreads); // try nthreads/2 later
-        //ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads); // TODO: no improvement
-        pool.enqueue(&PreloadFst2, decode_fst, 0, decode_fst->NumStates());
+        ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads); // TODO: no improvement
+        //pool.enqueue(&PreloadFst2, decode_fst, 0, decode_fst->NumStates());
       }
 
       timer.Reset();
