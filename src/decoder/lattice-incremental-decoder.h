@@ -576,6 +576,12 @@ class LatticeIncrementalDeterminizer {
   std::vector<BaseFloat> &GetForwardCosts() { return forward_costs_; }
 
  private:
+  void GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state, 
+    int redeterminize_frame_remained, 
+    const unordered_map<int32, BaseFloat> &token_label_final_cost,
+    unordered_multimap<int, LatticeArc::StateId> *token_label2last_state_map,
+    Lattice *olat);
+
   const LatticeIncrementalDecoderConfig config_;
   const TransitionModel &trans_model_; // keep it for determinization
 
@@ -590,6 +596,9 @@ class LatticeIncrementalDeterminizer {
   // we allocate a unique id for each source-state of the last arc of a series of
   // initial arcs in GetInitialRawLattice
   int32 state_last_initial_offset_;
+  // redeterminized states will be stored in this map
+  // map from state to state_copy
+  std::unordered_map<StateId, StateId> redeterminized_states_; 
 
   // The compact lattice we obtain. It should be reseted before processing a
   // new utterance
