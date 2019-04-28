@@ -576,6 +576,7 @@ class LatticeIncrementalDeterminizer {
   std::vector<BaseFloat> &GetForwardCosts() { return forward_costs_; }
 
  private:
+  bool AddRedeterminizedState(Lattice::StateId nextstate, Lattice* olat, Lattice::StateId* nextstate_copy = NULL);
   void GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state, 
     int redeterminize_frame_remained, 
     const unordered_map<int32, BaseFloat> &token_label_final_cost,
