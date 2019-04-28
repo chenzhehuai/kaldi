@@ -594,12 +594,15 @@ class LatticeIncrementalDeterminizer {
   std::vector<std::pair<StateId, size_t>> final_arc_list_prev_;
   // alpha of each state in lat_
   std::vector<BaseFloat> forward_costs_;
+  std::vector<BaseFloat> forward_costs_for_redet_;
   // we allocate a unique id for each source-state of the last arc of a series of
   // initial arcs in GetInitialRawLattice
   int32 state_last_initial_offset_;
   // redeterminized states will be stored in this map
   // map from state to state_copy
   std::unordered_map<StateId, StateId> redeterminized_states_; 
+  std::unordered_map<StateId, BaseFloat> prefinal_states_; 
+  std::unordered_map<StateId, BaseFloat> prefinal_states_prev_; 
 
   // The compact lattice we obtain. It should be reseted before processing a
   // new utterance

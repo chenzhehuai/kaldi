@@ -1170,8 +1170,11 @@ void LatticeIncrementalDeterminizer<FST>::Init() {
   lat_.DeleteStates();
   determinization_finalized_ = false;
   forward_costs_.clear();
+  forward_costs_for_redet_.clear();
   state_last_initial_offset_ = 2 * config_.max_word_id;
   redeterminized_states_.clear();
+  prefinal_states_.clear();
+  prefinal_states_prev_.clear();
 }
 template <typename FST>
 bool LatticeIncrementalDeterminizer<FST>::
@@ -1235,8 +1238,8 @@ GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state,
       int state_label = prefinal_state + state_last_initial_offset_;
       // Moreover, we need to use the forward coast (alpha) of this determinized and
       // appended state to guide the determinization later
-      KALDI_ASSERT(state < forward_costs_.size());
-      auto alpha_cost = forward_costs_[state];
+      KALDI_ASSERT(state < forward_costs_for_redet_.size());
+      auto alpha_cost = forward_costs_for_redet_[state];
       Arc arc_initial(0, state_label, LatticeWeight(0, alpha_cost), state_copy);
       olat->AddArc(start_state, arc_initial);
 
@@ -1350,6 +1353,7 @@ bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(Lattice &raw_fst,
 #if 1 // TODO
   ret &= DeterminizeLatticePhonePrunedWrapper(
       trans_model_, &raw_fst, (config_.lattice_beam + 0.1), &clat, config_.det_opts);
+  TopSortCompactLatticeIfNeeded(&clat);
 #else
   ConvertLattice(raw_fst, &clat);
   Connect(&clat);
@@ -1384,21 +1388,42 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
       olat->SetFinal(i.first, CompactLatticeWeight::Zero());
     }
     redeterminized_states_.clear();
-  } else
+  } else {
     forward_costs_.push_back(0); // for the first state
+    forward_costs_for_redet_.push_back(0);
+  }
   forward_costs_.resize(state_offset + clat.NumStates(),
                         std::numeric_limits<BaseFloat>::infinity());
+  forward_costs_for_redet_.resize(state_offset + clat.NumStates(),
+                        std::numeric_limits<BaseFloat>::infinity());
+
+  prefinal_states_.clear();
+  for (StateIterator<CompactLattice> siter(clat); !siter.Done(); siter.Next()) {
+    auto s = siter.Value();
+    for (ArcIterator<CompactLattice> aiter(clat, s); !aiter.Done(); aiter.Next()) {
+      const auto &arc = aiter.Value();
+      if (clat.Final(arc.nextstate) != CompactLatticeWeight::Zero()) {
+        prefinal_states_[s] = std::numeric_limits<BaseFloat>::max();
+        break;
+      }
+    }
+  }
+
   for (StateIterator<CompactLattice> siter(clat); !siter.Done(); siter.Next()) {
     auto s = siter.Value();
     StateId state_appended = kNoStateId;
+    bool is_prefinal_state = (prefinal_states_.find(s) != prefinal_states_.end());
+    bool is_prefinal_state_prev = (prefinal_states_prev_.find(s) != prefinal_states_prev_.end());
     // We do not copy initial state, which exists except the first chunk
     if (!not_first_chunk || s != 0) {
       state_appended = s + state_offset;
       KALDI_ASSERT(state_appended == olat->AddState());
       olat->SetFinal(state_appended, clat.Final(s));
     }
+
     for (ArcIterator<CompactLattice> aiter(clat, s); !aiter.Done(); aiter.Next()) {
       const auto &arc = aiter.Value();
+
       StateId source_state = kNoStateId;
       // We do not copy initial arcs, which exists except the first chunk.
       // These arcs will be taken care later in step 3.2
@@ -1431,7 +1456,7 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
         arc_appended.ilabel = 0;
         CompactLatticeWeight weight_offset;
         // remove alpha in weight
-        weight_offset.SetWeight(LatticeWeight(0, -forward_costs_[source_state]));
+        weight_offset.SetWeight(LatticeWeight(0, -forward_costs_for_redet_[source_state]));
         arc_appended.weight = Times(arc_appended.weight, weight_offset);
       }
       KALDI_ASSERT(source_state != kNoStateId);
@@ -1443,8 +1468,16 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
       alpha_nextstate =
           std::min(alpha_nextstate,
                    forward_costs_[source_state] + weight.Value1() + weight.Value2());
+      if (!is_prefinal_state) {
+        auto &alpha_nextstate2 = forward_costs_for_redet_[arc_appended.nextstate];
+        auto &alpha_state2 = is_prefinal_state_prev? forward_costs_[source_state]:forward_costs_for_redet_[source_state];
+        alpha_nextstate2 =
+            std::min(alpha_nextstate2,
+                     alpha_state2 + weight.Value1() + weight.Value2());
+      }
     }
   }
+  prefinal_states_.swap(prefinal_states_prev_);
 
   if (!not_first_chunk)
     olat->SetStart(0); // Initialize the first chunk for olat
