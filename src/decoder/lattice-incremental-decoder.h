@@ -578,7 +578,6 @@ class LatticeIncrementalDeterminizer {
  private:
   bool AddRedeterminizedState(Lattice::StateId nextstate, Lattice* olat, Lattice::StateId* nextstate_copy = NULL);
   void GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state, 
-    int redeterminize_frame_remained, 
     const unordered_map<int32, BaseFloat> &token_label_final_cost,
     unordered_multimap<int, LatticeArc::StateId> *token_label2last_state_map,
     Lattice *olat);
@@ -601,8 +600,6 @@ class LatticeIncrementalDeterminizer {
   // redeterminized states will be stored in this map
   // map from state to state_copy
   std::unordered_map<StateId, StateId> redeterminized_states_; 
-  std::unordered_map<StateId, BaseFloat> prefinal_states_; 
-  std::unordered_map<StateId, BaseFloat> prefinal_states_prev_; 
 
   // The compact lattice we obtain. It should be reseted before processing a
   // new utterance
