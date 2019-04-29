@@ -1175,20 +1175,20 @@ void LatticeIncrementalDeterminizer<FST>::Init() {
   redeterminized_states_.clear();
 }
 template <typename FST>
-bool LatticeIncrementalDeterminizer<FST>::
-AddRedeterminizedState(Lattice::StateId nextstate, Lattice* olat, Lattice::StateId* nextstate_copy) {
+bool LatticeIncrementalDeterminizer<FST>::AddRedeterminizedState(
+    Lattice::StateId nextstate, Lattice *olat, Lattice::StateId *nextstate_copy) {
   using namespace fst;
   bool modified = false;
   StateId nextstate_insert = kNoStateId;
   auto r = redeterminized_states_.insert({nextstate, nextstate_insert});
-  if (r.second) {// didn't exist, successfully insert here
+  if (r.second) { // didn't exist, successfully insert here
     // create a new state w.r.t state
     nextstate_insert = olat->AddState();
-    // map from arc.nextstate to nextstate_insert 
+    // map from arc.nextstate to nextstate_insert
     r.first->second = nextstate_insert;
     modified = true;
-  } else {// else already exist
-    // get nextstate_insert 
+  } else { // else already exist
+    // get nextstate_insert
     nextstate_insert = r.first->second;
     KALDI_ASSERT(nextstate_insert != kNoStateId);
     modified = false;
@@ -1198,8 +1198,8 @@ AddRedeterminizedState(Lattice::StateId nextstate, Lattice* olat, Lattice::State
 }
 
 template <typename FST>
-void LatticeIncrementalDeterminizer<FST>::
-GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state, 
+void LatticeIncrementalDeterminizer<FST>::GetRawLatticeForRedeterminizedStates(
+    StateId start_state, StateId state,
     const unordered_map<int32, BaseFloat> &token_label_final_cost,
     unordered_multimap<int, LatticeArc::StateId> *token_label2last_state_map,
     Lattice *olat) {
@@ -1228,15 +1228,16 @@ GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state,
   for (; !aiter.Done(); aiter.Next()) {
     const auto &arc = aiter.Value();
     auto laststate_copy = kNoStateId;
-    bool proc_nextstate=false;
+    bool proc_nextstate = false;
     auto arc_weight = arc.weight;
 
     KALDI_ASSERT(arc.olabel == arc.ilabel);
     auto arc_olabel = arc.olabel;
 
-    // the destination of the arc is the final state 
-    if (lat_.Final(arc.nextstate) != CompactLatticeWeight::Zero()) { 
-      KALDI_ASSERT(arc_olabel > config_.max_word_id && arc_olabel < state_last_initial_offset_); // token label
+    // the destination of the arc is the final state
+    if (lat_.Final(arc.nextstate) != CompactLatticeWeight::Zero()) {
+      KALDI_ASSERT(arc_olabel > config_.max_word_id &&
+                   arc_olabel < state_last_initial_offset_); // token label
       // create a initial arc
 
       // Get arc weight here
@@ -1248,23 +1249,25 @@ GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state,
       const auto r = token_label_final_cost.find(arc_olabel);
       KALDI_ASSERT(r != token_label_final_cost.end());
       auto cost_offset = r->second;
-      weight_offset.SetWeight(LatticeWeight(0, - cost_offset));
-      // The arc weight is a combination of original arc weight, above cost_offset and the
-      // weights on the final state
+      weight_offset.SetWeight(LatticeWeight(0, -cost_offset));
+      // The arc weight is a combination of original arc weight, above cost_offset
+      // and the weights on the final state
       arc_weight =
           Times(Times(arc_weight, lat_.Final(arc.nextstate)), weight_offset);
 
       // We create a respective destination state for each final arc
-      // later we will connect it to the state correponding to the token w.r.t arc_olabel
-      laststate_copy = olat->AddState(); 
-      // the destination state of the last of the sequence of arcs will be recorded and
-      // connected to the state corresponding to token w.r.t arc_olabel
+      // later we will connect it to the state correponding to the token w.r.t
+      // arc_olabel
+      laststate_copy = olat->AddState();
+      // the destination state of the last of the sequence of arcs will be recorded
+      // and connected to the state corresponding to token w.r.t arc_olabel
       // Notably, we have multiple states for one token label after determinization,
       // hence we use multiset here
       token_label2last_state_map->insert(
           std::pair<int, StateId>(arc_olabel, laststate_copy));
       arc_olabel = 0; // remove token label
-    } else { // the arc connects to a non-final state (redeterminized state)
+    } else {
+      // the arc connects to a non-final state (redeterminized state)
       KALDI_ASSERT(arc_olabel < config_.max_word_id); // no token label
       KALDI_ASSERT(arc_olabel);
       // get the nextstate_copy w.r.t arc.nextstate
@@ -1273,7 +1276,7 @@ GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state,
       KALDI_ASSERT(nextstate_copy != kNoStateId);
       laststate_copy = nextstate_copy;
     }
-    auto& state_seqs = arc_weight.String();
+    auto &state_seqs = arc_weight.String();
     // create new arcs w.r.t arc
     // the following is for a normal arc
     // We generate a linear sequence of arcs sufficient to contain all the
@@ -1289,13 +1292,13 @@ GetRawLatticeForRedeterminizedStates(StateId start_state, StateId state,
     // connect previous sequence of arcs to the laststate_copy
     // the weight on the previous arc is stored in the arc to laststate_copy here
     Arc arc_last(0, arc_olabel, arc_weight.Weight(), laststate_copy);
-    olat->AddArc(prev_state, arc_last); 
+    olat->AddArc(prev_state, arc_last);
 
     // not final state && previously didn't process this state
-    if (proc_nextstate) 
+    if (proc_nextstate)
       GetRawLatticeForRedeterminizedStates(start_state, arc.nextstate,
-          token_label_final_cost, token_label2last_state_map,
-          olat);
+                                           token_label_final_cost,
+                                           token_label2last_state_map, olat);
   }
 }
 // This function is specifically designed to obtain the initial arcs for a chunk
@@ -1320,10 +1323,10 @@ void LatticeIncrementalDeterminizer<FST>::GetInitialRawLattice(
   for (auto &i : final_arc_list_prev_) {
     auto prefinal_state = i.first;
     bool modified = AddRedeterminizedState(prefinal_state, olat);
-    if (modified) 
-      GetRawLatticeForRedeterminizedStates(start_state, prefinal_state, 
-      token_label_final_cost, token_label2last_state_map,
-      olat);
+    if (modified)
+      GetRawLatticeForRedeterminizedStates(start_state, prefinal_state,
+                                           token_label_final_cost,
+                                           token_label2last_state_map, olat);
   }
 }
 
@@ -1371,9 +1374,9 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
   int32 state_offset = olat->NumStates();
   if (not_first_chunk) {
     state_offset--; // since we do not append initial state in the first chunk
-    // remove arcs from redeterminized_states_ 
-    for (auto i:redeterminized_states_) {
-      olat->DeleteArcs(i.first); 
+    // remove arcs from redeterminized_states_
+    for (auto i : redeterminized_states_) {
+      olat->DeleteArcs(i.first);
       olat->SetFinal(i.first, CompactLatticeWeight::Zero());
     }
     redeterminized_states_.clear();
@@ -1384,15 +1387,15 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
   forward_costs_.resize(state_offset + clat.NumStates(),
                         std::numeric_limits<BaseFloat>::infinity());
   forward_costs_for_redet_.resize(state_offset + clat.NumStates(),
-                        std::numeric_limits<BaseFloat>::infinity());
+                                  std::numeric_limits<BaseFloat>::infinity());
 
-  std::unordered_set<StateId> prefinal_states; 
+  std::unordered_set<StateId> prefinal_states;
   for (StateIterator<CompactLattice> siter(clat); !siter.Done(); siter.Next()) {
     auto s = siter.Value();
     for (ArcIterator<CompactLattice> aiter(clat, s); !aiter.Done(); aiter.Next()) {
       const auto &arc = aiter.Value();
       if (clat.Final(arc.nextstate) != CompactLatticeWeight::Zero()) {
-        prefinal_states.insert(s); 
+        prefinal_states.insert(s);
         break;
       }
     }
@@ -1445,7 +1448,8 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
         arc_appended.ilabel = 0;
         CompactLatticeWeight weight_offset;
         // remove alpha in weight
-        weight_offset.SetWeight(LatticeWeight(0, -forward_costs_for_redet_[source_state]));
+        weight_offset.SetWeight(
+            LatticeWeight(0, -forward_costs_for_redet_[source_state]));
         arc_appended.weight = Times(arc_appended.weight, weight_offset);
       }
       KALDI_ASSERT(source_state != kNoStateId);
@@ -1457,19 +1461,28 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
       alpha_nextstate =
           std::min(alpha_nextstate,
                    forward_costs_[source_state] + weight.Value1() + weight.Value2());
-      // The forward_costs_for_redet_ is a version of the alpha that only includes contributions from non-redeterminized states,     and will later be used to set the costs on arcs from the initial-state of the raw lattice
+      // The forward_costs_for_redet_ is a version of the alpha that only includes
+      // contributions from non-redeterminized states, and will later be used to set
+      // the costs on arcs from the initial-state of the raw lattice
+      // Hence if it is a prefinal state, we do not update the arcs out going from it
       bool is_prefinal_state = (prefinal_states.find(s) != prefinal_states.end());
       if (!is_prefinal_state) {
-        auto &alpha_nextstate_for_redet = forward_costs_for_redet_[arc_appended.nextstate];
-        auto &alpha_state = is_initial_state?forward_costs_[source_state] : forward_costs_for_redet_[source_state];
-        alpha_nextstate_for_redet = std::min(alpha_nextstate_for_redet,
-                       alpha_state + weight.Value1() + weight.Value2());
+        auto &alpha_nextstate_for_redet =
+            forward_costs_for_redet_[arc_appended.nextstate];
+        // If the state is a initial state, the source state is from the last chunk
+        // We use the forward_costs_ but not forward_costs_for_redet_ to include the
+        // alpha with the contributions from redeterminized states
+        auto &alpha_state = is_initial_state
+                                ? forward_costs_[source_state]
+                                : forward_costs_for_redet_[source_state];
+        alpha_nextstate_for_redet =
+            std::min(alpha_nextstate_for_redet,
+                     alpha_state + weight.Value1() + weight.Value2());
       }
     }
   }
 
-  if (!not_first_chunk)
-    olat->SetStart(0); // Initialize the first chunk for olat
+  if (!not_first_chunk) olat->SetStart(0); // Initialize the first chunk for olat
 
   final_arc_list_.swap(final_arc_list_prev_);
   final_arc_list_.clear();
