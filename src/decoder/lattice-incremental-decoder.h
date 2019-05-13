@@ -27,8 +27,8 @@
 #include "fstext/fstext-lib.h"
 #include "lat/determinize-lattice-pruned.h"
 #include "lat/kaldi-lattice.h"
+#include "fst/memory.h"
 #include "decoder/grammar-fst.h"
-#include "lattice-faster-decoder.h"
 
 namespace kaldi {
 
@@ -126,6 +126,86 @@ struct LatticeIncrementalDecoderConfig {
 template <typename FST>
 class LatticeIncrementalDeterminizer;
 
+namespace decoder {
+
+struct BackToken;
+template <typename Token, typename Arc = fst::StdArc>
+struct BackwardLink {
+  using Label = typename Arc::Label;
+  using StateId = typename Arc::StateId;
+  using Weight = typename Arc::Weight;
+
+  Token *prev_tok; // the next token [or NULL if represents final-state]
+  const Arc *arc;  // reduce memory, we use Arc pointer to replace the following
+  // Label ilabel; // ilabel on link.
+  Label GetIlabel() {
+    KALDI_ASSERT(arc);
+    return arc->ilabel;
+  }
+  // Label olabel; // olabel on link.
+  Label GetOlabel() {
+    KALDI_ASSERT(arc);
+    return arc->olabel;
+  }
+  // BaseFloat graph_cost; // graph cost of traversing link (contains LM, etc.)
+  BaseFloat GetGraphCost() {
+    KALDI_ASSERT(arc);
+    return arc->weight.Value();
+  }
+  BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
+  BackwardLink *next;      // next in singly-linked list of forward links from a
+                           // token.
+  inline BackwardLink(Token *prev_tok, const Arc *arc, BaseFloat acoustic_cost,
+                      BackwardLink *next)
+      : prev_tok(prev_tok), arc(arc), acoustic_cost(acoustic_cost), next(next) {}
+};
+
+struct BackToken {
+  using Token = BackToken;
+  using BackwardLinkT = BackwardLink<Token>;
+
+  // Standard token type for LatticeFasterDecoder.  Each active HCLG
+  // (decoding-graph) state on each frame has one token.
+
+  // tot_cost is the total (LM + acoustic) cost from the beginning of the
+  // utterance up to this point.  (but see cost_offset_, which is subtracted
+  // to keep it in a good numerical range).
+  BaseFloat tot_cost;
+
+  // exta_cost is >= 0.  After calling PruneBackwardLinks, this equals the
+  // minimum difference between the cost of the best path that this link is a
+  // part of, and the cost of the absolute best path, under the assumption that
+  // any of the currently active states at the decoding front may eventually
+  // succeed (e.g. if you were to take the currently active states one by one
+  // and compute this difference, and then take the minimum).
+  BaseFloat extra_cost;
+
+  // 'links' is the head of singly-linked list of BackwardLinks, which is what we
+  // use for lattice generation.
+  BackwardLinkT *links;
+
+  //'next' is the next in the singly-linked list of tokens for this frame.
+  Token *next;
+
+  // This constructor just ignores the 'backpointer' argument.  That argument is
+  // needed so that we can use the same decoder code for LatticeFasterDecoderTpl
+  // and LatticeFasterOnlineDecoderTpl (which needs backpointers to support a
+  // fast way to obtain the best path).
+  inline BackToken(BaseFloat tot_cost, BaseFloat extra_cost, BackwardLinkT *links,
+                   Token *next)
+      : tot_cost(tot_cost), extra_cost(extra_cost), links(links), next(next) {}
+  inline void DeleteBackwardLinks(fst::PoolAllocator<BackwardLinkT> &link_allocator) {
+    BackwardLinkT *l = links, *m;
+    while (l != NULL) {
+      m = l->next;
+      link_allocator.deallocate(l, 1);
+      l = m;
+    }
+    links = NULL;
+  }
+};
+}
+
 /* This is an extention to the "normal" lattice-generating decoder.
    See \ref lattices_generation \ref decoders_faster and \ref decoders_simple
     for more information.
@@ -134,7 +214,7 @@ class LatticeIncrementalDeterminizer;
    discussed in the function GetLattice().
 
    The decoder is templated on the FST type and the token type.  The token type
-   will normally be StdToken, but also may be BackpointerToken which is to support
+   will normally be BackToken, but also may be BackpointerToken which is to support
    quick lookup of the current best path (see lattice-faster-online-decoder.h)
 
    The FST you invoke this decoder with is expected to equal
@@ -144,14 +224,16 @@ class LatticeIncrementalDeterminizer;
    will internally cast itself to one that is templated on those more specific
    types; this is an optimization for speed.
  */
-template <typename FST, typename Token = decoder::StdToken>
+template <typename FST, typename Token = decoder::BackToken>
 class LatticeIncrementalDecoderTpl {
  public:
   using Arc = typename FST::Arc;
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
   using Weight = typename Arc::Weight;
-  using ForwardLinkT = decoder::ForwardLink<Token>;
+  using BackwardLinkT = decoder::BackwardLink<Token>;
+
+  BaseFloat conf_;
 
   // Instantiate this class once for each thing you have to decode.
   // This version of the constructor does not take ownership of
@@ -301,6 +383,7 @@ class LatticeIncrementalDecoderTpl {
   /// take it as a good indication that we reached the final-state with
   /// reasonable likelihood.
   BaseFloat FinalRelativeCost() const;
+  void GetBestPathCurrent(Lattice *ofst);
 
   // Returns the number of frames decoded so far.  The value returned changes
   // whenever we call ProcessEmitting().
@@ -311,11 +394,8 @@ class LatticeIncrementalDecoderTpl {
   // LatticeIncrementalOnlineDecoderTpl, which inherits from this, also will
   // use the internals.
 
-  // Deletes the elements of the singly linked list tok->links.
-  inline static void DeleteForwardLinks(Token *tok);
-
   // head of per-frame list of Tokens (list is in topological order),
-  // and something saying whether we ever pruned it using PruneForwardLinks.
+  // and something saying whether we ever pruned it using PruneBackwardLinks.
   struct TokenList {
     Token *toks;
     bool must_prune_forward_links;
@@ -342,10 +422,8 @@ class LatticeIncrementalDecoderTpl {
   // index plus one, which is used to index into the active_toks_ array.
   // Returns the Token pointer.  Sets "changed" (if non-NULL) to true if the
   // token was newly created or the cost changed.
-  // If Token == StdToken, the 'backpointer' argument has no purpose (and will
-  // hopefully be optimized out).
   inline Token *FindOrAddToken(StateId state, int32 frame_plus_one,
-                               BaseFloat tot_cost, Token *backpointer, bool *changed);
+                               BaseFloat tot_cost, bool *changed);
 
   // prunes outgoing links for all tokens in active_toks_[frame]
   // it's called by PruneActiveTokens
@@ -356,8 +434,8 @@ class LatticeIncrementalDecoderTpl {
   //    toward the beginning of the file.
   // extra_costs_changed is set to true if extra_cost was changed for any token
   // links_pruned is set to true if any link in any token was pruned
-  void PruneForwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
-                         bool *links_pruned, BaseFloat delta);
+  void PruneBackwardLinks(int32 frame_plus_one, bool *extra_costs_changed,
+                          bool *links_pruned, BaseFloat delta);
 
   // This function computes the final-costs for tokens active on the final
   // frame.  It outputs to final-costs, if non-NULL, a map from the Token*
@@ -379,13 +457,13 @@ class LatticeIncrementalDecoderTpl {
                          BaseFloat *final_relative_cost,
                          BaseFloat *final_best_cost) const;
 
-  // PruneForwardLinksFinal is a version of PruneForwardLinks that we call
+  // PruneBackwardLinksFinal is a version of PruneBackwardLinks that we call
   // on the final frame.  If there are final tokens active, it uses
   // the final-probs for pruning, otherwise it treats all tokens as final.
-  void PruneForwardLinksFinal();
+  void PruneBackwardLinksFinal();
 
   // Prune away any tokens on this frame that have no forward links.
-  // [we don't do this in PruneForwardLinks because it would give us
+  // [we don't do this in PrunebackwardLinks because it would give us
   // a problem with dangling pointers].
   // It's called by PruneActiveTokens if any forward links have been pruned
   void PruneTokensForFrame(int32 frame_plus_one);
@@ -425,7 +503,9 @@ class LatticeIncrementalDecoderTpl {
   std::vector<TokenList> active_toks_; // Lists of tokens, indexed by
   // frame (members of TokenList are toks, must_prune_forward_links,
   // must_prune_tokens).
-  std::vector<StateId> queue_;       // temp variable used in ProcessNonemitting,
+  typedef std::pair<StateId, Token *> QueueElem;
+  std::vector<QueueElem, fst::BlockAllocator<QueueElem>>
+      queue_;                        // temp variable used in ProcessNonemitting,
   std::vector<BaseFloat> tmp_array_; // used in GetCutoff.
 
   // fst_ is a pointer to the FST we are decoding from.
@@ -441,6 +521,9 @@ class LatticeIncrementalDecoderTpl {
   LatticeIncrementalDecoderConfig config_;
   int32 num_toks_; // current total #toks allocated...
   bool warned_;
+
+  fst::PoolAllocator<Token> *token_allocator_;
+  fst::PoolAllocator<BackwardLinkT> *link_allocator_;
 
   /// decoding_finalized_ is true if someone called FinalizeDecoding().  [note,
   /// calling this is optional].  If true, it's forbidden to decode more.  Also,
@@ -478,6 +561,13 @@ class LatticeIncrementalDecoderTpl {
   static void TopSortTokens(Token *tok_list, std::vector<Token *> *topsorted_list);
 
   void ClearActiveTokens();
+
+  int32 emit_tok_num_, nemit_tok_num_;
+
+  void InitExtraCost(int32 frame_plus_one, BaseFloat val = 0);
+  double pr_time_;
+  QueueElem best_pair;
+  void GetBestPathByToken(Token *tok, StateId state, Lattice *ofst);
 
   // The following part is specifically designed for incremental determinization
   // This function is modified from LatticeFasterDecoderTpl::GetRawLattice()
@@ -518,7 +608,7 @@ class LatticeIncrementalDecoderTpl {
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeIncrementalDecoderTpl);
 };
 
-typedef LatticeIncrementalDecoderTpl<fst::StdFst, decoder::StdToken>
+typedef LatticeIncrementalDecoderTpl<fst::StdFst, decoder::BackToken>
     LatticeIncrementalDecoder;
 
 // This class is designed for step 2-4 and part of step 1 of incremental

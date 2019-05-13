@@ -211,7 +211,6 @@ bool DecodeUtteranceLatticeIncremental(
     LatticeWriter *lattice_writer,
     double *like_ptr) { // puts utterance's like in like_ptr on success.
   using fst::VectorFst;
-  KALDI_ASSERT(!lattice_writer);
 
   if (!decoder.Decode(&decodable)) {
     KALDI_WARN << "Failed to decode file " << utt;
@@ -394,6 +393,8 @@ template bool DecodeUtteranceLatticeIncremental(
     LatticeWriter *lattice_writer,
     double *like_ptr);
 
+/* 
+ * TODO
 template bool DecodeUtteranceLatticeIncremental(
     LatticeIncrementalDecoderTpl<fst::GrammarFst> &decoder,
     DecodableInterface &decodable,
@@ -408,7 +409,7 @@ template bool DecodeUtteranceLatticeIncremental(
     CompactLatticeWriter *compact_lattice_writer,
     LatticeWriter *lattice_writer,
     double *like_ptr);
-
+*/
 
 template bool DecodeUtteranceLatticeFaster(
     LatticeFasterDecoderTpl<fst::Fst<fst::StdArc> > &decoder,
