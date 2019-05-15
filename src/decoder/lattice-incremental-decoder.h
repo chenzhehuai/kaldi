@@ -128,9 +128,39 @@ class LatticeIncrementalDeterminizer;
 
 namespace decoder {
 
+template <typename Arc>
 struct BackToken;
-template <typename Token, typename Arc = fst::StdArc>
+
+template <typename Token, typename Arc>
 struct BackwardLink {
+  using Label = typename Arc::Label;
+  using StateId = typename Arc::StateId;
+  using Weight = typename Arc::Weight;
+  using ValueType = typename Weight::ValueType;
+
+  Token *prev_tok; // the next token [or NULL if represents final-state]
+  Label ilabel, olabel;
+  ValueType graph_cost;
+
+  Label GetIlabel() { return ilabel; }
+  Label GetOlabel() { return olabel; }
+  // BaseFloat graph_cost; // graph cost of traversing link (contains LM, etc.)
+  ValueType GetGraphCost() { return graph_cost; }
+  BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
+  BackwardLink *next;      // next in singly-linked list of forward links from a
+                           // token.
+  inline BackwardLink(Token *prev_tok, const Arc *arc, BaseFloat acoustic_cost,
+                      BackwardLink *next)
+      : prev_tok(prev_tok),
+        ilabel(arc->ilabel),
+        olabel(arc->olabel),
+        graph_cost(arc->weight.Value()),
+        acoustic_cost(acoustic_cost),
+        next(next) {}
+};
+template <typename Token>
+struct BackwardLink<Token, fst::StdArc> {
+  using Arc = fst::StdArc;
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
   using Weight = typename Arc::Weight;
@@ -160,9 +190,10 @@ struct BackwardLink {
       : prev_tok(prev_tok), arc(arc), acoustic_cost(acoustic_cost), next(next) {}
 };
 
+template <typename Arc>
 struct BackToken {
   using Token = BackToken;
-  using BackwardLinkT = BackwardLink<Token>;
+  using BackwardLinkT = BackwardLink<Token, Arc>;
 
   // Standard token type for LatticeFasterDecoder.  Each active HCLG
   // (decoding-graph) state on each frame has one token.
@@ -224,14 +255,14 @@ struct BackToken {
    will internally cast itself to one that is templated on those more specific
    types; this is an optimization for speed.
  */
-template <typename FST, typename Token = decoder::BackToken>
+template <typename FST, typename Token = decoder::BackToken<typename FST::Arc>>
 class LatticeIncrementalDecoderTpl {
  public:
   using Arc = typename FST::Arc;
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
   using Weight = typename Arc::Weight;
-  using BackwardLinkT = decoder::BackwardLink<Token>;
+  using BackwardLinkT = typename Token::BackwardLinkT;
 
   BaseFloat conf_;
 
@@ -510,6 +541,7 @@ class LatticeIncrementalDecoderTpl {
 
   // fst_ is a pointer to the FST we are decoding from.
   const FST *fst_;
+  bool fst_sorted_;
   // delete_fst_ is true if the pointer fst_ needs to be deleted when this
   // object is destroyed.
   bool delete_fst_;
@@ -608,7 +640,8 @@ class LatticeIncrementalDecoderTpl {
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeIncrementalDecoderTpl);
 };
 
-typedef LatticeIncrementalDecoderTpl<fst::StdFst, decoder::BackToken>
+typedef LatticeIncrementalDecoderTpl<fst::StdFst,
+                                     decoder::BackToken<typename fst::StdFst::Arc>>
     LatticeIncrementalDecoder;
 
 // This class is designed for step 2-4 and part of step 1 of incremental

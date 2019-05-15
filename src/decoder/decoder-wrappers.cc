@@ -393,8 +393,6 @@ template bool DecodeUtteranceLatticeIncremental(
     LatticeWriter *lattice_writer,
     double *like_ptr);
 
-/* 
- * TODO
 template bool DecodeUtteranceLatticeIncremental(
     LatticeIncrementalDecoderTpl<fst::GrammarFst> &decoder,
     DecodableInterface &decodable,
@@ -409,7 +407,6 @@ template bool DecodeUtteranceLatticeIncremental(
     CompactLatticeWriter *compact_lattice_writer,
     LatticeWriter *lattice_writer,
     double *like_ptr);
-*/
 
 template bool DecodeUtteranceLatticeFaster(
     LatticeFasterDecoderTpl<fst::Fst<fst::StdArc> > &decoder,

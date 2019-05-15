@@ -201,6 +201,9 @@ class GrammarFst {
   }
 
   inline std::string Type() const { return "grammar"; }
+  uint64 Properties(uint64 mask, bool test) const {
+    return !test; // TODO
+  }
 
   ~GrammarFst();
  private:
@@ -534,6 +537,10 @@ class ArcIterator<GrammarFst> {
     // test that the arc-iterator has not reached the end.
   }
 
+  inline void Seek(size_t a) {
+    KALDI_ERR << "Not implemented";
+    return;
+  }
   inline bool Done() {
     if (i_ < data_.narcs) {
       CopyArcToTemp();

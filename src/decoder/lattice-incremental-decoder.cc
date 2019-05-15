@@ -29,6 +29,7 @@ LatticeIncrementalDecoderTpl<FST, Token>::LatticeIncrementalDecoderTpl(
     const FST &fst, const TransitionModel &trans_model,
     const LatticeIncrementalDecoderConfig &config)
     : fst_(&fst),
+      fst_sorted_(false),
       delete_fst_(false),
       config_(config),
       num_toks_(0),
@@ -44,6 +45,7 @@ LatticeIncrementalDecoderTpl<FST, Token>::LatticeIncrementalDecoderTpl(
     const LatticeIncrementalDecoderConfig &config, FST *fst,
     const TransitionModel &trans_model)
     : fst_(fst),
+      fst_sorted_(false),
       delete_fst_(true),
       config_(config),
       num_toks_(0),
@@ -86,9 +88,15 @@ void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding() {
   if (fst_ == NULL) return;
 
   if (fst_->Properties(fst::kILabelSorted, true) == 0) {
-    KALDI_ERR << "The FST is not ilabel sorted. Do the following please:\n"
-              << " cat OLD.fst | fstarcsort |fstconvert  --fst_type=const > NEW.fst";
+    KALDI_VLOG(2)
+        << "The FST is not ilabel sorted. "
+        << "If it is a standard Fst, do the following please:\n"
+        << " cat OLD.fst | fstarcsort |fstconvert  --fst_type=const > NEW.fst";
+    fst_sorted_ = false;
+  } else {
+    fst_sorted_ = true;
   }
+
   token_allocator_ = new fst::PoolAllocator<Token>(1024);
   link_allocator_ = new fst::PoolAllocator<BackwardLinkT>(2048);
   StateId start_state = fst_->Start();
@@ -546,27 +554,6 @@ void LatticeIncrementalDecoderTpl<FST, Token>::ComputeFinalCosts(
 template <typename FST, typename Token>
 void LatticeIncrementalDecoderTpl<FST, Token>::AdvanceDecoding(
     DecodableInterface *decodable, int32 max_num_frames) {
-  if (std::is_same<FST, fst::Fst<fst::StdArc>>::value) {
-    // if the type 'FST' is the FST base-class, then see if the FST type of fst_
-    // is actually VectorFst or ConstFst.  If so, call the AdvanceDecoding()
-    // function after casting *this to the more specific type.
-    if (fst_->Type() == "const") {
-      LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>, Token> *this_cast =
-          reinterpret_cast<
-              LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>, Token> *>(
-              this);
-      this_cast->AdvanceDecoding(decodable, max_num_frames);
-      return;
-    } else if (fst_->Type() == "vector") {
-      LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>, Token> *this_cast =
-          reinterpret_cast<
-              LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>, Token> *>(
-              this);
-      this_cast->AdvanceDecoding(decodable, max_num_frames);
-      return;
-    }
-  }
-
   KALDI_ASSERT(!active_toks_.empty() && !decoding_finalized_ &&
                "You must call InitDecoding() before AdvanceDecoding");
   int32 num_frames_ready = decodable->NumFramesReady();
@@ -583,6 +570,33 @@ void LatticeIncrementalDecoderTpl<FST, Token>::AdvanceDecoding(
     if (NumFramesDecoded() % config_.prune_interval == 0) {
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
+    // We always incrementally determinize the lattice after lattice pruning in
+    // PruneActiveTokens() since we need extra_cost as the weights
+    // of final arcs to denote the "future" information of final states (Tokens)
+    // Moreover, the delay on GetLattice to do determinization
+    // make it process more skinny lattices which reduces the computation overheads.
+    int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
+    // The minimum length of chunk is config_.determinize_chunk_size.
+    if (frame_det_most % config_.determinize_chunk_size == 0) {
+      int32 frame_det_least =
+          last_get_lattice_frame_ + config_.determinize_chunk_size;
+      // To adaptively decide the length of chunk, we further compare the number of
+      // tokens in each frame and a pre-defined threshold.
+      // If the number of tokens in a certain frame is less than
+      // config_.determinize_max_active, the lattice can be determinized up to this
+      // frame. And we try to determinize as most frames as possible so we check
+      // numbers from frame_det_most to frame_det_least
+      for (int32 f = frame_det_most; f >= frame_det_least; f--) {
+        if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
+            GetNumToksForFrame(f) < config_.determinize_max_active) {
+          KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
+                        << " incremental determinization up to " << f;
+          GetLattice(false, f);
+          break;
+        }
+      }
+    }
+
     BaseFloat cost_cutoff = ProcessEmitting(decodable);
     int32 num;
     if (g_kaldi_verbose_level > 1) {
@@ -630,7 +644,11 @@ void LatticeIncrementalDecoderTpl<FST, Token>::FinalizeDecoding() {
     PruneTokensForFrame(f);
   }
   KALDI_VLOG(4) << "pruned tokens from " << num_toks_begin << " to " << num_toks_;
-  KALDI_VLOG(1) << timer.Elapsed();
+  KALDI_VLOG(2) << "Prune time during and after FinalizeDecoding()"
+                << "(secs): " << timer.Elapsed();
+  GetLattice(true, NumFramesDecoded());
+  KALDI_VLOG(2) << "Delay time during and after FinalizeDecoding()"
+                << "(secs): " << timer.Elapsed();
 }
 
 /// Gets the weight cutoff.  Also counts the active tokens.
@@ -738,8 +756,9 @@ BaseFloat LatticeIncrementalDecoderTpl<FST, Token>::ProcessEmitting(
     best_pair = QueueElem(state, tok);
     cost_offset = -tok->tot_cost;
     fst::ArcIterator<FST> aiter(*fst_, state);
-    for (aiter.Seek(fst_->NumInputEpsilons(state)); // since it is sorted
-         !aiter.Done(); aiter.Next()) {
+
+    if (fst_sorted_) aiter.Seek(fst_->NumInputEpsilons(state));
+    for (; !aiter.Done(); aiter.Next()) {
       const Arc &arc = aiter.Value();
       if (arc.ilabel != 0) { // propagate..
         BaseFloat new_weight = arc.weight.Value() + cost_offset -
@@ -747,8 +766,8 @@ BaseFloat LatticeIncrementalDecoderTpl<FST, Token>::ProcessEmitting(
                                tok->tot_cost;
         if (new_weight + adaptive_beam < next_cutoff)
           next_cutoff = new_weight + adaptive_beam;
-      } else
-        break; // since it is sorted
+      } else if (fst_sorted_)
+        break;
     }
   }
   KALDI_VLOG(6) << "Adaptive beam on frame " << NumFramesDecoded() << " is "
@@ -770,8 +789,8 @@ BaseFloat LatticeIncrementalDecoderTpl<FST, Token>::ProcessEmitting(
     Token *tok = e->val;
     if (tok->tot_cost <= cur_cutoff) {
       fst::ArcIterator<FST> aiter(*fst_, state);
-      for (aiter.Seek(fst_->NumInputEpsilons(state)); // since it is sorted
-           !aiter.Done(); aiter.Next()) {
+      if (fst_sorted_) aiter.Seek(fst_->NumInputEpsilons(state));
+      for (; !aiter.Done(); aiter.Next()) {
         const Arc &arc = aiter.Value();
         if (arc.ilabel != 0) { // propagate..
           BaseFloat ac_cost =
@@ -795,9 +814,9 @@ BaseFloat LatticeIncrementalDecoderTpl<FST, Token>::ProcessEmitting(
           BackwardLinkT *t_link = next_tok->links;
           next_tok->links = link_allocator_->allocate(1);
           link_allocator_->construct(next_tok->links, tok, &arc, ac_cost, t_link);
-        } else
-          break; // since it is sorted
-      }          // for all arcs
+        } else if (fst_sorted_)
+          break;
+      } // for all arcs
     }
     e_tail = e->tail;
     toks_.Delete(e); // delete Elem
@@ -863,10 +882,10 @@ void LatticeIncrementalDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cuto
             c++;
           }
         }
-      } else
-        break; // since it is sorted
-    }          // for all arcs
-  }            // while queue not empty
+      } else if (fst_sorted_)
+        break;
+    } // for all arcs
+  }   // while queue not empty
   if (g_kaldi_verbose_level > 5)
     KALDI_LOG << 1.0 * c / GetNumToksForFrame(NumFramesDecoded());
 }
@@ -1476,7 +1495,8 @@ bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice cla
     // We do not copy initial state, which exists except the first chunk
     if (!not_first_chunk || s != 0) {
       state_appended = s + state_offset;
-      KALDI_ASSERT(state_appended == olat->AddState());
+      auto r = olat->AddState();
+      KALDI_ASSERT(state_appended == r);
       olat->SetFinal(state_appended, clat.Final(s));
     }
 
@@ -1608,6 +1628,6 @@ bool LatticeIncrementalDeterminizer<FST>::Finalize() {
 template class LatticeIncrementalDecoderTpl<fst::Fst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>>;
-// TODO: template class LatticeIncrementalDecoderTpl<fst::GrammarFst>;
+template class LatticeIncrementalDecoderTpl<fst::GrammarFst>;
 
 } // end namespace kaldi.
