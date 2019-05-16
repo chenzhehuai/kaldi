@@ -18,8 +18,7 @@ TESTFILES = determinize-star-test \
       push-special-test epsilon-property-test prune-special-test \
       r-fst-test
 
-OBJFILES = push-special.o kaldi-fst-io.o context-fst.o grammar-context-fst.o \
-           half.o r-fst.o
+OBJFILES = push-special.o kaldi-fst-io.o context-fst.o grammar-context-fst.o
 
 
 LIBNAME = kaldi-fstext

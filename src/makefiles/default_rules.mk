@@ -30,7 +30,9 @@ else
   endif
   XDEPENDS = $(ADDLIBS)
 endif
-LIBNAME = $(RAWLIBNAME)
+ifdef RAWLIBNAME 
+  LIBNAME = $(RAWLIBNAME)
+endif
 
 all: $(LIBFILE) $(BINFILES)
 
