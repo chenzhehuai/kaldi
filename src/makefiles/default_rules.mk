@@ -6,12 +6,18 @@ ifeq ($(KALDI_FLAVOR), dynamic)
     ifdef LIBNAME
       LIBFILE = lib$(LIBNAME).dylib
     endif
+		ifdef RAWLIBNAME
+			LIBFILE = $(LIBNAME).dylib
+		endif
     LDFLAGS += -Wl,-rpath -Wl,$(KALDILIBDIR)
     EXTRA_LDLIBS += $(foreach dep,$(ADDLIBS), $(dir $(dep))lib$(notdir $(basename $(dep))).dylib)
   else ifeq ($(shell uname), Linux)
     ifdef LIBNAME
       LIBFILE = lib$(LIBNAME).so
     endif
+		ifdef RAWLIBNAME
+			LIBFILE = $(LIBNAME).so
+		endif
     LDFLAGS += -Wl,-rpath=$(shell readlink -f $(KALDILIBDIR))
     EXTRA_LDLIBS += $(foreach dep,$(ADDLIBS), $(dir $(dep))lib$(notdir $(basename $(dep))).so)
   else  # Platform not supported
@@ -24,6 +30,7 @@ else
   endif
   XDEPENDS = $(ADDLIBS)
 endif
+LIBNAME = $(RAWLIBNAME)
 
 all: $(LIBFILE) $(BINFILES)
 
