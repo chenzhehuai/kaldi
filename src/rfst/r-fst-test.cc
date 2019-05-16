@@ -1,6 +1,6 @@
-// fstext/r-fst-test.cc
+// rfst/r-fst-test.cc
 
-// Copyright 2009-2011  Microsoft Corporation
+// Copyright      2019  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -17,15 +17,12 @@
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
 
-
-#include "fstext/r-fst.h"
+#include "r-fst.h"
 #include "fstext/rand-fst.h"
 #include "fstext/fstext-utils.h"
 #include "base/kaldi-math.h"
 
-namespace fst
-{
-
+namespace fst {
 
 // Don't instantiate with log semiring, as RandEquivalent may fail.
 static void TestRFst() {
@@ -49,11 +46,10 @@ static void TestRFst() {
   }
 
   fst_copy->Write("/tmp/test.fst");
-  KALDI_ASSERT(RandEquivalent(*fst, *fst_copy,
-                              5/*paths*/, 0.01/*delta*/, kaldi::Rand()/*seed*/, 100/*path length-- max?*/));
+  KALDI_ASSERT(RandEquivalent(*fst, *fst_copy, 5 /*paths*/, 0.01 /*delta*/,
+                              kaldi::Rand() /*seed*/, 100 /*path length-- max?*/));
   delete fst;
 }
-
 
 } // namespace fst
 

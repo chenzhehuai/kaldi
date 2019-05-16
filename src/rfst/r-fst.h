@@ -1,6 +1,6 @@
-// fstext/rand-fst.h
+// rfst/r-fst.h
 
-// Copyright 2009-2011  Microsoft Corporation
+// Copyright      2019  Zhehuai Chen
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -35,17 +35,17 @@ class RFstCompactor {
   typedef typename A::Label Label;
   typedef typename A::StateId StateId;
   typedef typename A::Weight Weight;
-  static const Label kMaxILabel = (1<<15);
-  static const Label kMaxOLabel = (1<<19);
-  static const uint kMaxStateId = (1<<30);
+  static const Label kMaxILabel = (1 << 15);
+  static const Label kMaxOLabel = (1 << 19);
+  static const uint kMaxStateId = (1 << 30);
 
   struct RFstElement {
     char data_[10];
     RFstElement(uint16 first, uint64 second) {
       memcpy(data_, &first, sizeof(first));
-      memcpy(data_+2, &second, sizeof(second));
+      memcpy(data_ + 2, &second, sizeof(second));
     }
-    RFstElement() { }
+    RFstElement() {}
     uint16 First() const {
       uint16 ret;
       memcpy(&ret, data_, sizeof(uint16));
@@ -53,36 +53,37 @@ class RFstCompactor {
     }
     uint64 Second() const {
       uint64 ret;
-      memcpy(&ret, data_+2, sizeof(uint64));
+      memcpy(&ret, data_ + 2, sizeof(uint64));
       return ret;
     }
   };
   typedef RFstElement Element;
 
   Element Compact(StateId s, const A &arc) const {
-    auto ilabel = (arc.ilabel == kNoLabel)?kMaxILabel-1:arc.ilabel;
-    auto olabel = (arc.olabel == kNoLabel)?kMaxOLabel-1:arc.olabel;
-    auto nextstate = (arc.nextstate == kNoStateId)?kMaxStateId-1:arc.nextstate;
+    auto ilabel = (arc.ilabel == kNoLabel) ? kMaxILabel - 1 : arc.ilabel;
+    auto olabel = (arc.olabel == kNoLabel) ? kMaxOLabel - 1 : arc.olabel;
+    auto nextstate = (arc.nextstate == kNoStateId) ? kMaxStateId - 1 : arc.nextstate;
 
     KALDI_ASSERT(ilabel < kMaxILabel);
     KALDI_ASSERT(olabel < kMaxOLabel);
     KALDI_ASSERT(nextstate < kMaxStateId);
     uint64 pack_v = ilabel;
-    pack_v = (pack_v<<19) + olabel;
-    pack_v = (pack_v<<30) + nextstate;
-    auto weight = half_from_float(reinterpret_cast<const uint32&>(arc.weight.Value()));
+    pack_v = (pack_v << 19) + olabel;
+    pack_v = (pack_v << 30) + nextstate;
+    auto weight =
+        half_from_float(reinterpret_cast<const uint32 &>(arc.weight.Value()));
     return Element(weight, pack_v);
   }
   Arc Expand(StateId s, const Element &p, uint32 f = kArcValueFlags) const {
-    KALDI_ASSERT(sizeof(p)==10);
+    KALDI_ASSERT(sizeof(p) == 10);
     uint64 pack_v = p.Second();
-    StateId nextstate = (pack_v & (kMaxStateId-1));
+    StateId nextstate = (pack_v & (kMaxStateId - 1));
     pack_v >>= 30;
-    Label olabel = (pack_v & (kMaxOLabel-1));
+    Label olabel = (pack_v & (kMaxOLabel - 1));
     pack_v >>= 19;
     Label ilabel = pack_v;
-    if (ilabel == kMaxILabel-1) {
-      KALDI_ASSERT(olabel == kMaxOLabel-1);
+    if (ilabel == kMaxILabel - 1) {
+      KALDI_ASSERT(olabel == kMaxOLabel - 1);
       KALDI_ASSERT(nextstate == kMaxStateId - 1);
       ilabel = kNoLabel;
       olabel = kNoLabel;
@@ -106,24 +107,16 @@ class RFstCompactor {
     return *type;
   }
 
-  bool Write(std::ostream &strm) const { 
-    return true; 
-  }
+  bool Write(std::ostream &strm) const { return true; }
 
-  static RFstCompactor *Read(std::istream &strm) {
-    return new RFstCompactor;
-  }
+  static RFstCompactor *Read(std::istream &strm) { return new RFstCompactor; }
 };
 
 template <class Arc, class Unsigned = uint32>
-using RFst =
-    CompactFst<Arc, RFstCompactor<Arc>, Unsigned>;
+using RFst = CompactFst<Arc, RFstCompactor<Arc>, Unsigned>;
 
 using StdRFst = RFst<StdArc, uint32>;
 
-
 } // end namespace fst.
 
-
 #endif
-
