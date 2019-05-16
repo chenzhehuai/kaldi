@@ -39,23 +39,16 @@ class RFstCompactor {
   static const Label kMaxOLabel = (1 << 19);
   static const uint kMaxStateId = (1 << 30);
 
+#pragma pack(1)
   struct RFstElement {
-    char data_[10];
-    RFstElement(uint16 first, uint64 second) {
-      memcpy(data_, &first, sizeof(first));
-      memcpy(data_ + 2, &second, sizeof(second));
-    }
+    unsigned nextstate : 30;
+    unsigned olabel : 19;
+    unsigned weight : 16;
+    unsigned ilabel : 15;
+    RFstElement(Label ilabel, Label olabel, StateId nextstate, uint16 weight)
+        : nextstate(nextstate), olabel(olabel), weight(weight), ilabel(ilabel) {}
+
     RFstElement() {}
-    uint16 First() const {
-      uint16 ret;
-      memcpy(&ret, data_, sizeof(uint16));
-      return ret;
-    }
-    uint64 Second() const {
-      uint64 ret;
-      memcpy(&ret, data_ + 2, sizeof(uint64));
-      return ret;
-    }
   };
   typedef RFstElement Element;
 
@@ -67,21 +60,15 @@ class RFstCompactor {
     KALDI_ASSERT(ilabel < kMaxILabel);
     KALDI_ASSERT(olabel < kMaxOLabel);
     KALDI_ASSERT(nextstate < kMaxStateId);
-    uint64 pack_v = ilabel;
-    pack_v = (pack_v << 19) + olabel;
-    pack_v = (pack_v << 30) + nextstate;
     auto weight =
         half_from_float(reinterpret_cast<const uint32 &>(arc.weight.Value()));
-    return Element(weight, pack_v);
+    return Element(ilabel, olabel, nextstate, weight);
   }
   Arc Expand(StateId s, const Element &p, uint32 f = kArcValueFlags) const {
     KALDI_ASSERT(sizeof(p) == 10);
-    uint64 pack_v = p.Second();
-    StateId nextstate = (pack_v & (kMaxStateId - 1));
-    pack_v >>= 30;
-    Label olabel = (pack_v & (kMaxOLabel - 1));
-    pack_v >>= 19;
-    Label ilabel = pack_v;
+    StateId nextstate = p.nextstate;
+    Label olabel = p.olabel;
+    Label ilabel = p.ilabel;
     if (ilabel == kMaxILabel - 1) {
       KALDI_ASSERT(olabel == kMaxOLabel - 1);
       KALDI_ASSERT(nextstate == kMaxStateId - 1);
@@ -90,7 +77,7 @@ class RFstCompactor {
       nextstate = kNoStateId;
     }
     // auto f_weight = reinterpret_cast<float&>(weight)
-    auto weight = half_to_float(p.First());
+    auto weight = half_to_float(p.weight);
     BaseFloat f_weight;
     memcpy(&f_weight, &weight, sizeof(BaseFloat));
     return Arc(ilabel, olabel, f_weight, nextstate);

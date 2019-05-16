@@ -311,11 +311,12 @@ int main(int argc, char *argv[]) {
         mmap_flags=MAP_SHARED;
       }
       FLAGS_v=1;
-      auto *decode_fst = dynamic_cast<ConstFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
       KALDI_LOG << "page_stat: " << page_stat(fst_in_str);
+      auto *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags);
 
       ThreadPool pool(nthreads); // try nthreads/2 later
       if (nthreads) {
+        auto *decode_fst = dynamic_cast<ExpandedFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
         ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads, load_mode, load_ratio); // TODO: no improvement
       }
 
