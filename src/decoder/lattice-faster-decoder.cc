@@ -77,6 +77,14 @@ void LatticeFasterDecoderTpl<FST, Token>::InitDecoding() {
 // an unusual search error.
 template <typename FST, typename Token>
 bool LatticeFasterDecoderTpl<FST, Token>::Decode(DecodableInterface *decodable) {
+  if (std::is_same<FST, fst::Fst<fst::StdArc> >::value) {
+    if (fst_->Type() == "compact_r_fst_compactor") {
+      LatticeFasterDecoderTpl<fst::StdRFst, Token> *this_cast =
+          reinterpret_cast<LatticeFasterDecoderTpl<fst::StdRFst, Token>* >(this);
+      return this_cast->Decode(decodable);
+    } 
+  }
+
   InitDecoding();
 
   // We use 1-based indexing for frames in this decoder (if you view it in
@@ -604,6 +612,11 @@ void LatticeFasterDecoderTpl<FST, Token>::AdvanceDecoding(DecodableInterface *de
     } else if (fst_->Type() == "vector") {
       LatticeFasterDecoderTpl<fst::VectorFst<fst::StdArc>, Token> *this_cast =
           reinterpret_cast<LatticeFasterDecoderTpl<fst::VectorFst<fst::StdArc>, Token>* >(this);
+      this_cast->AdvanceDecoding(decodable, max_num_frames);
+      return;
+    } else if (fst_->Type() == "compact_r_fst_compactor") {
+      LatticeFasterDecoderTpl<fst::StdRFst, Token> *this_cast =
+          reinterpret_cast<LatticeFasterDecoderTpl<fst::StdRFst, Token>* >(this);
       this_cast->AdvanceDecoding(decodable, max_num_frames);
       return;
     }
