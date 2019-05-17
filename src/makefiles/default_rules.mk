@@ -20,6 +20,7 @@ ifeq ($(KALDI_FLAVOR), dynamic)
 		endif
     LDFLAGS += -Wl,-rpath=$(shell readlink -f $(KALDILIBDIR))
     EXTRA_LDLIBS += $(foreach dep,$(ADDLIBS), $(dir $(dep))lib$(notdir $(basename $(dep))).so)
+    EXTRA_LDLIBS += $(foreach dep,$(ADDRAWLIBS), $(dir $(dep))$(notdir $(basename $(dep))).so)
   else  # Platform not supported
     $(error Dynamic libraries not supported on this platform. Run configure with --static flag.)
   endif

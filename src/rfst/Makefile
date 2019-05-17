@@ -12,7 +12,7 @@ include ../kaldi.mk
 
 TESTFILES = r-fst-test r-fst-test2
 
-OBJFILES = half.o r-fst.o
+OBJFILES = r-fst.o
 
 
 RAWLIBNAME = compact_r_fst_compactor-fst
