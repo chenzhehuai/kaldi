@@ -57,30 +57,25 @@ class RFstCompactor {
     auto olabel = (arc.olabel == kNoLabel) ? kMaxOLabel - 1 : arc.olabel;
     auto nextstate = (arc.nextstate == kNoStateId) ? kMaxStateId - 1 : arc.nextstate;
 
+    KALDI_ASSERT(sizeof(Element) == 10);
     KALDI_ASSERT(ilabel < kMaxILabel);
     KALDI_ASSERT(olabel < kMaxOLabel);
     KALDI_ASSERT(nextstate < kMaxStateId);
     auto weight =
-        half_from_float(reinterpret_cast<const uint32 &>(arc.weight.Value()));
+        half_float::detail::float2half<std::round_indeterminate>(arc.weight.Value());
     return Element(ilabel, olabel, nextstate, weight);
   }
   Arc Expand(StateId s, const Element &p, uint32 f = kArcValueFlags) const {
-    KALDI_ASSERT(sizeof(p) == 10);
     StateId nextstate = p.nextstate;
     Label olabel = p.olabel;
     Label ilabel = p.ilabel;
     if (ilabel == kMaxILabel - 1) {
-      KALDI_ASSERT(olabel == kMaxOLabel - 1);
-      KALDI_ASSERT(nextstate == kMaxStateId - 1);
       ilabel = kNoLabel;
       olabel = kNoLabel;
       nextstate = kNoStateId;
     }
-    // auto f_weight = reinterpret_cast<float&>(weight)
-    auto weight = half_to_float(p.weight);
-    BaseFloat f_weight;
-    memcpy(&f_weight, &weight, sizeof(BaseFloat));
-    return Arc(ilabel, olabel, f_weight, nextstate);
+    auto weight = half_float::detail::half2float<BaseFloat>(p.weight);
+    return Arc(ilabel, olabel, weight, nextstate);
   }
 
   ssize_t Size() const { return -1; }
