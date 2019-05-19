@@ -23,6 +23,8 @@
 #include "base/kaldi-error.h"
 #include "base/kaldi-math.h"
 #include "util/kaldi-io.h"
+#include "base/timer.h"
+#include <fst/extensions/compress/gzfile.h>
 
 namespace fst {
 
@@ -37,19 +39,35 @@ VectorFst<StdArc> *ReadFstKaldi(std::string rxfilename) {
   FstReadOptions ropts("<unspecified>", &hdr);
   VectorFst<StdArc> *fst = VectorFst<StdArc>::Read(ki.Stream(), ropts);
   if (!fst)
-    KALDI_ERR << "Could not read fst from "
-              << kaldi::PrintableRxfilename(rxfilename);
+    KALDI_ERR << "Could not read fst from " << kaldi::PrintableRxfilename(rxfilename);
   return fst;
 }
 
-Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err, std::string mode, int mmap_flags) {
+Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err,
+                                 std::string mode, int mmap_flags, bool compress) {
+  using namespace kaldi;
+  Timer timer;
   if (rxfilename == "") rxfilename = "-"; // interpret "" as stdin,
   // for compatibility with OpenFst conventions.
+  std::istream *ist = NULL;
+  std::unique_ptr<std::istream> istp;
   kaldi::Input ki(rxfilename);
+  IGzFile *gzfile = NULL;
+  if (!compress) {
+    ist = &ki.Stream();
+  } else {
+    gzfile = new IGzFile(rxfilename);
+    if (!*gzfile) {
+      KALDI_ERR << "Decompress: Can't open file: " << rxfilename;
+    }
+    istp = gzfile->read();
+    ist = istp.get();
+  }
+
   fst::FstHeader hdr;
   // Read FstHeader which contains the type of FST
-  if (!hdr.Read(ki.Stream(), rxfilename)) {
-    if(throw_on_err) {
+  if (!hdr.Read(*ist, rxfilename)) {
+    if (throw_on_err) {
       KALDI_ERR << "Reading FST: error reading FST header from "
                 << kaldi::PrintableRxfilename(rxfilename);
     } else {
@@ -61,7 +79,7 @@ Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err, std:
   }
   // Check the type of Arc
   if (hdr.ArcType() != fst::StdArc::Type()) {
-    if(throw_on_err) {
+    if (throw_on_err) {
       KALDI_ERR << "FST with arc type " << hdr.ArcType() << " is not supported.";
     } else {
       KALDI_WARN << "Fst with arc type" << hdr.ArcType()
@@ -71,22 +89,20 @@ Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err, std:
   }
   // Read the FST
   FstReadOptions ropts(rxfilename, &hdr);
-  if (mode != "") 
-    ropts.mode = ropts.ReadMode(mode);
-  if (mmap_flags)
-    ropts.mmap_flags = mmap_flags;
+  if (mode != "") ropts.mode = ropts.ReadMode(mode);
+  if (mmap_flags) ropts.mmap_flags = mmap_flags;
   Fst<StdArc> *fst = NULL;
   if (hdr.FstType() == "const") {
-    fst = ConstFst<StdArc>::Read(ki.Stream(), ropts);
+    fst = ConstFst<StdArc>::Read(*ist, ropts);
   } else if (hdr.FstType() == "vector") {
-    fst = VectorFst<StdArc>::Read(ki.Stream(), ropts);
+    fst = VectorFst<StdArc>::Read(*ist, ropts);
   } else {
-    fst = Fst<StdArc>::Read(ki.Stream(), ropts);
+    fst = Fst<StdArc>::Read(*ist, ropts);
   }
   if (!fst) {
-    if(throw_on_err) {
-     KALDI_ERR << "Could not read fst from "
-               << kaldi::PrintableRxfilename(rxfilename);
+    if (throw_on_err) {
+      KALDI_ERR << "Could not read fst from "
+                << kaldi::PrintableRxfilename(rxfilename);
     } else {
       KALDI_WARN << "Could not read fst from "
                  << kaldi::PrintableRxfilename(rxfilename)
@@ -94,6 +110,10 @@ Fst<StdArc> *ReadFstKaldiGeneric(std::string rxfilename, bool throw_on_err, std:
       return NULL;
     }
   }
+  if (compress) {
+    delete gzfile;
+  }
+  KALDI_VLOG(1) << "fst time: " << timer.Elapsed();
   return fst;
 }
 
@@ -118,8 +138,7 @@ void ReadFstKaldi(std::string rxfilename, fst::StdVectorFst *ofst) {
   delete fst;
 }
 
-void WriteFstKaldi(const VectorFst<StdArc> &fst,
-                   std::string wxfilename) {
+void WriteFstKaldi(const VectorFst<StdArc> &fst, std::string wxfilename) {
   if (wxfilename == "") wxfilename = "-"; // interpret "" as stdout,
   // for compatibility with OpenFst conventions.
   bool write_binary = true, write_header = false;

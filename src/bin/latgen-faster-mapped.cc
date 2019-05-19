@@ -272,6 +272,7 @@ int main(int argc, char *argv[]) {
         lattice_wspecifier = po.GetArg(4),
         words_wspecifier = po.GetOptArg(5),
         alignment_wspecifier = po.GetOptArg(6);
+    bool compress = (fst_in_str.find("gz") !=std::string::npos);
 
     TransitionModel trans_model;
     ReadKaldiObject(model_in_filename, &trans_model);
@@ -312,11 +313,11 @@ int main(int argc, char *argv[]) {
       }
       FLAGS_v=1;
       KALDI_LOG << "page_stat: " << page_stat(fst_in_str);
-      auto *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags);
+      auto *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags, compress);
 
       ThreadPool pool(nthreads); // try nthreads/2 later
       if (nthreads) {
-        auto *decode_fst = dynamic_cast<ExpandedFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags));
+        auto *decode_fst = dynamic_cast<ExpandedFst<StdArc>*>(fst::ReadFstKaldiGeneric(fst_in_str, true, map, mmap_flags, compress));
         ParaPreloadFst(fst_in_str, decode_fst->NumStates(), pool, nthreads, load_mode, load_ratio); // TODO: no improvement
       }
 
