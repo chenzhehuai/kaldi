@@ -7,6 +7,7 @@
 #include "hmm/transition-model.h"
 #include "fstext/fstext-lib.h"
 #include "r-fst.h"
+#include "../rfstfast/r-fst.h"
 #include "base/timer.h"
 
 template <typename FST> 
@@ -36,7 +37,9 @@ int main(int argc, char *argv[]) {
     std::string f = po.GetArg(1);
     auto *fst= fst::ReadFstKaldiGeneric(f, true);
     auto *wrap_wfst = dynamic_cast<StdRFst*>(fst);
+    auto *wrap_wfst2 = dynamic_cast<StdRFstFast*>(fst);
     if (wrap_wfst) test(*wrap_wfst);
+    else if (wrap_wfst2) test(*wrap_wfst2);
     else test(*fst);
     return 0;
 }

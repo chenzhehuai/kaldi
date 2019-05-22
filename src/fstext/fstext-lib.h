@@ -35,4 +35,5 @@
 #include "fstext/kaldi-fst-io.h"
 
 #include "rfst/r-fst.h"
+#include "rfstfast/r-fst.h"
 #endif
