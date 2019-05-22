@@ -82,7 +82,12 @@ bool LatticeFasterDecoderTpl<FST, Token>::Decode(DecodableInterface *decodable) 
       LatticeFasterDecoderTpl<fst::StdRFst, Token> *this_cast =
           reinterpret_cast<LatticeFasterDecoderTpl<fst::StdRFst, Token>* >(this);
       return this_cast->Decode(decodable);
+    } else if (fst_->Type() == "compact_r_fst_fast_compactor") {
+      LatticeFasterDecoderTpl<fst::StdRFstFast, Token> *this_cast =
+          reinterpret_cast<LatticeFasterDecoderTpl<fst::StdRFstFast, Token>* >(this);
+      return this_cast->Decode(decodable);
     } 
+
   }
 
   InitDecoding();
@@ -619,7 +624,13 @@ void LatticeFasterDecoderTpl<FST, Token>::AdvanceDecoding(DecodableInterface *de
           reinterpret_cast<LatticeFasterDecoderTpl<fst::StdRFst, Token>* >(this);
       this_cast->AdvanceDecoding(decodable, max_num_frames);
       return;
+    } else if (fst_->Type() == "compact_r_fst_fast_compactor") {
+      LatticeFasterDecoderTpl<fst::StdRFstFast, Token> *this_cast =
+          reinterpret_cast<LatticeFasterDecoderTpl<fst::StdRFstFast, Token>* >(this);
+      this_cast->AdvanceDecoding(decodable, max_num_frames);
+      return;
     }
+
   }
 
 
