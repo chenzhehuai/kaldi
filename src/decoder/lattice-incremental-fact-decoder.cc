@@ -26,22 +26,37 @@ namespace kaldi {
 // instantiate this class once for each thing you have to decode.
 template <typename FST, typename Token>
 LatticeIncrementalFactDecoderTpl<FST, Token>::LatticeIncrementalFactDecoderTpl(
-    const LatticeIncrementalDecoderConfig &config, const TransitionModel *trans_model)
+    const LatticeIncrementalDecoderConfig &config, const TransitionModel *trans_model,
+    const std::string fst_in_str)
     : LatticeIncrementalDecoderTpl<FST, Token>(config, trans_model) {
   arc_toks_.SetSize(1000); // just so on the first frame we do something reasonable.
+  if (fst_in_str != "") LoadHTransducers(fst_in_str);
 }
 
 template <typename FST, typename Token>
 LatticeIncrementalFactDecoderTpl<FST, Token>::LatticeIncrementalFactDecoderTpl(
     const LatticeIncrementalDecoderConfig &config, FST *fst,
-    const TransitionModel *trans_model)
+    const TransitionModel *trans_model, const std::string fst_in_str)
     : LatticeIncrementalDecoderTpl<FST, Token>(config, fst, trans_model) {
   arc_toks_.SetSize(1000); // just so on the first frame we do something reasonable.
+  if (fst_in_str != "") LoadHTransducers(fst_in_str);
 }
 
 template <typename FST, typename Token>
 LatticeIncrementalFactDecoderTpl<FST, Token>::~LatticeIncrementalFactDecoderTpl() {
   DeleteElemArcs(arc_toks_.Clear());
+}
+
+template <typename FST, typename Token>
+void LatticeIncrementalFactDecoderTpl<FST, Token>::LoadHTransducers(
+    std::string fst_in_str) {
+  SequentialTableReader<fst::VectorFstHolder> fst_reader(fst_in_str);
+  int count = 0;
+  h_transducers_.clear();
+  for (; !fst_reader.Done(); fst_reader.Next(), count++) {
+    h_transducers_.emplace_back(fst_reader.Value());
+  }
+  KALDI_VLOG(1) << "Total ilabels: " << count;
 }
 
 template <typename FST, typename Token>
@@ -126,6 +141,86 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::InitDecoding(bool keep_contex
   last_cutoff_ = config_.beam; // initialize it by config_.beam
 
   ProcessNonemitting(config_.beam);
+}
+
+// Returns true if any kind of traceback is available (not necessarily from
+// a final state).  It should only very rarely return false; this indicates
+// an unusual search error.
+template <typename FST, typename Token>
+bool LatticeIncrementalFactDecoderTpl<FST, Token>::Decode(
+    DecodableInterface *decodable) {
+  InitDecoding();
+
+  // We use 1-based indexing for frames in this decoder (if you view it in
+  // terms of features), but note that the decodable object uses zero-based
+  // numbering, which we have to correct for when we call it.
+
+  while (!decodable->IsLastFrame(NumFramesDecoded() - 1)) {
+    if (NumFramesDecoded() % config_.prune_interval == 0) {
+      PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
+    }
+
+    // We always incrementally determinize the lattice after lattice pruning in
+    // PruneActiveTokens() since we need extra_cost as the weights
+    // of final arcs to denote the "future" information of final states (Tokens)
+    // Moreover, the delay on GetLattice to do determinization
+    // make it process more skinny lattices which reduces the computation overheads.
+    int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
+    // The minimum length of chunk is config_.determinize_chunk_size.
+    if (frame_det_most % config_.determinize_chunk_size == 0) {
+      int32 frame_det_least =
+          last_get_lattice_frame_ + config_.determinize_chunk_size;
+      // To adaptively decide the length of chunk, we further compare the number of
+      // tokens in each frame and a pre-defined threshold.
+      // If the number of tokens in a certain frame is less than
+      // config_.determinize_max_active, the lattice can be determinized up to this
+      // frame. And we try to determinize as most frames as possible so we check
+      // numbers from frame_det_most to frame_det_least
+      for (int32 f = frame_det_most; f >= frame_det_least; f--) {
+        if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
+            GetNumToksForFrame(f) < config_.determinize_max_active) {
+          KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
+                        << " incremental determinization up to " << f;
+          GetLattice(false, f);
+          break;
+        }
+      }
+    }
+
+    int32 num;
+    // step 1
+    SetEntryTokenForArcTokens(decodable, last_cutoff_,
+                              config_.beam); // use adaptive_beam
+    if (g_kaldi_verbose_level > 1) {
+      num = GetNumToksForFrame(NumFramesDecoded()); // it takes time
+      KALDI_VLOG(6) << "ne " << num;
+      nemit_tok_num_ += num;
+    }
+
+    // step 2
+    BaseFloat cost_cutoff = ProcessEmitting(decodable);
+    last_cutoff_ = cost_cutoff;
+
+    // step 3
+    ExpandArcTokensToNextState(cost_cutoff);
+    if (g_kaldi_verbose_level > 1) {
+      num = GetNumToksForFrame(NumFramesDecoded()); // it takes time
+      KALDI_VLOG(6) << "e " << num;
+      emit_tok_num_ += num;
+    }
+
+    // step 4
+    ProcessNonemitting(cost_cutoff);
+  }
+  Timer timer;
+  FinalizeDecoding();
+  GetLattice(true, NumFramesDecoded());
+  KALDI_VLOG(2) << "Delay time during and after FinalizeDecoding()"
+                << "(secs): " << timer.Elapsed();
+
+  // Returns true if we have any kind of traceback available (not necessarily
+  // to the end state; query ReachedFinal() for that).
+  return !active_toks_.empty() && active_toks_.back().toks != NULL;
 }
 
 template <typename FST, typename Token>
@@ -298,15 +393,16 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
   using namespace fst;
   KALDI_ASSERT(active_toks_.size() > 0);
   int32 frame = active_toks_.size() - 1;
+  active_toks_.resize(active_toks_.size() + 1);
   BaseFloat adaptive_beam, best_weight;
   size_t tok_cnt;
   ElemArc *best_elem = NULL;
   auto *final_toks =
       arc_toks_.Clear(); // analogous to swapping prev_toks_ / cur_toks_
+  KALDI_ASSERT(final_toks);
   BaseFloat cur_cutoff =
       GetCutoff(final_toks, &tok_cnt, &adaptive_beam, &best_elem, best_weight);
 
-  active_toks_.resize(active_toks_.size() + 1);
   Token *&toks = active_toks_[frame + 1].toks;
   const BaseFloat extra_cost = std::numeric_limits<BaseFloat>::infinity();
 
@@ -336,16 +432,23 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
     memcpy(tok_buf, arc_tok->tokens, sizeof(Token *) * kStatePerPhone);
     if (e != &best_elem_head) // just to get a reasonable cutoff from the best element
       memset(arc_tok->tokens, 0, sizeof(Token *) * kStatePerPhone);
-    for (int i = kStatePerPhone - 1; i > 0; i--) {
-      auto *&tok = arc_tok->tokens[i];
-      for (int j = i; j >= i - 1; j--) {
+    auto &hmm_fst = h_transducers_[arc_tok->ilabel];
+    KALDI_ASSERT(hmm_fst.NumStates() == kStatePerPhone);
+    for (int j = 0; j < kStatePerPhone; j++) {
+      fst::ArcIterator<ConstFst<StdArc>> hmm_aiter(hmm_fst, j);
+      for (; !hmm_aiter.Done(); hmm_aiter.Next()) {
+        auto &hmm_arc = hmm_aiter.Value();
+        int i = hmm_arc.nextstate;
+        auto *&tok = arc_tok->tokens[i];
         auto *prev_tok = tok_buf[j];
         // We apply a cur_cutoff on prev_tok
         if (prev_tok && prev_tok->tot_cost < cur_cutoff) {
-          Label pdfid = (i == kCenterPhonePos) ? arc_tok->ilabel : kBlankPdf;
-          BaseFloat ac_cost = cost_offset - decodable->LogLikelihood(frame, pdfid);
+          Label tid = hmm_arc.ilabel;
+          BaseFloat ac_cost = cost_offset - decodable->LogLikelihood(frame, tid);
           BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
-          BaseFloat tot_cost = prev_tok ? prev_tok->tot_cost + ac_cost + 0 : infinity;
+          BaseFloat trans_cost = hmm_arc.weight.Value();
+          BaseFloat tot_cost =
+              prev_tok ? prev_tok->tot_cost + ac_cost + trans_cost : infinity;
 
           // We apply a next_cutoff on the current tok
           if (tot_cost > next_cutoff)
@@ -367,7 +470,7 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
           // construct BackwardLink
           BackwardLinkT *t_link = tok->links;
           tok->links = link_allocator_->allocate(1);
-          Arc arc(pdfid, 0, tot_cost - ac_cost - prev_tok->tot_cost, kNoStateId);
+          Arc arc(tid, 0, tot_cost - ac_cost - prev_tok->tot_cost, kNoStateId);
           link_allocator_->construct(tok->links, prev_tok, &arc, ac_cost, t_link);
           KALDI_ASSERT(tok != prev_tok);
         }
@@ -387,7 +490,8 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
       continue;
     } else {
       arc_toks_.Delete(e);
-      if (remain_elem_arc) arc_toks_.Insert(e->key, e->val); // TODO better method
+      if (remain_elem_arc)
+        arc_toks_.Insert(e->key, e->val); // TODO better method
       else
         arc_token_allocator_->deallocate(arc_tok, 1);
     }
@@ -460,14 +564,20 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::SetEntryTokenForArcTokens(
   // use last_best_arc_tok_ to help pruning
   if (last_best_arc_tok_) {
     auto *arc_tok = last_best_arc_tok_;
-    for (int i = kStatePerPhone - 1; i > 0; i--) {
-      for (int j = i; j >= i - 1; j--) {
-        auto *prev_tok = arc_tok->tokens[j];
+    auto &hmm_fst = h_transducers_[arc_tok->ilabel];
+    KALDI_ASSERT(hmm_fst.NumStates() == kStatePerPhone);
+    for (int i = 0; i < kStatePerPhone; i++) {
+      fst::ArcIterator<ConstFst<StdArc>> hmm_aiter(hmm_fst, i);
+      for (; !hmm_aiter.Done(); hmm_aiter.Next()) {
+        auto &hmm_arc = hmm_aiter.Value();
+        auto *prev_tok = arc_tok->tokens[i];
         if (prev_tok) {
-          Label pdfid = (i == kCenterPhonePos) ? arc_tok->ilabel : kBlankPdf;
-          BaseFloat ac_cost = -decodable->LogLikelihood(frame, pdfid);
+          Label tid = hmm_arc.ilabel;
+          BaseFloat ac_cost = -decodable->LogLikelihood(frame, tid);
           BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
-          BaseFloat tot_cost = prev_tok ? prev_tok->tot_cost + ac_cost + 0 : infinity;
+          BaseFloat trans_cost = hmm_arc.weight.Value();
+          BaseFloat tot_cost =
+              prev_tok ? prev_tok->tot_cost + ac_cost + trans_cost : infinity;
           if (tot_cost + adaptive_beam < next_cutoff_fake)
             next_cutoff_fake = tot_cost + adaptive_beam;
         }
@@ -499,12 +609,16 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::SetEntryTokenForArcTokens(
         // Get the ac_cost of the current decoding step,
         // This ac_cost is only for helping pruning, we will include it later in
         // ProcessEmitting Hence we call it "fake"
-        BaseFloat ac_cost_fake = -decodable->LogLikelihood(frame, arc.ilabel),
+        auto &hmm_fst = h_transducers_[arc.ilabel];
+        fst::ArcIterator<ConstFst<StdArc>> hmm_aiter(hmm_fst, 0); // first state
+        auto &hmm_arc = hmm_aiter.Value();
+        BaseFloat ac_cost_fake = -decodable->LogLikelihood(frame, hmm_arc.ilabel),
+                  trans_cost_fake = hmm_arc.weight.Value(),
                   graph_cost = arc.weight.Value(), cur_cost = tok->tot_cost,
                   tot_cost =
                       cur_cost +
                       graph_cost, // the real tot_cost does not include ac_cost_fake
-            tot_cost_fake = cur_cost + ac_cost_fake + graph_cost;
+            tot_cost_fake = cur_cost + ac_cost_fake + trans_cost_fake + graph_cost;
         // This token is still in current frame, so we prune it using cur_cutoff
         if (cur_cost + graph_cost > cur_cutoff)
           continue;
@@ -560,10 +674,12 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::ExpandArcTokensToNextState(
     bool changed = false;
     Token *next_tok = NULL;
 
-    for (int i = kStatePerPhone - 1; i > 0; i--) {
-      auto *tok = arc_tok->tokens[i];
-      if (!tok) continue;
-      BaseFloat expand_cost = tok->tot_cost; // TODO: add trans weight
+    int i = kStatePerPhone - 1; // the end state
+    auto *&tok = arc_tok->tokens[i];
+    if (tok) {
+      auto &hmm_fst = h_transducers_[arc_tok->ilabel];
+      BaseFloat expand_cost =
+          tok->tot_cost + hmm_fst.Final(i).Value(); // add trans weight
       if (expand_cost > next_cutoff) continue;
 
       if (!next_tok)
@@ -572,11 +688,10 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::ExpandArcTokensToNextState(
         next_tok->tot_cost = expand_cost;
         changed = true;
       }
-      // Add BackwardLinkT from tok to next_tok (put on head of list tok->links)
       BackwardLinkT *t_link = next_tok->links;
       next_tok->links = link_allocator_->allocate(1);
       // record arc_tok->olabel in this BackwardLink
-      Arc arc(0, arc_tok->olabel, 0, kNoStateId);
+      Arc arc(0, arc_tok->olabel, expand_cost - tok->tot_cost, kNoStateId);
       link_allocator_->construct(next_tok->links, tok, &arc, 0, t_link);
       KALDI_ASSERT(next_tok != tok);
     }

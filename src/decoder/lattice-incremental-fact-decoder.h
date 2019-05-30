@@ -63,6 +63,7 @@ class LatticeIncrementalFactDecoderTpl
   using base = LatticeIncrementalDecoderTpl<FST, Token>;
   using QueueElem = typename base::QueueElem;
   using Elem = typename base::Elem;
+  using base::FinalizeDecoding;
   using base::ClearActiveTokens;
   using base::FindOrAddToken;
   using base::DeleteElems;
@@ -103,20 +104,37 @@ class LatticeIncrementalFactDecoderTpl
   // This version of the constructor does not take ownership of
   // 'fst'.
   LatticeIncrementalFactDecoderTpl(const LatticeIncrementalDecoderConfig &config,
-                                   const TransitionModel *trans_model = nullptr);
+                                   const TransitionModel *trans_model = nullptr,
+                                   const std::string fst_in_str = "");
 
   // This version of the constructor takes ownership of the fst, and will delete
   // it when this object is destroyed.
   LatticeIncrementalFactDecoderTpl(const LatticeIncrementalDecoderConfig &config,
-                                   FST *fst, const TransitionModel *trans_model);
+                                   FST *fst, const TransitionModel *trans_model,
+                                   const std::string fst_in_str = "");
 
   ~LatticeIncrementalFactDecoderTpl();
 
+  void LoadHTransducers(std::string fst_in_str);
   /// InitDecoding initializes the decoding, and should only be used if you
   /// intend to call AdvanceDecoding().  If you call Decode(), you don't need to
   /// call this.  You can also call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance.
   void InitDecoding(bool keep_context = false);
+
+  /// An example of how to do decoding together with incremental
+  /// determinization. It decodes until there are no more frames left in the
+  /// "decodable" object. Note, this may block waiting for input
+  /// if the "decodable" object blocks.
+  /// In this example, config_.determinize_delay, config_.determinize_chunk_size
+  /// and config_.determinize_max_active are used to determine the time to
+  /// call GetLattice().
+  /// Users may do it in their own ways by calling
+  /// AdvanceDecoding() and GetLattice(). So the logic for deciding
+  /// when we get the lattice would be driven by the user.
+  /// The function returns true if any kind
+  /// of traceback is available (not necessarily from a final state).
+  bool Decode(DecodableInterface *decodable);
 
   /// This will decode until there are no more frames ready in the decodable
   /// object.  You can keep calling it each time more frames become available.
@@ -125,9 +143,7 @@ class LatticeIncrementalFactDecoderTpl
   void AdvanceDecoding(DecodableInterface *decodable, int32 max_num_frames = -1);
 
  protected:
-  static const int kStatePerPhone = 3;
-  static const int kCenterPhonePos = 1;
-  static const int kBlankPdf = 1;
+  static const int kStatePerPhone = 2; // TODO: make it configurable
   struct ArcToken {
     Token *tokens[kStatePerPhone];
     // ilabel will be used in ProcessEmitting
@@ -171,6 +187,8 @@ class LatticeIncrementalFactDecoderTpl
   // keep the followings to help SetEntryTokenForArcTokens()
   BaseFloat last_cutoff_;
   ArcToken *last_best_arc_tok_;
+  std::vector<fst::ConstFst<fst::StdArc>> h_transducers_;
+
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeIncrementalFactDecoderTpl);
 };
 

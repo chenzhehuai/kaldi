@@ -22,7 +22,8 @@
 
 #include "itf/options-itf.h"
 #include "decoder/lattice-faster-decoder.h"
-#include "decoder/lattice-incremental-decoder.h"
+#include "lattice-incremental-decoder.h"
+#include "lattice-incremental-fact-decoder.h"
 #include "decoder/lattice-simple-decoder.h"
 
 // This header contains declarations from various convenience functions that are called
@@ -90,9 +91,9 @@ void ModifyGraphForCarefulAlignment(
     fst::VectorFst<fst::StdArc> *fst);
 
 /// TODO
-template <typename FST>
+template <typename FST, typename DEC>
 bool DecodeUtteranceLatticeIncremental(
-    LatticeIncrementalDecoderTpl<FST> &decoder, // not const but is really an input.
+    DEC &decoder, // not const but is really an input.
     DecodableInterface &decodable, // not const but is really an input.
     const TransitionModel &trans_model,
     const fst::SymbolTable *word_syms,

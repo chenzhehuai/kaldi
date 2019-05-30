@@ -227,7 +227,19 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::Decode(DecodableInterface *decoda
       }
     }
     BaseFloat cost_cutoff = ProcessEmitting(decodable);
+    int32 num;
+    if (g_kaldi_verbose_level > 1) {
+      num = GetNumToksForFrame(NumFramesDecoded()); // it takes time
+      KALDI_VLOG(6) << "e " << num;
+      emit_tok_num_ += num;
+    }
+
     ProcessNonemitting(cost_cutoff);
+    if (g_kaldi_verbose_level > 1) {
+      num = GetNumToksForFrame(NumFramesDecoded()); // it takes time
+      KALDI_VLOG(6) << "ne " << num;
+      nemit_tok_num_ += num;
+    }
   }
   Timer timer;
   FinalizeDecoding();

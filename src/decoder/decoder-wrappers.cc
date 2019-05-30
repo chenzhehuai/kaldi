@@ -195,9 +195,9 @@ DecodeUtteranceLatticeFasterClass::~DecodeUtteranceLatticeFasterClass() {
   delete decodable_;
 }
 
-template <typename FST>
+template <typename FST, typename DEC>
 bool DecodeUtteranceLatticeIncremental(
-    LatticeIncrementalDecoderTpl<FST> &decoder, // not const but is really an input.
+    DEC &decoder, // not const but is really an input.
     DecodableInterface &decodable, // not const but is really an input.
     const TransitionModel &trans_model,
     const fst::SymbolTable *word_syms,
@@ -378,7 +378,8 @@ bool DecodeUtteranceLatticeFaster(
 }
 
 // Instantiate the template above for the two required FST types.
-template bool DecodeUtteranceLatticeIncremental(
+template 
+bool DecodeUtteranceLatticeIncremental<fst::Fst<fst::StdArc>, LatticeIncrementalDecoder>(
     LatticeIncrementalDecoderTpl<fst::Fst<fst::StdArc> > &decoder,
     DecodableInterface &decodable,
     const TransitionModel &trans_model,
@@ -393,7 +394,8 @@ template bool DecodeUtteranceLatticeIncremental(
     LatticeWriter *lattice_writer,
     double *like_ptr);
 
-template bool DecodeUtteranceLatticeIncremental(
+template bool DecodeUtteranceLatticeIncremental<fst::GrammarFst, 
+         LatticeIncrementalDecoderTpl<fst::GrammarFst>>(
     LatticeIncrementalDecoderTpl<fst::GrammarFst> &decoder,
     DecodableInterface &decodable,
     const TransitionModel &trans_model,
@@ -407,6 +409,39 @@ template bool DecodeUtteranceLatticeIncremental(
     CompactLatticeWriter *compact_lattice_writer,
     LatticeWriter *lattice_writer,
     double *like_ptr);
+
+template 
+bool DecodeUtteranceLatticeIncremental<fst::Fst<fst::StdArc>, LatticeIncrementalFactDecoder>(
+    LatticeIncrementalFactDecoder &decoder,
+    DecodableInterface &decodable,
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr);
+
+template bool DecodeUtteranceLatticeIncremental<fst::GrammarFst, 
+         LatticeIncrementalFactDecoderTpl<fst::GrammarFst>>(
+    LatticeIncrementalFactDecoderTpl<fst::GrammarFst> &decoder,
+    DecodableInterface &decodable,
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr);
+
 
 template bool DecodeUtteranceLatticeFaster(
     LatticeFasterDecoderTpl<fst::Fst<fst::StdArc> > &decoder,
