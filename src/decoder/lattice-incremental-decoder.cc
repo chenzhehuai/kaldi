@@ -26,9 +26,8 @@ namespace kaldi {
 // instantiate this class once for each thing you have to decode.
 template <typename FST, typename Token>
 LatticeIncrementalDecoderTpl<FST, Token>::LatticeIncrementalDecoderTpl(
-    const FST &fst, const TransitionModel &trans_model,
-    const LatticeIncrementalDecoderConfig &config)
-    : fst_(&fst),
+    const LatticeIncrementalDecoderConfig &config, const TransitionModel *trans_model)
+    : fst_(NULL),
       fst_sorted_(false),
       delete_fst_(false),
       config_(config),
@@ -43,7 +42,7 @@ LatticeIncrementalDecoderTpl<FST, Token>::LatticeIncrementalDecoderTpl(
 template <typename FST, typename Token>
 LatticeIncrementalDecoderTpl<FST, Token>::LatticeIncrementalDecoderTpl(
     const LatticeIncrementalDecoderConfig &config, FST *fst,
-    const TransitionModel &trans_model)
+    const TransitionModel *trans_model)
     : fst_(fst),
       fst_sorted_(false),
       delete_fst_(true),
@@ -64,7 +63,7 @@ LatticeIncrementalDecoderTpl<FST, Token>::~LatticeIncrementalDecoderTpl() {
 }
 
 template <typename FST, typename Token>
-void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding() {
+void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding(bool keep_context) {
   // clean up from last time:
   DeleteElems(toks_.Clear());
   cost_offsets_.clear();
@@ -101,13 +100,32 @@ void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding() {
   link_allocator_ = new fst::PoolAllocator<BackwardLinkT>(2048);
   StateId start_state = fst_->Start();
   KALDI_ASSERT(start_state != fst::kNoStateId);
-  Token *start_tok = token_allocator_->allocate(1);
-  token_allocator_->construct(
-      start_tok, 0.0, std::numeric_limits<BaseFloat>::infinity(), nullptr, nullptr);
-  active_toks_[0].toks = start_tok;
-  toks_.Insert(start_state, start_tok);
-  queue_.push_back(QueueElem(start_state, start_tok));
-  num_toks_++;
+  if (!keep_context) {
+    last_frame_nonfinal_states_.clear();
+  }
+  last_frame_nonfinal_states_.push_back(start_state);
+  std::vector<Token *> last_frame_nonfinal_tokens;
+  Token *start_tok = NULL;
+  for (auto i : last_frame_nonfinal_states_) {
+    Token *&toks = active_toks_[0].toks;
+    Token *tok = token_allocator_->allocate(1);
+    token_allocator_->construct(tok, 0.0, std::numeric_limits<BaseFloat>::infinity(),
+                                nullptr, toks);
+    toks = tok;
+    toks_.Insert(i, tok);
+    queue_.push_back(QueueElem(i, tok));
+    num_toks_++;
+    if (i == start_state)
+      start_tok = tok;
+    else
+      last_frame_nonfinal_tokens.push_back(tok);
+  }
+  // connect state 0 and above states
+  for (auto i : last_frame_nonfinal_tokens) {
+    BackwardLinkT *t_link = i->links;
+    i->links = link_allocator_->allocate(1);
+    link_allocator_->construct(i->links, start_tok, nullptr, 0, t_link);
+  }
 
   last_get_lattice_frame_ = 0;
   token_label_map_.clear();
@@ -410,12 +428,8 @@ void LatticeIncrementalDecoderTpl<FST, Token>::PruneBackwardLinksFinal() {
   typedef typename unordered_map<Token *, BaseFloat>::const_iterator IterType;
   ComputeFinalCosts(&final_costs_, &final_relative_cost_, &final_best_cost_);
   decoding_finalized_ = true;
-  // We call DeleteElems() as a nicety, not because it's really necessary;
-  // otherwise there would be a time, after calling PruneTokensForFrame() on the
-  // final frame, when toks_.GetList() or toks_.Clear() would contain pointers
-  // to nonexistent tokens.
-  DeleteElems(toks_.Clear());
 
+  last_frame_nonfinal_states_.clear();
   // Now go through tokens on this frame, pruning forward links...  may have to
   // iterate a few times until there is no more change, because the list is not
   // in topological order.  This is a modified version of the code in
@@ -433,6 +447,22 @@ void LatticeIncrementalDecoderTpl<FST, Token>::PruneBackwardLinksFinal() {
     }
     tok->extra_cost = tok->tot_cost + final_cost - final_best_cost_;
   }
+
+  const Elem *final_toks = toks_.GetList();
+  for (const Elem *e = final_toks, *e_tail; e != NULL; e = e_tail) {
+    auto *tok = e->val;
+    auto state = e->key;
+    if (tok->extra_cost >= std::numeric_limits<BaseFloat>::infinity()) {
+      last_frame_nonfinal_states_.push_back(state);
+    }
+    e_tail = e->tail;
+  }
+
+  // We call DeleteElems() as a nicety, not because it's really necessary;
+  // otherwise there would be a time, after calling PruneTokensForFrame() on the
+  // final frame, when toks_.GetList() or toks_.Clear() would contain pointers
+  // to nonexistent tokens.
+  DeleteElems(toks_.Clear());
 }
 
 template <typename FST, typename Token>
@@ -1204,7 +1234,7 @@ int32 LatticeIncrementalDecoderTpl<FST, Token>::GetNumToksForFrame(int32 frame) 
 
 template <typename FST>
 LatticeIncrementalDeterminizer<FST>::LatticeIncrementalDeterminizer(
-    const LatticeIncrementalDecoderConfig &config, const TransitionModel &trans_model)
+    const LatticeIncrementalDecoderConfig &config, const TransitionModel *trans_model)
     : config_(config), trans_model_(trans_model) {}
 
 template <typename FST>
@@ -1446,7 +1476,7 @@ bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(Lattice &raw_fst,
   // than the lattice_beam used PruneActiveTokens. Hence the beam we use is
   // (0.1 + config_.lattice_beam)
   ret &= DeterminizeLatticePhonePrunedWrapper(
-      trans_model_, &raw_fst, (config_.lattice_beam + 0.1), &clat, config_.det_opts);
+      *trans_model_, &raw_fst, (config_.lattice_beam + 0.1), &clat, config_.det_opts);
 
   // step 3: Appending the new chunk in clat to the old one in lat_
   ret &= AppendLatticeChunks(clat, not_first_chunk);
@@ -1625,6 +1655,11 @@ bool LatticeIncrementalDeterminizer<FST>::Finalize() {
 
 // Instantiate the template for the combination of token types and FST types
 // that we'll need.
+template class LatticeIncrementalDeterminizer<fst::Fst<fst::StdArc>>;
+template class LatticeIncrementalDeterminizer<fst::ConstFst<fst::StdArc>>;
+template class LatticeIncrementalDeterminizer<fst::VectorFst<fst::StdArc>>;
+template class LatticeIncrementalDeterminizer<fst::GrammarFst>;
+
 template class LatticeIncrementalDecoderTpl<fst::Fst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>>;

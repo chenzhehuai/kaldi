@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
       timer.Reset();
 
       {
-        LatticeIncrementalDecoder decoder(*decode_fst, trans_model, config);
+        LatticeIncrementalDecoder decoder(config, decode_fst, &trans_model);
 
         for (; !loglike_reader.Done(); loglike_reader.Next()) {
           std::string utt = loglike_reader.Key();
@@ -144,7 +144,8 @@ int main(int argc, char *argv[]) {
           num_fail++;
           continue;
         }
-        LatticeIncrementalDecoder decoder(fst_reader.Value(), trans_model, config);
+        auto& fst = fst_reader.Value();
+        LatticeIncrementalDecoder decoder(config, &fst, &trans_model);
         DecodableMatrixScaledMapped decodable(trans_model, loglikes, acoustic_scale);
         double like;
         if (DecodeUtteranceLatticeIncremental(

@@ -149,45 +149,28 @@ struct BackwardLink {
   BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
   BackwardLink *next;      // next in singly-linked list of forward links from a
                            // token.
+  inline BackwardLink()
+      : prev_tok(nullptr),
+        ilabel(0),
+        olabel(0),
+        graph_cost(0),
+        acoustic_cost(0),
+        next(nullptr) {}
+
   inline BackwardLink(Token *prev_tok, const Arc *arc, BaseFloat acoustic_cost,
                       BackwardLink *next)
       : prev_tok(prev_tok),
-        ilabel(arc->ilabel),
-        olabel(arc->olabel),
-        graph_cost(arc->weight.Value()),
+        ilabel(0),
+        olabel(0),
+        graph_cost(0),
         acoustic_cost(acoustic_cost),
-        next(next) {}
-};
-template <typename Token>
-struct BackwardLink<Token, fst::StdArc> {
-  using Arc = fst::StdArc;
-  using Label = typename Arc::Label;
-  using StateId = typename Arc::StateId;
-  using Weight = typename Arc::Weight;
-
-  Token *prev_tok; // the next token [or NULL if represents final-state]
-  const Arc *arc;  // reduce memory, we use Arc pointer to replace the following
-  // Label ilabel; // ilabel on link.
-  Label GetIlabel() {
-    KALDI_ASSERT(arc);
-    return arc->ilabel;
+        next(next) {
+    if (arc) {
+      ilabel = arc->ilabel;
+      olabel = arc->olabel;
+      graph_cost = arc->weight.Value();
+    }
   }
-  // Label olabel; // olabel on link.
-  Label GetOlabel() {
-    KALDI_ASSERT(arc);
-    return arc->olabel;
-  }
-  // BaseFloat graph_cost; // graph cost of traversing link (contains LM, etc.)
-  BaseFloat GetGraphCost() {
-    KALDI_ASSERT(arc);
-    return arc->weight.Value();
-  }
-  BaseFloat acoustic_cost; // acoustic cost (pre-scaled) of traversing link
-  BackwardLink *next;      // next in singly-linked list of forward links from a
-                           // token.
-  inline BackwardLink(Token *prev_tok, const Arc *arc, BaseFloat acoustic_cost,
-                      BackwardLink *next)
-      : prev_tok(prev_tok), arc(arc), acoustic_cost(acoustic_cost), next(next) {}
 };
 
 template <typename Arc>
@@ -269,13 +252,13 @@ class LatticeIncrementalDecoderTpl {
   // Instantiate this class once for each thing you have to decode.
   // This version of the constructor does not take ownership of
   // 'fst'.
-  LatticeIncrementalDecoderTpl(const FST &fst, const TransitionModel &trans_model,
-                               const LatticeIncrementalDecoderConfig &config);
+  LatticeIncrementalDecoderTpl(const LatticeIncrementalDecoderConfig &config,
+                               const TransitionModel *trans_model = nullptr);
 
   // This version of the constructor takes ownership of the fst, and will delete
   // it when this object is destroyed.
   LatticeIncrementalDecoderTpl(const LatticeIncrementalDecoderConfig &config,
-                               FST *fst, const TransitionModel &trans_model);
+                               FST *fst, const TransitionModel *trans_model);
 
   void SetOptions(const LatticeIncrementalDecoderConfig &config) { config_ = config; }
 
@@ -383,7 +366,7 @@ class LatticeIncrementalDecoderTpl {
   /// intend to call AdvanceDecoding().  If you call Decode(), you don't need to
   /// call this.  You can also call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance.
-  void InitDecoding();
+  void InitDecoding(bool keep_context = false);
 
   /// This will decode until there are no more frames ready in the decodable
   /// object.  You can keep calling it each time more frames become available.
@@ -637,6 +620,7 @@ class LatticeIncrementalDecoderTpl {
   // guide determinization
   // We cancel them after determinization
   unordered_map<int32, BaseFloat> token_label_final_cost_;
+  std::vector<StateId> last_frame_nonfinal_states_;
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeIncrementalDecoderTpl);
 };
 
@@ -656,7 +640,7 @@ class LatticeIncrementalDeterminizer {
   using Weight = typename Arc::Weight;
 
   LatticeIncrementalDeterminizer(const LatticeIncrementalDecoderConfig &config,
-                                 const TransitionModel &trans_model);
+                                 const TransitionModel *trans_model = nullptr);
   // Reset the lattice determinization data for an utterance
   void Init();
   // Output the resultant determinized lattice in the form of CompactLattice
@@ -729,7 +713,7 @@ class LatticeIncrementalDeterminizer {
   void GetRedeterminizedStates();
 
   const LatticeIncrementalDecoderConfig config_;
-  const TransitionModel &trans_model_; // keep it for determinization
+  const TransitionModel *trans_model_; // keep it for determinization
 
   // Record whether we have finished determinized the whole utterance
   // (including re-determinize)
