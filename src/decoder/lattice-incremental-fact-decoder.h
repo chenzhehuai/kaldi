@@ -70,6 +70,7 @@ class LatticeIncrementalFactDecoderTpl
   using base::PruneActiveTokens;
   using base::GetNumToksForFrame;
   using base::GetLattice;
+  using base::GetCutoff;
   using base::ProcessNonemitting;
   using base::PossiblyResizeHash;
   using base::NumFramesDecoded;
