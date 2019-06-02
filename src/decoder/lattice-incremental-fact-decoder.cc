@@ -476,7 +476,8 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
         auto *&tok = arc_tok->tokens[i];
         // We apply a cur_cutoff on prev_tok
         Label tid = hmm_arc.ilabel;
-        BaseFloat ac_cost = cost_offset - decodable->LogLikelihood(frame, tid);
+        BaseFloat ac_cost =
+            tid ? cost_offset - decodable->LogLikelihood(frame, tid) : 0;
         BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
         BaseFloat trans_cost = hmm_arc.weight.Value();
         BaseFloat tot_cost =
@@ -605,7 +606,7 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::SetEntryTokenForArcTokens(
         auto *prev_tok = arc_tok->tokens[i];
         if (prev_tok) {
           Label tid = hmm_arc.ilabel;
-          BaseFloat ac_cost = -decodable->LogLikelihood(frame, tid);
+          BaseFloat ac_cost = tid ? -decodable->LogLikelihood(frame, tid) : 0;
           BaseFloat infinity = std::numeric_limits<BaseFloat>::infinity();
           BaseFloat trans_cost = hmm_arc.weight.Value();
           BaseFloat tot_cost =
@@ -644,7 +645,8 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::SetEntryTokenForArcTokens(
         auto &hmm_fst = h_transducers_[arc.ilabel];
         fst::ArcIterator<ConstFst<StdArc>> hmm_aiter(hmm_fst, 0); // first state
         auto &hmm_arc = hmm_aiter.Value();
-        BaseFloat ac_cost_fake = -decodable->LogLikelihood(frame, hmm_arc.ilabel),
+        auto tid = hmm_arc.ilabel;
+        BaseFloat ac_cost_fake = tid ? -decodable->LogLikelihood(frame, tid) : 0,
                   trans_cost_fake = hmm_arc.weight.Value(),
                   graph_cost = arc.weight.Value(), cur_cost = tok->tot_cost,
                   tot_cost =
@@ -715,26 +717,31 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::ExpandArcTokensToNextState(
     bool changed = false;
     Token *next_tok = NULL;
 
-    int i = kStatePerPhone - 1; // the end state
-    auto *&tok = arc_tok->tokens[i];
-    if (tok) {
-      auto &hmm_fst = h_transducers_[arc_tok->ilabel];
-      BaseFloat expand_cost =
-          tok->tot_cost + hmm_fst.Final(i).Value(); // add trans weight
-      if (expand_cost > next_cutoff) continue;
+    for (int i = 0; i < kStatePerPhone; i++) {
+      auto *&tok = arc_tok->tokens[i];
+      if (tok) {
+        auto &hmm_fst = h_transducers_[arc_tok->ilabel];
+        // if state i is not a final state, the cost will be infinite and cannot pass
+        // the next_cutoff threshold
+        BaseFloat expand_cost =
+            tok->tot_cost + hmm_fst.Final(i).Value(); // add trans weight
+        if (expand_cost > next_cutoff) continue;
 
-      if (!next_tok)
-        next_tok = FindOrAddToken(arc_tok->nextstate, frame, expand_cost, &changed);
-      else if (expand_cost < next_tok->tot_cost) {
-        next_tok->tot_cost = expand_cost;
-        changed = true;
+        if (!next_tok)
+          next_tok =
+              FindOrAddToken(arc_tok->nextstate, frame, expand_cost,
+                             &changed); // TODO: do it once for kStatePerPhone states
+        else if (expand_cost < next_tok->tot_cost) {
+          next_tok->tot_cost = expand_cost;
+          changed = true;
+        }
+        BackwardLinkT *t_link = next_tok->links;
+        next_tok->links = link_allocator_->allocate(1);
+        // record arc_tok->olabel in this BackwardLink
+        Arc arc(0, arc_tok->olabel, expand_cost - tok->tot_cost, kNoStateId);
+        link_allocator_->construct(next_tok->links, tok, &arc, 0, t_link);
+        KALDI_ASSERT(next_tok != tok);
       }
-      BackwardLinkT *t_link = next_tok->links;
-      next_tok->links = link_allocator_->allocate(1);
-      // record arc_tok->olabel in this BackwardLink
-      Arc arc(0, arc_tok->olabel, expand_cost - tok->tot_cost, kNoStateId);
-      link_allocator_->construct(next_tok->links, tok, &arc, 0, t_link);
-      KALDI_ASSERT(next_tok != tok);
     }
     // prep for ProcessNonemitting
     if (changed) {
