@@ -59,6 +59,8 @@ class LatticeIncrementalFactDecoderTpl
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
   using Weight = typename Arc::Weight;
+  // Notably, We include ac_cost and trans_cost in the acoustic_cost of BackwardLinkT;
+  // we include graph_cost in graph_cost of BackwardLinkT;
   using BackwardLinkT = typename Token::BackwardLinkT;
   using base = LatticeIncrementalDecoderTpl<FST, Token>;
   using QueueElem = typename base::QueueElem;
