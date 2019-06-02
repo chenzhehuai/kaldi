@@ -425,10 +425,9 @@ bool DecodeUtteranceLatticeIncremental<fst::Fst<fst::StdArc>, LatticeIncremental
     CompactLatticeWriter *compact_lattice_writer,
     LatticeWriter *lattice_writer,
     double *like_ptr);
-
-template bool DecodeUtteranceLatticeIncremental<fst::GrammarFst, 
-         LatticeIncrementalFactDecoderTpl<fst::GrammarFst>>(
-    LatticeIncrementalFactDecoderTpl<fst::GrammarFst> &decoder,
+template 
+bool DecodeUtteranceLatticeIncremental<fst::Fst<fst::StdArc>, LatticeIncrementalFactDecoderTpl<fst::StdFst, 3>>(
+    LatticeIncrementalFactDecoderTpl<fst::StdFst, 3> &decoder,
     DecodableInterface &decodable,
     const TransitionModel &trans_model,
     const fst::SymbolTable *word_syms,
@@ -441,6 +440,37 @@ template bool DecodeUtteranceLatticeIncremental<fst::GrammarFst,
     CompactLatticeWriter *compact_lattice_writer,
     LatticeWriter *lattice_writer,
     double *like_ptr);
+template bool DecodeUtteranceLatticeIncremental<fst::GrammarFst, 
+         LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 2>>(
+    LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 2> &decoder,
+    DecodableInterface &decodable,
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr);
+template bool DecodeUtteranceLatticeIncremental<fst::GrammarFst, 
+         LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 3>>(
+    LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 3> &decoder,
+    DecodableInterface &decodable,
+    const TransitionModel &trans_model,
+    const fst::SymbolTable *word_syms,
+    std::string utt,
+    double acoustic_scale,
+    bool determinize,
+    bool allow_partial,
+    Int32VectorWriter *alignment_writer,
+    Int32VectorWriter *words_writer,
+    CompactLatticeWriter *compact_lattice_writer,
+    LatticeWriter *lattice_writer,
+    double *like_ptr);
+
 
 
 template bool DecodeUtteranceLatticeFaster(

@@ -436,7 +436,7 @@ class LatticeIncrementalDecoderTpl {
   // index plus one, which is used to index into the active_toks_ array.
   // Returns the Token pointer.  Sets "changed" (if non-NULL) to true if the
   // token was newly created or the cost changed.
-  inline Token *FindOrAddToken(StateId state, int32 frame_plus_one,
+  Token *FindOrAddToken(StateId state, int32 frame_plus_one,
                                BaseFloat tot_cost, bool *changed);
 
   // prunes outgoing links for all tokens in active_toks_[frame]

@@ -304,7 +304,7 @@ void LatticeIncrementalDecoderTpl<FST, Token>::PossiblyResizeHash(size_t num_tok
 // and also into the singly linked list of tokens active on this frame
 // (whose head is at active_toks_[frame]).
 template <typename FST, typename Token>
-inline Token *LatticeIncrementalDecoderTpl<FST, Token>::FindOrAddToken(
+Token *LatticeIncrementalDecoderTpl<FST, Token>::FindOrAddToken(
     StateId state, int32 frame_plus_one, BaseFloat tot_cost, bool *changed) {
   // Returns the Token pointer.  Sets "changed" (if non-NULL) to true
   // if the token was newly created or the cost changed.

@@ -61,10 +61,13 @@ case $COMPILER_VER_INFO in
     ;;
 esac
 
+false && \
+  {
 if ! echo "#include <zlib.h>" | $CXX -E - >&/dev/null; then
   echo "$0: zlib is not installed."
   add_packages zlib-devel zlib1g-dev zlib-devel
 fi
+}
 
 for f in make automake autoconf patch grep bzip2 gzip unzip wget git sox; do
   if ! which $f >&/dev/null; then

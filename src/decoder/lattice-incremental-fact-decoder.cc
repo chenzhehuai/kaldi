@@ -24,31 +24,40 @@
 namespace kaldi {
 
 // instantiate this class once for each thing you have to decode.
-template <typename FST, typename Token>
-LatticeIncrementalFactDecoderTpl<FST, Token>::LatticeIncrementalFactDecoderTpl(
-    const LatticeIncrementalDecoderConfig &config, const TransitionModel *trans_model,
-    const std::string fst_in_str)
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::
+    LatticeIncrementalFactDecoderTpl(const LatticeIncrementalDecoderConfig &config,
+                                     const TransitionModel *trans_model,
+                                     const std::string fst_in_str)
     : LatticeIncrementalDecoderTpl<FST, Token>(config, trans_model) {
   arc_toks_.SetSize(1000); // just so on the first frame we do something reasonable.
-  if (fst_in_str != "") LoadHTransducers(fst_in_str);
+  if (fst_in_str != "")
+    LoadHTransducers(fst_in_str);
+  else
+    assert(0);
 }
 
-template <typename FST, typename Token>
-LatticeIncrementalFactDecoderTpl<FST, Token>::LatticeIncrementalFactDecoderTpl(
-    const LatticeIncrementalDecoderConfig &config, FST *fst,
-    const TransitionModel *trans_model, const std::string fst_in_str)
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::
+    LatticeIncrementalFactDecoderTpl(const LatticeIncrementalDecoderConfig &config,
+                                     FST *fst, const TransitionModel *trans_model,
+                                     const std::string fst_in_str)
     : LatticeIncrementalDecoderTpl<FST, Token>(config, fst, trans_model) {
   arc_toks_.SetSize(1000); // just so on the first frame we do something reasonable.
-  if (fst_in_str != "") LoadHTransducers(fst_in_str);
+  if (fst_in_str != "")
+    LoadHTransducers(fst_in_str);
+  else
+    assert(0);
 }
 
-template <typename FST, typename Token>
-LatticeIncrementalFactDecoderTpl<FST, Token>::~LatticeIncrementalFactDecoderTpl() {
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone,
+                                 Token>::~LatticeIncrementalFactDecoderTpl() {
   DeleteElemArcs(arc_toks_.Clear());
 }
 
-template <typename FST, typename Token>
-void LatticeIncrementalFactDecoderTpl<FST, Token>::LoadHTransducers(
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::LoadHTransducers(
     std::string fst_in_str) {
   SequentialTableReader<fst::VectorFstHolder> fst_reader(fst_in_str);
   int count = 0;
@@ -59,8 +68,9 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::LoadHTransducers(
   KALDI_VLOG(1) << "Total ilabels: " << count;
 }
 
-template <typename FST, typename Token>
-void LatticeIncrementalFactDecoderTpl<FST, Token>::InitDecoding(bool keep_context) {
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::InitDecoding(
+    FST *fst, bool keep_context) {
   // clean up from last time:
   DeleteElems(toks_.Clear());
   cost_offsets_.clear();
@@ -146,8 +156,8 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::InitDecoding(bool keep_contex
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
 // an unusual search error.
-template <typename FST, typename Token>
-bool LatticeIncrementalFactDecoderTpl<FST, Token>::Decode(
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+bool LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::Decode(
     DecodableInterface *decodable) {
   InitDecoding();
 
@@ -221,8 +231,8 @@ bool LatticeIncrementalFactDecoderTpl<FST, Token>::Decode(
   return !active_toks_.empty() && active_toks_.back().toks != NULL;
 }
 
-template <typename FST, typename Token>
-void LatticeIncrementalFactDecoderTpl<FST, Token>::AdvanceDecoding(
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::AdvanceDecoding(
     DecodableInterface *decodable, int32 max_num_frames) {
   KALDI_ASSERT(!active_toks_.empty() && !decoding_finalized_ &&
                "You must call InitDecoding() before AdvanceDecoding");
@@ -305,8 +315,8 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::AdvanceDecoding(
 /// We do GetCutoff() after SetEntryTokenForArcTokens() because GetCutoff() is used to
 /// control the computation of ProcessEmitting() which should take tokens from
 /// ArcIterator of SetEntryTokenForArcTokens() into account
-template <typename FST, typename Token>
-BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::GetCutoff(
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+BaseFloat LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::GetCutoff(
     ElemArc *list_head, size_t *tok_count, BaseFloat *adaptive_beam,
     ElemArc **best_elem, BaseFloat &best_weight) {
   best_weight = std::numeric_limits<BaseFloat>::infinity();
@@ -392,8 +402,9 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::GetCutoff(
 // We do GetCutoff() after SetEntryTokenForArcTokens() because GetCutoff() is used to
 // control the computation of ProcessEmitting() which should take tokens from
 // ArcIterator of SetEntryTokenForArcTokens() into account
-template <typename FST, typename Token>
-BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+BaseFloat
+LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::ProcessEmitting(
     DecodableInterface *decodable) {
   using namespace fst;
   KALDI_ASSERT(active_toks_.size() > 0);
@@ -533,13 +544,12 @@ BaseFloat LatticeIncrementalFactDecoderTpl<FST, Token>::ProcessEmitting(
   return next_cutoff;
 }
 
-template <typename FST, typename Token>
-inline typename LatticeIncrementalFactDecoderTpl<FST, Token>::ArcToken *
-LatticeIncrementalFactDecoderTpl<FST, Token>::FindOrAddArcToken(PairId state,
-                                                                const Arc &arc,
-                                                                int32 frame_plus_one,
-                                                                BaseFloat tot_cost,
-                                                                bool *changed) {
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+inline
+    typename LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::ArcToken *
+    LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::FindOrAddArcToken(
+        PairId state, const Arc &arc, int32 frame_plus_one, BaseFloat tot_cost,
+        bool *changed) {
   KALDI_ASSERT(frame_plus_one < active_toks_.size());
   Token *&toks = active_toks_[frame_plus_one].toks;
 
@@ -583,9 +593,10 @@ LatticeIncrementalFactDecoderTpl<FST, Token>::FindOrAddArcToken(PairId state,
 // pruning current frame based on cur_cutoff
 // pruning the next frame based on last_best_arc_tok_ and the best_elem in the
 // following
-template <typename FST, typename Token>
-void LatticeIncrementalFactDecoderTpl<FST, Token>::SetEntryTokenForArcTokens(
-    DecodableInterface *decodable, BaseFloat cur_cutoff, BaseFloat adaptive_beam) {
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::
+    SetEntryTokenForArcTokens(DecodableInterface *decodable, BaseFloat cur_cutoff,
+                              BaseFloat adaptive_beam) {
   using namespace fst;
   int frame = NumFramesDecoded() - 1;
   Elem *final_toks = toks_.Clear();
@@ -702,9 +713,9 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::SetEntryTokenForArcTokens(
   }
 }
 
-template <typename FST, typename Token>
-void LatticeIncrementalFactDecoderTpl<FST, Token>::ExpandArcTokensToNextState(
-    BaseFloat next_cutoff) {
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+void LatticeIncrementalFactDecoderTpl<
+    FST, kStatePerPhone, Token>::ExpandArcTokensToNextState(BaseFloat next_cutoff) {
   using namespace fst;
   int frame = NumFramesDecoded();
   auto *final_toks =
@@ -751,9 +762,10 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::ExpandArcTokensToNextState(
   }
 }
 
-template <typename FST, typename Token>
-void LatticeIncrementalFactDecoderTpl<FST, Token>::DeleteElemArcs(
-    typename LatticeIncrementalFactDecoderTpl<FST, Token>::ElemArc *list) {
+template <typename FST, std::size_t kStatePerPhone, typename Token>
+void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::DeleteElemArcs(
+    typename LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::ElemArc
+        *list) {
   for (ElemArc *e = list, *e_tail; e != NULL; e = e_tail) {
     e_tail = e->tail;
     arc_toks_.Delete(e);
@@ -762,9 +774,13 @@ void LatticeIncrementalFactDecoderTpl<FST, Token>::DeleteElemArcs(
 
 // Instantiate the template for the combination of token types and FST types
 // that we'll need.
-template class LatticeIncrementalFactDecoderTpl<fst::Fst<fst::StdArc>>;
-template class LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>>;
-template class LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>>;
-template class LatticeIncrementalFactDecoderTpl<fst::GrammarFst>;
+template class LatticeIncrementalFactDecoderTpl<fst::Fst<fst::StdArc>, 2>;
+template class LatticeIncrementalFactDecoderTpl<fst::Fst<fst::StdArc>, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, 2>;
+template class LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, 2>;
+template class LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 2>;
+template class LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 3>;
 
 } // end namespace kaldi.

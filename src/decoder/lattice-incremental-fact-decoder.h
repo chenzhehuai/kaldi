@@ -50,7 +50,8 @@ namespace kaldi {
    will internally cast itself to one that is templated on those more specific
    types; this is an optimization for speed.
  */
-template <typename FST, typename Token = decoder::BackToken<typename FST::Arc>>
+template <typename FST, std::size_t kStatePerPhone,
+          typename Token = decoder::BackToken<typename FST::Arc>>
 class LatticeIncrementalFactDecoderTpl
     : public LatticeIncrementalDecoderTpl<FST, Token> {
  public:
@@ -65,35 +66,35 @@ class LatticeIncrementalFactDecoderTpl
   using base = LatticeIncrementalDecoderTpl<FST, Token>;
   using QueueElem = typename base::QueueElem;
   using Elem = typename base::Elem;
-  using base::FinalizeDecoding;
-  using base::ClearActiveTokens;
-  using base::FindOrAddToken;
-  using base::DeleteElems;
-  using base::PruneActiveTokens;
-  using base::GetNumToksForFrame;
-  using base::GetLattice;
-  using base::GetCutoff;
-  using base::ProcessNonemitting;
-  using base::PossiblyResizeHash;
-  using base::NumFramesDecoded;
   using base::active_toks_;
   using base::best_pair;
+  using base::ClearActiveTokens;
   using base::conf_;
   using base::config_;
   using base::cost_offsets_;
   using base::decoding_finalized_;
   using base::delete_fst_;
+  using base::DeleteElems;
   using base::determinizer_;
   using base::emit_tok_num_;
   using base::final_costs_;
+  using base::FinalizeDecoding;
+  using base::FindOrAddToken;
   using base::fst_;
   using base::fst_sorted_;
+  using base::GetCutoff;
+  using base::GetLattice;
+  using base::GetNumToksForFrame;
   using base::last_frame_nonfinal_states_;
   using base::last_get_lattice_frame_;
   using base::link_allocator_;
   using base::nemit_tok_num_;
   using base::num_toks_;
+  using base::NumFramesDecoded;
+  using base::PossiblyResizeHash;
   using base::pr_time_;
+  using base::ProcessNonemitting;
+  using base::PruneActiveTokens;
   using base::queue_;
   using base::tmp_array_;
   using base::token_allocator_;
@@ -123,7 +124,7 @@ class LatticeIncrementalFactDecoderTpl
   /// intend to call AdvanceDecoding().  If you call Decode(), you don't need to
   /// call this.  You can also call InitDecoding if you have already decoded an
   /// utterance and want to start with a new utterance.
-  void InitDecoding(bool keep_context = false);
+  void InitDecoding(FST *fst = nullptr, bool keep_context = false);
 
   /// An example of how to do decoding together with incremental
   /// determinization. It decodes until there are no more frames left in the
@@ -146,7 +147,6 @@ class LatticeIncrementalFactDecoderTpl
   void AdvanceDecoding(DecodableInterface *decodable, int32 max_num_frames = -1);
 
  protected:
-  static const int kStatePerPhone = 2; // TODO: make it configurable
   struct ArcToken {
     Token *tokens[kStatePerPhone];
     // ilabel will be used in ProcessEmitting
@@ -196,7 +196,7 @@ class LatticeIncrementalFactDecoderTpl
 };
 
 typedef LatticeIncrementalFactDecoderTpl<
-    fst::StdFst, decoder::BackToken<typename fst::StdFst::Arc>>
+    fst::StdFst, 2, decoder::BackToken<typename fst::StdFst::Arc>>
     LatticeIncrementalFactDecoder;
 
 } // end namespace kaldi.
