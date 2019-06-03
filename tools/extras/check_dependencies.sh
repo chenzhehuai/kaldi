@@ -76,6 +76,8 @@ for f in make automake autoconf patch grep bzip2 gzip unzip wget git sox; do
   fi
 done
 
+false && \
+  {
 if ! which libtoolize >&/dev/null && ! which glibtoolize >&/dev/null; then
   echo "$0: neither libtoolize nor glibtoolize is installed"
   add_packages libtool libtool libtool
@@ -85,6 +87,7 @@ if ! which svn >&/dev/null; then
   echo "$0: subversion is not installed"
   add_packages subversion subversion subversion
 fi
+}
 
 if ! which awk >&/dev/null; then
   echo "$0: awk is not installed"
@@ -154,11 +157,14 @@ elif which yum >&/dev/null; then
     printed=true
     status=1
   fi
+  false && \
+    {
   if ! rpm -qa|  grep atlas >/dev/null; then
     echo "You should probably do something like: "
     echo "sudo yum install atlas.x86_64"
     printed=true
   fi
+}
 elif which zypper >&/dev/null; then
   if [ ! -z "$opensuse_packages" ]; then
     echo "$0: we recommend that you run (our best guess):"

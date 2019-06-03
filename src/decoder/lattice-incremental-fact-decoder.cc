@@ -75,7 +75,8 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::InitDecoding(
   DeleteElems(toks_.Clear());
   cost_offsets_.clear();
   ClearActiveTokens();
-  warned_ = false;
+  // tokens could be active on arc_toks_, hence we do not need to warn users
+  warned_ = true;
   num_toks_ = 0;
   emit_tok_num_ = 0;
   nemit_tok_num_ = 0;
@@ -602,7 +603,11 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::
   Elem *final_toks = toks_.Clear();
   // the following cutoff includes a fake ac_cost which aims to help pruning
   BaseFloat next_cutoff_fake = std::numeric_limits<BaseFloat>::infinity();
-  KALDI_ASSERT(final_toks);
+  if (!final_toks) {
+    KALDI_ASSERT(arc_toks_.GetList() != NULL);
+    KALDI_VLOG(6) << "No tokens in WFST for frame " << frame;
+    return;
+  }
   Elem best_elem;
   memset(&best_elem, 0, sizeof(Elem));
   // use last_best_arc_tok_ to help pruning
@@ -776,11 +781,15 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::DeleteElemArc
 // that we'll need.
 template class LatticeIncrementalFactDecoderTpl<fst::Fst<fst::StdArc>, 2>;
 template class LatticeIncrementalFactDecoderTpl<fst::Fst<fst::StdArc>, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::Fst<fst::StdArc>, 4>;
 template class LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, 2>;
 template class LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, 4>;
 template class LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, 2>;
 template class LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, 4>;
 template class LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 2>;
 template class LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 3>;
+template class LatticeIncrementalFactDecoderTpl<fst::GrammarFst, 4>;
 
 } // end namespace kaldi.
