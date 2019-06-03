@@ -124,7 +124,9 @@ int main(int argc, char *argv[]) {
         "Usage:   make-h-transducer <ilabel-info-file> <tree-file> "
         "<transition-gmm/acoustic-model> [<H-fst-out>]\n"
         "e.g.: \n"
-        " make-h-transducer ilabel_info  1.tree 1.mdl > H.fst\n";
+        " make-h-transducer ilabel_info  1.tree 1.mdl > H.fst\n"
+        "Another example can be referred to: "
+        " egs/mini_librispeech/s5/local/mkgraph.sh";
     ParseOptions po(usage);
 
     HTransducerConfig hcfg;
