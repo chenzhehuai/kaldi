@@ -18,7 +18,7 @@ if ! $(python -c "import distutils.sysconfig" &> /dev/null); then
     echo "Proceeding with installation." >&2
 else
   # get include path for this python version
-  INCLUDE_PY=$(python -c "from distutils import sysconfig as s; print s.get_config_vars()['INCLUDEPY']")
+  INCLUDE_PY=$(python -c "from distutils import sysconfig as s; print(s.get_python_inc())")
   if [ ! -f "${INCLUDE_PY}/Python.h" ]; then
       echo "$0 : ERROR: python-devel/python-dev not installed" >&2
       if which yum >&/dev/null; then
@@ -94,10 +94,19 @@ fi
 # the next two lines deal with the issue that the new setup tools
 # expect the directory in which we will be installing to be visible
 # as module directory to python
-site_packages_dir=$(python -m site --user-site | grep -oE "lib.*")
+site_packages_dir=$(PYTHONPATH="" python -m site --user-site | grep -oE "lib.*")
 SEQUITUR=$(pwd)/$site_packages_dir
+# some bits of info to troubleshoot this in case people have problems
+echo -n  >&2 "USER SITE: "; PYTHONPATH="" python -m site --user-site
+echo >&2 "SEQUITUR_PACKAGE: ${site_packages_dir:-}"
+echo >&2 "SEQUITUR: $SEQUITUR"
+echo >&2 "PYTHONPATH: ${PYTHONPATH:-}"
+mkdir -p $SEQUITUR
 PYTHONPATH=${PYTHONPATH:-}:$SEQUITUR python setup.py install --prefix `pwd`
-)
+) || {
+  echo >&2 "Problem installing sequitur!"
+  exit 1
+}
 
 site_packages_dir=$(cd sequitur-g2p; find ./lib{,64} -type d -name site-packages | head -n 1)
 (
