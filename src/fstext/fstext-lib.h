@@ -33,4 +33,7 @@
 #include "fstext/determinize-lattice.h"
 #include "fstext/deterministic-fst.h"
 #include "fstext/kaldi-fst-io.h"
+
+#include "rfst/r-fst.h"
+#include "rfstfast/r-fst.h"
 #endif
