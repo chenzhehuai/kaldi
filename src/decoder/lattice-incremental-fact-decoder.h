@@ -51,7 +51,7 @@ namespace kaldi {
    types; this is an optimization for speed.
  */
 template <typename FST, std::size_t kStatePerPhone,
-          typename Token = decoder::BackToken<typename FST::Arc>>
+          typename Token = decoder::BackToken>
 class LatticeIncrementalFactDecoderTpl
     : public LatticeIncrementalDecoderTpl<FST, Token> {
  public:
@@ -196,7 +196,7 @@ class LatticeIncrementalFactDecoderTpl
 };
 
 typedef LatticeIncrementalFactDecoderTpl<
-    fst::StdFst, 2, decoder::BackToken<typename fst::StdFst::Arc>>
+    fst::StdFst, 2, decoder::BackToken>
     LatticeIncrementalFactDecoder;
 
 } // end namespace kaldi.

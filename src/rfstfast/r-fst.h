@@ -34,16 +34,16 @@ class RFstFastCompactor {
   typedef typename A::Label Label;
   typedef typename A::StateId StateId;
   typedef typename A::Weight Weight;
-  static const Label kMaxILabel = (1 << 15);
-  static const Label kMaxOLabel = (1 << 19);
-  static const uint kMaxStateId = (1 << 30);
+  static const Label kMaxILabel = (1 << 18);
+  static const Label kMaxOLabel = (1 << 18);
+  static const uint kMaxStateId = (1 << 28);
 
 #pragma pack(4)
   struct RFstElement {
     float weight;
-    unsigned nextstate : 30;
-    unsigned olabel : 19;
-    unsigned ilabel : 15;
+    unsigned nextstate : 28;
+    unsigned olabel : 18;
+    unsigned ilabel : 18;
     RFstElement(Label ilabel, Label olabel, StateId nextstate, float weight)
         : weight(weight), nextstate(nextstate), olabel(olabel), ilabel(ilabel) {}
 

@@ -125,7 +125,7 @@ void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding(bool keep_context) {
   for (auto i : last_frame_nonfinal_tokens) {
     BackwardLinkT *t_link = i->links;
     i->links = link_allocator_->allocate(1);
-    link_allocator_->construct(i->links, start_tok, nullptr, 0, t_link);
+    link_allocator_->construct(i->links, start_tok, 0, 0, 0, 0, t_link);
   }
 
   last_get_lattice_frame_ = 0;
@@ -190,6 +190,26 @@ void LatticeIncrementalDecoderTpl<FST, Token>::GetBestPathByToken(Token *tok,
 // an unusual search error.
 template <typename FST, typename Token>
 bool LatticeIncrementalDecoderTpl<FST, Token>::Decode(DecodableInterface *decodable) {
+  if (std::is_same<FST, fst::Fst<fst::StdArc> >::value) {
+    if (fst_->Type() == "const") {
+      LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>, Token>* >(this);
+      return this_cast->Decode(decodable);
+    } else if (fst_->Type() == "vector") {
+      LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>, Token>* >(this);
+      return this_cast->Decode(decodable);
+    } else if (fst_->Type() == "compact_r_fst_compactor") {
+      LatticeIncrementalDecoderTpl<fst::StdRFst, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::StdRFst, Token>* >(this);
+      return this_cast->Decode(decodable);
+    } else if (fst_->Type() == "compact_r_fst_fast_compactor") {
+      LatticeIncrementalDecoderTpl<fst::StdRFstFast, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::StdRFstFast, Token>* >(this);
+      return this_cast->Decode(decodable);
+    } 
+  }
+
   InitDecoding();
 
   // We use 1-based indexing for frames in this decoder (if you view it in
@@ -597,6 +617,34 @@ void LatticeIncrementalDecoderTpl<FST, Token>::ComputeFinalCosts(
 template <typename FST, typename Token>
 void LatticeIncrementalDecoderTpl<FST, Token>::AdvanceDecoding(
     DecodableInterface *decodable, int32 max_num_frames) {
+  if (std::is_same<FST, fst::Fst<fst::StdArc> >::value) {
+    // if the type 'FST' is the FST base-class, then see if the FST type of fst_
+    // is actually VectorFst or ConstFst.  If so, call the AdvanceDecoding()
+    // function after casting *this to the more specific type.
+    if (fst_->Type() == "const") {
+      LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>, Token>* >(this);
+      this_cast->AdvanceDecoding(decodable, max_num_frames);
+      return;
+    } else if (fst_->Type() == "vector") {
+      LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>, Token>* >(this);
+      this_cast->AdvanceDecoding(decodable, max_num_frames);
+      return;
+    } else if (fst_->Type() == "compact_r_fst_compactor") {
+      LatticeIncrementalDecoderTpl<fst::StdRFst, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::StdRFst, Token>* >(this);
+      this_cast->AdvanceDecoding(decodable, max_num_frames);
+      return;
+    } else if (fst_->Type() == "compact_r_fst_fast_compactor") {
+      LatticeIncrementalDecoderTpl<fst::StdRFstFast, Token> *this_cast =
+          reinterpret_cast<LatticeIncrementalDecoderTpl<fst::StdRFstFast, Token>* >(this);
+      this_cast->AdvanceDecoding(decodable, max_num_frames);
+      return;
+    }
+  }
+
+
   KALDI_ASSERT(!active_toks_.empty() && !decoding_finalized_ &&
                "You must call InitDecoding() before AdvanceDecoding");
   int32 num_frames_ready = decodable->NumFramesReady();
@@ -856,7 +904,7 @@ BaseFloat LatticeIncrementalDecoderTpl<FST, Token>::ProcessEmitting(
           // Add BackwardLinkT from tok to next_tok (put on head of list tok->links)
           BackwardLinkT *t_link = next_tok->links;
           next_tok->links = link_allocator_->allocate(1);
-          link_allocator_->construct(next_tok->links, tok, &arc, ac_cost, t_link);
+          link_allocator_->construct(next_tok->links, tok, arc.ilabel, arc.olabel, arc.weight.Value(), ac_cost, t_link);
         } else if (fst_sorted_)
           break;
       } // for all arcs
@@ -917,7 +965,7 @@ void LatticeIncrementalDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cuto
               FindOrAddToken(arc.nextstate, frame + 1, tot_cost, &changed);
           BackwardLinkT *t_link = new_tok->links;
           new_tok->links = link_allocator_->allocate(1);
-          link_allocator_->construct(new_tok->links, tok, &arc, 0, t_link);
+          link_allocator_->construct(new_tok->links, tok, arc.ilabel, arc.olabel, arc.weight.Value(), 0, t_link);
           // "changed" tells us whether the new token has a different
           // cost from before, or is new [if so, add into queue].
           if (changed) {
@@ -1672,10 +1720,14 @@ template class LatticeIncrementalDeterminizer<fst::Fst<fst::StdArc>>;
 template class LatticeIncrementalDeterminizer<fst::ConstFst<fst::StdArc>>;
 template class LatticeIncrementalDeterminizer<fst::VectorFst<fst::StdArc>>;
 template class LatticeIncrementalDeterminizer<fst::GrammarFst>;
+template class LatticeIncrementalDeterminizer<fst::StdRFst>;
+template class LatticeIncrementalDeterminizer<fst::StdRFstFast>;
 
 template class LatticeIncrementalDecoderTpl<fst::Fst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::VectorFst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::ConstFst<fst::StdArc>>;
 template class LatticeIncrementalDecoderTpl<fst::GrammarFst>;
+template class LatticeIncrementalDecoderTpl<fst::StdRFst>;
+template class LatticeIncrementalDecoderTpl<fst::StdRFstFast>;
 
 } // end namespace kaldi.
