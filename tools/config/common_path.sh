@@ -23,3 +23,4 @@ ${KALDI_ROOT}/src/sgmm2bin:\
 ${KALDI_ROOT}/src/sgmmbin:\
 ${KALDI_ROOT}/src/tfrnnlmbin:\
 $PATH
+export LD_LIBRARY_PATH=$KALDI_ROOT/tools/openfst/lib:$KALDI_ROOT/tools/openfst/lib/fst:$LD_LIBRARY_PATH
