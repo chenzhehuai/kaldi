@@ -47,6 +47,7 @@ struct LatticeIncrementalDecoderConfig {
   BaseFloat prune_scale; // Note: we don't make this configurable on the command line,
                          // it's not a very important parameter.  It affects the
                          // algorithm that prunes the tokens as we go.
+  bool fst_sorted_mode;
   // Most of the options inside det_opts are not actually queried by the
   // LatticeIncrementalDecoder class itself, but by the code that calls it, for
   // example in the function DecodeUtteranceLatticeIncremental.
@@ -66,6 +67,7 @@ struct LatticeIncrementalDecoderConfig {
         beam_delta(0.5),
         hash_ratio(2.0),
         prune_scale(0.1),
+        fst_sorted_mode(true),
         max_word_id(1e7) {}
   void Register(OptionsItf *opts) {
     det_opts.Register(opts);

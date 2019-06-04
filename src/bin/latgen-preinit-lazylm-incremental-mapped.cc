@@ -136,6 +136,7 @@ int main(int argc, char *argv[]) {
       // On-demand composition of HCL and G
       fst::LazyLMComposeFst<StdArc> lazylm(*hcl_fst, *g_fst, lazylm_config, cache_config);
       lazylm.PreInitFST();
+      config.fst_sorted_mode = false; // The composeFst is unsorted
 
       timer.Reset();
       {
