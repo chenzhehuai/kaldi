@@ -98,7 +98,7 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::InitDecoding(
   }
   if (fst_ == NULL) return;
 
-  if (fst_->Properties(fst::kILabelSorted, true) == 0) {
+  if (1||fst_->Properties(fst::kILabelSorted, true) == 0) { // TODO
     KALDI_VLOG(2)
         << "The FST is not ilabel sorted. "
         << "If it is a standard Fst, do the following please:\n"

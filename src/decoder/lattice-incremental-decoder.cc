@@ -45,7 +45,7 @@ LatticeIncrementalDecoderTpl<FST, Token>::LatticeIncrementalDecoderTpl(
     const TransitionModel *trans_model)
     : fst_(fst),
       fst_sorted_(false),
-      delete_fst_(true),
+      delete_fst_(false), // TODO
       config_(config),
       num_toks_(0),
       token_allocator_(NULL),
@@ -86,7 +86,7 @@ void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding(bool keep_context) {
   }
   if (fst_ == NULL) return;
 
-  if (fst_->Properties(fst::kILabelSorted, true) == 0) {
+  if (1||fst_->Properties(fst::kILabelSorted, true) == 0) { // TODO
     KALDI_VLOG(2)
         << "The FST is not ilabel sorted. "
         << "If it is a standard Fst, do the following please:\n"

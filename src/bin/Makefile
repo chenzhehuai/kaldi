@@ -23,7 +23,9 @@ BINFILES = align-equal align-equal-compiled acc-tree-stats \
         vector-sum matrix-sum-rows est-pca sum-lda-accs sum-mllt-accs \
         transform-vec align-text matrix-dim post-to-smat compile-graph \
         compare-int-vector latgen-incremental-mapped make-h-transducer-fact \
-        latgen-incremental-fact-mapped make-ctc-transducer-fact latgen-incremental-fact-mapped-3
+        latgen-incremental-fact-mapped make-ctc-transducer-fact latgen-incremental-fact-mapped-3 \
+        latgen-preinit-lazylm-faster-mapped latgen-preinit-lazylm-incremental-mapped \
+        latgen-preinit-lazylm-incremental-fact-mapped
 
 
 OBJFILES =
