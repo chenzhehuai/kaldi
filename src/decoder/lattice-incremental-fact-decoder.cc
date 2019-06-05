@@ -138,7 +138,7 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::InitDecoding(
   for (auto i : last_frame_nonfinal_tokens) {
     BackwardLinkT *t_link = i->links;
     i->links = link_allocator_->allocate(1);
-    link_allocator_->construct(i->links, start_tok, 0, 0, 0, 0, t_link);
+    link_allocator_->construct(i->links, start_tok, nullptr, 0, t_link);
   }
 
   last_get_lattice_frame_ = 0;
@@ -161,26 +161,6 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::InitDecoding(
 template <typename FST, std::size_t kStatePerPhone, typename Token>
 bool LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::Decode(
     DecodableInterface *decodable) {
-  if (std::is_same<FST, fst::Fst<fst::StdArc> >::value) {
-    if (fst_->Type() == "const") {
-      LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, kStatePerPhone, Token>* >(this);
-      return this_cast->Decode(decodable);
-    } else if (fst_->Type() == "vector") {
-      LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, kStatePerPhone, Token>* >(this);
-      return this_cast->Decode(decodable);
-    } else if (fst_->Type() == "compact_r_fst_compactor") {
-      LatticeIncrementalFactDecoderTpl<fst::StdRFst, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::StdRFst, kStatePerPhone, Token>* >(this);
-      return this_cast->Decode(decodable);
-    } else if (fst_->Type() == "compact_r_fst_fast_compactor") {
-      LatticeIncrementalFactDecoderTpl<fst::StdRFstFast, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::StdRFstFast, kStatePerPhone, Token>* >(this);
-      return this_cast->Decode(decodable);
-    } 
-  }
-
   InitDecoding();
 
   // We use 1-based indexing for frames in this decoder (if you view it in
@@ -258,34 +238,6 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::AdvanceDecodi
     DecodableInterface *decodable, int32 max_num_frames) {
   KALDI_ASSERT(!active_toks_.empty() && !decoding_finalized_ &&
                "You must call InitDecoding() before AdvanceDecoding");
-  if (std::is_same<FST, fst::Fst<fst::StdArc> >::value) {
-    // if the type 'FST' is the FST base-class, then see if the FST type of fst_
-    // is actually VectorFst or ConstFst.  If so, call the AdvanceDecoding()
-    // function after casting *this to the more specific type.
-    if (fst_->Type() == "const") {
-      LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::ConstFst<fst::StdArc>, kStatePerPhone, Token>* >(this);
-      this_cast->AdvanceDecoding(decodable, max_num_frames);
-      return;
-    } else if (fst_->Type() == "vector") {
-      LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::VectorFst<fst::StdArc>, kStatePerPhone, Token>* >(this);
-      this_cast->AdvanceDecoding(decodable, max_num_frames);
-      return;
-    } else if (fst_->Type() == "compact_r_fst_compactor") {
-      LatticeIncrementalFactDecoderTpl<fst::StdRFst, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::StdRFst, kStatePerPhone, Token>* >(this);
-      this_cast->AdvanceDecoding(decodable, max_num_frames);
-      return;
-    } else if (fst_->Type() == "compact_r_fst_fast_compactor") {
-      LatticeIncrementalFactDecoderTpl<fst::StdRFstFast, kStatePerPhone, Token> *this_cast =
-          reinterpret_cast<LatticeIncrementalFactDecoderTpl<fst::StdRFstFast, kStatePerPhone, Token>* >(this);
-      this_cast->AdvanceDecoding(decodable, max_num_frames);
-      return;
-    }
-  }
-
-
   int32 num_frames_ready = decodable->NumFramesReady();
   // num_frames_ready must be >= num_frames_decoded, or else
   // the number of frames ready must have decreased (which doesn't
@@ -564,7 +516,8 @@ LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::ProcessEmitting(
         BackwardLinkT *t_link = tok->links;
         tok->links = link_allocator_->allocate(1);
         // the graph_cost is included in SetEntryTokenForArcTokens()
-        link_allocator_->construct(tok->links, prev_tok, tid, 0, 0, ac_cost + trans_cost,
+        Arc arc(tid, 0, 0, kNoStateId);
+        link_allocator_->construct(tok->links, prev_tok, &arc, ac_cost + trans_cost,
                                    t_link);
         KALDI_ASSERT(tok != prev_tok);
         remain_elem_arc |=
@@ -749,8 +702,10 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::
         // Add BackwardLinkT from tok to next_tok (put on head of list tok->links)
         BackwardLinkT *t_link = next_tok->links;
         next_tok->links = link_allocator_->allocate(1);
-        // we will include the olabel in another new arc to arc.nextstate
-        link_allocator_->construct(next_tok->links, tok, hmm_arc.ilabel, 0, graph_cost,
+        Arc arc_copy(hmm_arc.ilabel, 0, graph_cost,
+                     kNoStateId); // we will include the olabel in another new arc to
+                                  // arc.nextstate
+        link_allocator_->construct(next_tok->links, tok, &arc_copy,
                                    ac_cost_fake + trans_cost_fake, t_link);
         // the weights here are fake weights since the ac_cost is without cost_offset.
         // We obtain the cost_offset in ProcessEmitting() and transform these "fake"
@@ -800,7 +755,8 @@ void LatticeIncrementalFactDecoderTpl<
         BackwardLinkT *t_link = next_tok->links;
         next_tok->links = link_allocator_->allocate(1);
         // record arc_tok->olabel in this BackwardLink
-        link_allocator_->construct(next_tok->links, tok, 0, arc_tok->olabel, expand_cost - tok->tot_cost, 0, t_link);
+        Arc arc(0, arc_tok->olabel, expand_cost - tok->tot_cost, kNoStateId);
+        link_allocator_->construct(next_tok->links, tok, &arc, 0, t_link);
         KALDI_ASSERT(next_tok != tok);
       }
     }

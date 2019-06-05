@@ -130,11 +130,11 @@ class LatticeIncrementalDeterminizer;
 
 namespace decoder {
 
+template <typename Arc>
 struct BackToken;
 
-template <typename Token>
+template <typename Token, typename Arc>
 struct BackwardLink {
-  typedef fst::StdArc Arc;
   using Label = typename Arc::Label;
   using StateId = typename Arc::StateId;
   using Weight = typename Arc::Weight;
@@ -159,19 +159,26 @@ struct BackwardLink {
         acoustic_cost(0),
         next(nullptr) {}
 
-  inline BackwardLink(Token *prev_tok, Label ilabel, Label olabel, BaseFloat graph_cost, BaseFloat acoustic_cost,
+  inline BackwardLink(Token *prev_tok, const Arc *arc, BaseFloat acoustic_cost,
                       BackwardLink *next)
       : prev_tok(prev_tok),
-        ilabel(ilabel),
-        olabel(olabel),
-        graph_cost(graph_cost),
+        ilabel(0),
+        olabel(0),
+        graph_cost(0),
         acoustic_cost(acoustic_cost),
-        next(next) {}
+        next(next) {
+    if (arc) {
+      ilabel = arc->ilabel;
+      olabel = arc->olabel;
+      graph_cost = arc->weight.Value();
+    }
+  }
 };
 
+template <typename Arc>
 struct BackToken {
   using Token = BackToken;
-  using BackwardLinkT = BackwardLink<Token>;
+  using BackwardLinkT = BackwardLink<Token, Arc>;
 
   // Standard token type for LatticeFasterDecoder.  Each active HCLG
   // (decoding-graph) state on each frame has one token.
@@ -233,7 +240,7 @@ struct BackToken {
    will internally cast itself to one that is templated on those more specific
    types; this is an optimization for speed.
  */
-template <typename FST, typename Token = decoder::BackToken>
+template <typename FST, typename Token = decoder::BackToken<typename FST::Arc>>
 class LatticeIncrementalDecoderTpl {
  public:
   using Arc = typename FST::Arc;
@@ -620,7 +627,7 @@ class LatticeIncrementalDecoderTpl {
 };
 
 typedef LatticeIncrementalDecoderTpl<fst::StdFst,
-                                     decoder::BackToken>
+                                     decoder::BackToken<typename fst::StdFst::Arc>>
     LatticeIncrementalDecoder;
 
 // This class is designed for step 2-4 and part of step 1 of incremental
