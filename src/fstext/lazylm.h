@@ -24,6 +24,7 @@
 #include "util/common-utils.h"
 #include "fstext/fstext-lib.h"
 #include "base/timer.h"
+#include "rfstfast/r-fst.h"
 
 namespace fst {
 using namespace kaldi;
@@ -192,6 +193,20 @@ class LazyLMComposeFst {
               opts.state_table = state_table_;
               opts.own_state_table = false; // TODO: delete it manually
               decode_fst_ = new ComposeFst<Arc, CacheStore>(ifst1, ifst2, opts);
+              break;
+                }
+        case 14: {
+                   using M1 = LookAheadMatcher<Fst<StdArc>>;
+                   using M2 = LookAheadMatcher<StdRFstFast>;
+                   using SF = AltSequenceComposeFilter<M1, M2>;
+                   using LF = LookAheadComposeFilter<SF, M1, M2>;
+                   using WF = PushWeightsComposeFilter<LF, M1, M2>;
+                   using ComposeFilter = PushLabelsComposeFilter<WF, M1, M2>;
+              ComposeFstImplOptions<M1, M2, ComposeFilter> opts(cache_opts);
+              const StdRFstFast &cast_ifst2 =
+          reinterpret_cast<const StdRFstFast& >(ifst2);
+
+              decode_fst_ = new ComposeFst<Arc, CacheStore>(ifst1, cast_ifst2, opts);
               break;
                 }
         default: {
