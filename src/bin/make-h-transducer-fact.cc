@@ -34,7 +34,8 @@ void GetHTransducerFact(const std::vector<std::vector<int32> > &ilabel_info,
                         const TransitionModel &trans_model,
                         const HTransducerConfig &config,
                         std::vector<int32> *disambig_syms_left,
-                        std::string fst_out_filename) {
+                        std::string fst_out_filename,
+                        bool add_self_loop) {
   KALDI_ASSERT(ilabel_info.size() >= 1 &&
                ilabel_info[0].size() == 0); // make sure that eps == eps.
   HmmCacheType cache;
@@ -79,10 +80,11 @@ void GetHTransducerFact(const std::vector<std::vector<int32> > &ilabel_info,
       std::vector<int32> phone_window = ilabel_info[j];
 
       VectorFst<Arc> *fst =
-          GetHmmAsFsa(phone_window, ctx_dep, trans_model, config, &cache);
+          GetHmmAsFsa(phone_window, ctx_dep, trans_model, config);
       BaseFloat self_loop_scale = 1.0;
       bool reorder = true;
-      AddSelfLoops(trans_model, std::vector<int32>(), self_loop_scale, reorder, true,
+      if (add_self_loop)
+        AddSelfLoops(trans_model, std::vector<int32>(), self_loop_scale, reorder, true,
                    fst);
       fsts[j] = fst;
     }
@@ -131,10 +133,12 @@ int main(int argc, char *argv[]) {
 
     HTransducerConfig hcfg;
     std::string disambig_out_filename;
+    bool add_self_loop = true;
     hcfg.Register(&po);
     po.Register("disambig-syms-out", &disambig_out_filename,
                 "List of disambiguation symbols on input of H [to be output from "
                 "this program]");
+    po.Register("add-self-loop", &add_self_loop, "whether to **manually** add self loops");
 
     po.Read(argc, argv);
 
@@ -171,7 +175,7 @@ int main(int argc, char *argv[]) {
 
     // The work gets done here.
     GetHTransducerFact(ilabel_info, ctx_dep, trans_model, hcfg, &disambig_syms_out,
-                       fst_out_filename);
+                       fst_out_filename, add_self_loop);
     if (disambig_out_filename != "") { // if option specified..
       if (disambig_out_filename == "-") disambig_out_filename = "";
       if (!WriteIntegerVectorSimple(disambig_out_filename, disambig_syms_out))

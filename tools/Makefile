@@ -76,7 +76,7 @@ else ifeq ($(OS),Windows_NT)
   # This new OS path is confirmed working on Windows 10 / Cygwin64.
   openfst_add_CXXFLAGS = -O -Wa,-mbig-obj
 else
-  openfst_add_CXXFLAGS =
+  openfst_add_CXXFLAGS = -O3 -fpic -fPIC
 endif
 
 openfst-$(OPENFST_VERSION)/Makefile: openfst-$(OPENFST_VERSION) | check_required_programs
