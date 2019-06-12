@@ -86,8 +86,7 @@ void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding(bool keep_context) {
   }
   if (fst_ == NULL) return;
 
-  if (!config_.fst_sorted_mode ||
-      fst_->Properties(fst::kILabelSorted, true) == 0) {
+  if (!config_.fst_sorted_mode || fst_->Properties(fst::kILabelSorted, true) == 0) {
     KALDI_VLOG(2)
         << "The FST is not ilabel sorted. "
         << "If it is a standard Fst, do the following please:\n"
@@ -133,6 +132,8 @@ void LatticeIncrementalDecoderTpl<FST, Token>::InitDecoding(bool keep_context) {
   token_label_map_.reserve(std::min((int32)1e5, config_.max_active));
   token_label_available_idx_ = config_.max_word_id + 1;
   token_label_final_cost_.clear();
+  chunked_lats_.clear();
+  last_chunk_lattice_frame_ = 0;
   determinizer_.Init();
 
   ProcessNonemitting(config_.beam);
@@ -185,6 +186,87 @@ void LatticeIncrementalDecoderTpl<FST, Token>::GetBestPathByToken(Token *tok,
   return;
 }
 
+template <typename FST, typename Token>
+void LatticeIncrementalDecoderTpl<FST, Token>::DeterminizeLattice() {
+  // We always incrementally determinize the lattice after lattice pruning in
+  // PruneActiveTokens() since we need extra_cost as the weights
+  // of final arcs to denote the "future" information of final states (Tokens)
+  // Moreover, the delay on GetLattice to do determinization
+  // make it process more skinny lattices which reduces the computation overheads.
+  int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
+  // The minimum length of chunk is config_.determinize_chunk_size.
+  if (frame_det_most % config_.determinize_chunk_size == 0) {
+    int32 frame_det_least = last_get_lattice_frame_ + config_.determinize_chunk_size;
+    // Incremental chunking:
+    // chunking (real VAD) the lattice, output the nbest/lattice of the chunk
+    for (int32 f = frame_det_most; f >= frame_det_least; f--) {
+      if (config_.chunk_max_active != std::numeric_limits<int32>::max() &&
+          GetNumToksForFrame(f) < config_.chunk_max_active &&
+          // shouldn't be too short
+          f - last_chunk_lattice_frame_ >
+              config_.chunk_min_size_ratio * config_.determinize_chunk_size) {
+        KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
+                      << " incremental chunking up to " << f;
+        last_chunk_lattice_frame_ = f;
+        // using the procedure when decoding_finalized_ == true
+        decoding_finalized_ = true;
+        chunked_lats_.emplace_back();
+        // does not include final weights since those states with final weights have
+        // been pruned by PruneActiveTokens()
+        GetLattice(false, f, &chunked_lats_.back());
+        decoding_finalized_ = false;
+        // clear the determinizer
+        token_label_map_.clear();
+        token_label_map_.reserve(std::min((int32)1e5, config_.max_active));
+        token_label_available_idx_ = config_.max_word_id + 1;
+        token_label_final_cost_.clear();
+        determinizer_.Init();
+        // generate a token on state 0
+        Token *&toks = active_toks_[f].toks;
+        Token *start_tok = token_allocator_->allocate(1);
+        token_allocator_->construct(start_tok, 0.0, 0 /* extra_cost */, nullptr,
+                                    toks);
+        toks = start_tok;
+        num_toks_++;
+        // generate arcs from state 0 to the tokens of frame f
+        for (Token *i = start_tok->next; i; i = i->next) {
+          BackwardLinkT *t_link = i->links;
+          i->links = link_allocator_->allocate(1);
+          link_allocator_->construct(
+              i->links, start_tok, nullptr,
+              // put the tot_cost on the arc which will guide the pruning
+              i->tot_cost, t_link);
+        }
+        // construct arcs with token labels from initial state
+        KALDI_ASSERT(f + 1 <= NumFramesDecoded());
+        GetLattice(false, f + 1, NULL, true);
+        // TODO: output the lattice/nbest by calling GetChunkedLats(); after that you
+        // can do whatever you want on
+        // the incremental chunked lattices
+        return; // do not need to do incremental determinization since the remaining
+                // chunk is very short
+      }
+    }
+
+    // Incremental determinization:
+    // To adaptively decide the length of chunk, we further compare the number of
+    // tokens in each frame and a pre-defined threshold.
+    // If the number of tokens in a certain frame is less than
+    // config_.determinize_max_active, the lattice can be determinized up to this
+    // frame. And we try to determinize as most frames as possible so we check
+    // numbers from frame_det_most to frame_det_least
+    for (int32 f = frame_det_most; f >= frame_det_least; f--) {
+      if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
+          GetNumToksForFrame(f) < config_.determinize_max_active) {
+        KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
+                      << " incremental determinization up to " << f;
+        GetLattice(false, f);
+        break;
+      }
+    }
+  }
+  return;
+}
 // Returns true if any kind of traceback is available (not necessarily from
 // a final state).  It should only very rarely return false; this indicates
 // an unusual search error.
@@ -200,33 +282,8 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::Decode(DecodableInterface *decoda
     if (NumFramesDecoded() % config_.prune_interval == 0) {
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
+    DeterminizeLattice();
 
-    // We always incrementally determinize the lattice after lattice pruning in
-    // PruneActiveTokens() since we need extra_cost as the weights
-    // of final arcs to denote the "future" information of final states (Tokens)
-    // Moreover, the delay on GetLattice to do determinization
-    // make it process more skinny lattices which reduces the computation overheads.
-    int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
-    // The minimum length of chunk is config_.determinize_chunk_size.
-    if (frame_det_most % config_.determinize_chunk_size == 0) {
-      int32 frame_det_least =
-          last_get_lattice_frame_ + config_.determinize_chunk_size;
-      // To adaptively decide the length of chunk, we further compare the number of
-      // tokens in each frame and a pre-defined threshold.
-      // If the number of tokens in a certain frame is less than
-      // config_.determinize_max_active, the lattice can be determinized up to this
-      // frame. And we try to determinize as most frames as possible so we check
-      // numbers from frame_det_most to frame_det_least
-      for (int32 f = frame_det_most; f >= frame_det_least; f--) {
-        if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
-            GetNumToksForFrame(f) < config_.determinize_max_active) {
-          KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
-                        << " incremental determinization up to " << f;
-          GetLattice(false, f);
-          break;
-        }
-      }
-    }
     BaseFloat cost_cutoff = ProcessEmitting(decodable);
     int32 num;
     if (g_kaldi_verbose_level > 1) {
@@ -258,7 +315,10 @@ template <typename FST, typename Token>
 bool LatticeIncrementalDecoderTpl<FST, Token>::GetBestPath(Lattice *olat,
                                                            bool use_final_probs) {
   CompactLattice lat, slat;
-  GetLattice(use_final_probs, NumFramesDecoded(), &lat);
+  if (use_final_probs)
+    GetLattice(&lat);
+  else
+    GetLattice(use_final_probs, NumFramesDecoded(), &lat);
   ShortestPath(lat, &slat);
   ConvertLattice(slat, olat);
   return (olat->NumStates() != 0);
@@ -305,8 +365,10 @@ void LatticeIncrementalDecoderTpl<FST, Token>::PossiblyResizeHash(size_t num_tok
 // and also into the singly linked list of tokens active on this frame
 // (whose head is at active_toks_[frame]).
 template <typename FST, typename Token>
-Token *LatticeIncrementalDecoderTpl<FST, Token>::FindOrAddToken(
-    StateId state, int32 frame_plus_one, BaseFloat tot_cost, bool *changed) {
+Token *LatticeIncrementalDecoderTpl<FST, Token>::FindOrAddToken(StateId state,
+                                                                int32 frame_plus_one,
+                                                                BaseFloat tot_cost,
+                                                                bool *changed) {
   // Returns the Token pointer.  Sets "changed" (if non-NULL) to true
   // if the token was newly created or the cost changed.
   KALDI_ASSERT(frame_plus_one < active_toks_.size());
@@ -613,32 +675,8 @@ void LatticeIncrementalDecoderTpl<FST, Token>::AdvanceDecoding(
     if (NumFramesDecoded() % config_.prune_interval == 0) {
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
-    // We always incrementally determinize the lattice after lattice pruning in
-    // PruneActiveTokens() since we need extra_cost as the weights
-    // of final arcs to denote the "future" information of final states (Tokens)
-    // Moreover, the delay on GetLattice to do determinization
-    // make it process more skinny lattices which reduces the computation overheads.
-    int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
-    // The minimum length of chunk is config_.determinize_chunk_size.
-    if (frame_det_most % config_.determinize_chunk_size == 0) {
-      int32 frame_det_least =
-          last_get_lattice_frame_ + config_.determinize_chunk_size;
-      // To adaptively decide the length of chunk, we further compare the number of
-      // tokens in each frame and a pre-defined threshold.
-      // If the number of tokens in a certain frame is less than
-      // config_.determinize_max_active, the lattice can be determinized up to this
-      // frame. And we try to determinize as most frames as possible so we check
-      // numbers from frame_det_most to frame_det_least
-      for (int32 f = frame_det_most; f >= frame_det_least; f--) {
-        if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
-            GetNumToksForFrame(f) < config_.determinize_max_active) {
-          KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
-                        << " incremental determinization up to " << f;
-          GetLattice(false, f);
-          break;
-        }
-      }
-    }
+
+    DeterminizeLattice();
 
     BaseFloat cost_cutoff = ProcessEmitting(decodable);
     int32 num;
@@ -1023,15 +1061,31 @@ void LatticeIncrementalDecoderTpl<FST, Token>::TopSortTokens(
 
 template <typename FST, typename Token>
 bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(CompactLattice *olat) {
-  return GetLattice(true, NumFramesDecoded(), olat);
+  olat->DeleteStates();
+  for (auto &i : chunked_lats_) {
+    KALDI_ASSERT(i.NumStates());
+    if (olat->NumStates())
+      fst::Concat(olat, i);
+    else
+      *olat = i;
+  }
+  CompactLattice last_lat;
+  GetLattice(true, NumFramesDecoded(), &last_lat);
+  if (olat->NumStates())
+    fst::Concat(olat, last_lat);
+  else
+    *olat = last_lat;
+  KALDI_ASSERT(olat->NumStates());
+
+  return olat->NumStates();
 }
 
 template <typename FST, typename Token>
-bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(bool use_final_probs,
-                                                          int32 last_frame_of_chunk,
-                                                          CompactLattice *olat) {
+bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(
+    bool use_final_probs, int32 last_frame_of_chunk, CompactLattice *olat,
+    bool force_to_be_first_chunk) {
   using namespace fst;
-  bool not_first_chunk = last_get_lattice_frame_ != 0;
+  bool not_first_chunk = last_get_lattice_frame_ != 0 && !force_to_be_first_chunk;
   bool ret = true;
 
   // last_get_lattice_frame_ is used to record the first frame of the chunk
@@ -1049,7 +1103,7 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetLattice(bool use_final_probs,
       KALDI_ERR << "Unexpected problem when getting lattice";
     // step 2-3
     ret = determinizer_.ProcessChunk(raw_fst, last_get_lattice_frame_,
-                                     last_frame_of_chunk);
+                                     last_frame_of_chunk, not_first_chunk);
     last_get_lattice_frame_ = last_frame_of_chunk;
   } else if (last_get_lattice_frame_ > last_frame_of_chunk)
     KALDI_WARN << "Call GetLattice up to frame: " << last_frame_of_chunk
@@ -1084,8 +1138,8 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetIncrementalRawLattice(
   typedef Arc::Label Label;
 
   if (decoding_finalized_ && !use_final_probs)
-    KALDI_ERR << "You cannot call FinalizeDecoding() and then call "
-              << "GetIncrementalRawLattice() with use_final_probs == false";
+    KALDI_VLOG(1) << "You call FinalizeDecoding() and then call "
+                  << "GetIncrementalRawLattice() with use_final_probs == false";
 
   unordered_map<Token *, BaseFloat> final_costs_local;
 
@@ -1473,8 +1527,8 @@ void LatticeIncrementalDeterminizer<FST>::GetInitialRawLattice(
 template <typename FST>
 bool LatticeIncrementalDeterminizer<FST>::ProcessChunk(Lattice &raw_fst,
                                                        int32 first_frame,
-                                                       int32 last_frame) {
-  bool not_first_chunk = first_frame != 0;
+                                                       int32 last_frame,
+                                                       bool not_first_chunk) {
   bool ret = true;
   // step 2: Determinize the chunk
   CompactLattice clat;
@@ -1505,6 +1559,7 @@ template <typename FST>
 bool LatticeIncrementalDeterminizer<FST>::AppendLatticeChunks(CompactLattice clat,
                                                               bool not_first_chunk) {
   using namespace fst;
+  KALDI_ASSERT(clat.NumStates());
   CompactLattice *olat = &lat_;
 
   // later we need to calculate forward_costs_ for clat

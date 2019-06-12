@@ -41,6 +41,8 @@ struct LatticeIncrementalDecoderConfig {
   int32 determinize_delay;
   int32 determinize_chunk_size;
   int32 determinize_max_active;
+  int32 chunk_max_active;
+  BaseFloat chunk_min_size_ratio;
   int32 redeterminize_max_frames;
   BaseFloat beam_delta; // has nothing to do with beam_ratio
   BaseFloat hash_ratio;
@@ -63,6 +65,8 @@ struct LatticeIncrementalDecoderConfig {
         determinize_delay(25),
         determinize_chunk_size(20),
         determinize_max_active(std::numeric_limits<int32>::max()),
+        chunk_max_active(std::numeric_limits<int32>::max()),
+        chunk_min_size_ratio(5),
         redeterminize_max_frames(std::numeric_limits<int32>::max()),
         beam_delta(0.5),
         hash_ratio(2.0),
@@ -100,6 +104,12 @@ struct LatticeIncrementalDecoderConfig {
                    "determinized up to this frame. It can work with "
                    "--determinize-delay to further reduce the computation "
                    "introduced by incremental determinization. ");
+    opts->Register("chunk-max-active", &chunk_max_active,
+                   "The same to --determinize-max-active but doing real chunking"
+                   "(VAD) on a sentence.");
+    opts->Register("chunk-min-size-ratio", &chunk_min_size_ratio,
+                   "The minimum chunk size of incremental chunking above is "
+                   "determinize_chunk_size * chunk_min_size_ratio here");
     opts->Register("redeterminize_max_frames", &redeterminize_max_frames,
                    "To impose a limit on how far back in time we will "
                    "redeterminize states.  This is mainly intended to avoid "
@@ -119,6 +129,7 @@ struct LatticeIncrementalDecoderConfig {
     KALDI_ASSERT(beam > 0.0 && max_active > 1 && lattice_beam > 0.0 &&
                  min_active <= max_active && prune_interval > 0 &&
                  determinize_delay >= 0 && determinize_max_active >= 0 &&
+                 chunk_max_active >= 0 && chunk_min_size_ratio >= 1 &&
                  determinize_chunk_size >= 0 && redeterminize_max_frames >= 0 &&
                  beam_delta > 0.0 && hash_ratio >= 1.0 && prune_scale > 0.0 &&
                  prune_scale < 1.0);
@@ -360,7 +371,7 @@ class LatticeIncrementalDecoderTpl {
                           successfully
   */
   bool GetLattice(bool use_final_probs, int32 last_frame_of_chunk,
-                  CompactLattice *olat = NULL);
+                  CompactLattice *olat = NULL, bool force_to_be_first_chunk = false);
   /// Specifically design when decoding_finalized_==true
   bool GetLattice(CompactLattice *olat);
 
@@ -404,6 +415,7 @@ class LatticeIncrementalDecoderTpl {
   // Returns the number of frames decoded so far.  The value returned changes
   // whenever we call ProcessEmitting().
   inline int32 NumFramesDecoded() const { return active_toks_.size() - 1; }
+  const std::vector<CompactLattice> &GetChunkedLats() { return chunked_lats_; }
 
  protected:
   // we make things protected instead of private, as future code in
@@ -438,8 +450,8 @@ class LatticeIncrementalDecoderTpl {
   // index plus one, which is used to index into the active_toks_ array.
   // Returns the Token pointer.  Sets "changed" (if non-NULL) to true if the
   // token was newly created or the cost changed.
-  Token *FindOrAddToken(StateId state, int32 frame_plus_one,
-                               BaseFloat tot_cost, bool *changed);
+  Token *FindOrAddToken(StateId state, int32 frame_plus_one, BaseFloat tot_cost,
+                        bool *changed);
 
   // prunes outgoing links for all tokens in active_toks_[frame]
   // it's called by PruneActiveTokens
@@ -610,6 +622,7 @@ class LatticeIncrementalDecoderTpl {
   // Get the number of tokens in each frame
   // It is useful, e.g. in using config_.determinize_max_active
   int32 GetNumToksForFrame(int32 frame);
+  void DeterminizeLattice();
 
   // The incremental lattice determinizer to take care of step 2-4
   LatticeIncrementalDeterminizer<FST> determinizer_;
@@ -623,6 +636,8 @@ class LatticeIncrementalDecoderTpl {
   // We cancel them after determinization
   unordered_map<int32, BaseFloat> token_label_final_cost_;
   std::vector<StateId> last_frame_nonfinal_states_;
+  std::vector<CompactLattice> chunked_lats_;
+  int last_chunk_lattice_frame_;
   KALDI_DISALLOW_COPY_AND_ASSIGN(LatticeIncrementalDecoderTpl);
 };
 
@@ -668,7 +683,8 @@ class LatticeIncrementalDeterminizer {
   // determinization with specific initial and final arcs.
   // It does step 2-4 and outputs the resultant CompactLattice if
   // needed. Otherwise, it keeps the resultant lattice in lat_
-  bool ProcessChunk(Lattice &raw_fst, int32 first_frame, int32 last_frame);
+  bool ProcessChunk(Lattice &raw_fst, int32 first_frame, int32 last_frame,
+                    bool not_first_chunk);
 
   // Step 3 of incremental determinization,
   // which is to append the new chunk in clat to the old one in lat_

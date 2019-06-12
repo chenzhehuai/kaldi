@@ -78,6 +78,7 @@ class LatticeIncrementalFactDecoderTpl
   using base::determinizer_;
   using base::emit_tok_num_;
   using base::final_costs_;
+  using base::DeterminizeLattice;
   using base::FinalizeDecoding;
   using base::FindOrAddToken;
   using base::fst_;

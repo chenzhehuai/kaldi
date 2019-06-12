@@ -172,32 +172,7 @@ bool LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::Decode(
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
 
-    // We always incrementally determinize the lattice after lattice pruning in
-    // PruneActiveTokens() since we need extra_cost as the weights
-    // of final arcs to denote the "future" information of final states (Tokens)
-    // Moreover, the delay on GetLattice to do determinization
-    // make it process more skinny lattices which reduces the computation overheads.
-    int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
-    // The minimum length of chunk is config_.determinize_chunk_size.
-    if (frame_det_most % config_.determinize_chunk_size == 0) {
-      int32 frame_det_least =
-          last_get_lattice_frame_ + config_.determinize_chunk_size;
-      // To adaptively decide the length of chunk, we further compare the number of
-      // tokens in each frame and a pre-defined threshold.
-      // If the number of tokens in a certain frame is less than
-      // config_.determinize_max_active, the lattice can be determinized up to this
-      // frame. And we try to determinize as most frames as possible so we check
-      // numbers from frame_det_most to frame_det_least
-      for (int32 f = frame_det_most; f >= frame_det_least; f--) {
-        if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
-            GetNumToksForFrame(f) < config_.determinize_max_active) {
-          KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
-                        << " incremental determinization up to " << f;
-          GetLattice(false, f);
-          break;
-        }
-      }
-    }
+    DeterminizeLattice();
 
     // step 0
     active_toks_.resize(active_toks_.size() + 1);
@@ -252,32 +227,8 @@ void LatticeIncrementalFactDecoderTpl<FST, kStatePerPhone, Token>::AdvanceDecodi
     if (NumFramesDecoded() % config_.prune_interval == 0) {
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
-    // We always incrementally determinize the lattice after lattice pruning in
-    // PruneActiveTokens() since we need extra_cost as the weights
-    // of final arcs to denote the "future" information of final states (Tokens)
-    // Moreover, the delay on GetLattice to do determinization
-    // make it process more skinny lattices which reduces the computation overheads.
-    int32 frame_det_most = NumFramesDecoded() - config_.determinize_delay;
-    // The minimum length of chunk is config_.determinize_chunk_size.
-    if (frame_det_most % config_.determinize_chunk_size == 0) {
-      int32 frame_det_least =
-          last_get_lattice_frame_ + config_.determinize_chunk_size;
-      // To adaptively decide the length of chunk, we further compare the number of
-      // tokens in each frame and a pre-defined threshold.
-      // If the number of tokens in a certain frame is less than
-      // config_.determinize_max_active, the lattice can be determinized up to this
-      // frame. And we try to determinize as most frames as possible so we check
-      // numbers from frame_det_most to frame_det_least
-      for (int32 f = frame_det_most; f >= frame_det_least; f--) {
-        if (config_.determinize_max_active == std::numeric_limits<int32>::max() ||
-            GetNumToksForFrame(f) < config_.determinize_max_active) {
-          KALDI_VLOG(2) << "Frame: " << NumFramesDecoded()
-                        << " incremental determinization up to " << f;
-          GetLattice(false, f);
-          break;
-        }
-      }
-    }
+
+    DeterminizeLattice();
 
     // step 0
     active_toks_.resize(active_toks_.size() + 1);
