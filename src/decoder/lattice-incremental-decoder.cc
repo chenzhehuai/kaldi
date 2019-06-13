@@ -199,6 +199,17 @@ void LatticeIncrementalDecoderTpl<FST, Token>::DeterminizeLattice() {
     int32 frame_det_least = last_get_lattice_frame_ + config_.determinize_chunk_size;
     // Incremental chunking:
     // chunking (real VAD) the lattice, output the nbest/lattice of the chunk
+    // What we do:
+    // If we detect a frame with small number of active tokens (after lattice
+    // pruning), we regard it as an endpoint. Hence we take that frame as the "last
+    // frame", do incremental determinization up to that frame, output the lattice up
+    // to that frame, and store the lattice chunk into a vector; later we can take the
+    // generated lattice to do whatever you want
+    // After that we need to clear the determinizer, construct a initial state and
+    // connect tokens of above frame to the initial state. We do an incremental
+    // determinization over that frame and its next frame. By this way, we can
+    // generate final arcs needed by the later appending of the incremental
+    // determinization procedure
     for (int32 f = frame_det_most; f >= frame_det_least; f--) {
       if (config_.chunk_max_active != std::numeric_limits<int32>::max() &&
           GetNumToksForFrame(f) < config_.chunk_max_active &&
