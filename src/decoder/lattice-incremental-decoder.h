@@ -44,6 +44,7 @@ struct LatticeIncrementalDecoderConfig {
   int32 chunk_max_active;
   BaseFloat chunk_min_size_ratio;
   int32 redeterminize_max_frames;
+  bool final_prune_after_determinize;
   BaseFloat beam_delta; // has nothing to do with beam_ratio
   BaseFloat hash_ratio;
   BaseFloat prune_scale; // Note: we don't make this configurable on the command line,
@@ -68,6 +69,7 @@ struct LatticeIncrementalDecoderConfig {
         chunk_max_active(std::numeric_limits<int32>::max()),
         chunk_min_size_ratio(5),
         redeterminize_max_frames(std::numeric_limits<int32>::max()),
+        final_prune_after_determinize(true),
         beam_delta(0.5),
         hash_ratio(2.0),
         prune_scale(0.1),
@@ -117,6 +119,8 @@ struct LatticeIncrementalDecoderConfig {
                    "deterministic but less likely to blow up the processing"
                    "time in bad cases. You could set it infinite to get a fully "
                    "determinized lattice.");
+    opts->Register("final-prune-after-determinize", &final_prune_after_determinize,
+                   "prune lattice after determinization ");
     opts->Register("beam-delta", &beam_delta,
                    "Increment used in decoding-- this "
                    "parameter is obscure and relates to a speedup in the way the "

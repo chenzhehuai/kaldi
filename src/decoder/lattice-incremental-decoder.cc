@@ -1240,6 +1240,12 @@ bool LatticeIncrementalDecoderTpl<FST, Token>::GetIncrementalRawLattice(
           KALDI_ASSERT(f >= 0 && f - 1 < cost_offsets_.size());
           cost_offset = cost_offsets_[f - 1];
         }
+        if (prevstate == cur_state) {
+          KALDI_VLOG(3) << "A self-loop arc here. It is possible in CTC since "
+            "we do not do determinization in the final while there are "
+            "self-loop arcs with eps input and #* output in T.fst";
+          continue;
+        }
         Arc arc(l->GetIlabel(), l->GetOlabel(),
                 Weight(l->GetGraphCost(), l->acoustic_cost - cost_offset), cur_state);
         ofst->AddArc(prevstate, arc);
@@ -1725,7 +1731,11 @@ bool LatticeIncrementalDeterminizer<FST>::Finalize() {
   // The lattice determinization only needs to be finalized once
   if (determinization_finalized_) return true;
   // step 4: remove dead states
-  Connect(olat); // Remove unreachable states... there might be
+  if (config_.final_prune_after_determinize)
+    PruneLattice(config_.lattice_beam, olat);
+  else
+    Connect(olat); // Remove unreachable states... there might be
+
   KALDI_VLOG(2) << "states of the lattice: " << olat->NumStates();
   determinization_finalized_ = true;
 
